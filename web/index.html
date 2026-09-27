@@ -439,6 +439,12 @@ tbody tr:hover{background:#f7f9fc}
 .dimcell .st{font-size:11px;color:var(--tx3);max-width:100px;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;text-align:right}
 
+/* 关于页·数据时效对照表 */
+.about-tbl{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:6px;background:var(--card)}
+.about-tbl th,.about-tbl td{border:1px solid var(--line2);padding:6px 10px;text-align:left;vertical-align:middle}
+.about-tbl th{background:#fafbfc;color:var(--tx2);font-weight:600}
+.about-tbl td:first-child{color:var(--tx2);white-space:nowrap}
+
 /* 涨跌分布条 */
 .distbar{display:flex;height:22px;border-radius:5px;overflow:hidden;margin-top:5px;font-size:11px}
 .distbar div{display:flex;align-items:center;justify-content:center;color:#fff;font-weight:600;
@@ -849,7 +855,7 @@ td .starbtn{font-size:16px}
     <div class="card">
       <div class="card-h">
         <h2>小白选股</h2>
-        <div class="meta" id="nbMeta">不知道买什么？选一个方案，我帮你挑</div>
+        <div class="meta" id="nbMeta"><span class="ktag ktag-eod">盘后</span> 不知道买什么？选一个方案，我帮你挑（结果基于历史日线）</div>
       </div>
       <div class="card-b">
         <div class="nblead" id="nbLead">
@@ -1869,7 +1875,7 @@ function loadRank(){
   if(t) t.textContent = rankLabel(state.rank);
   loading(el, '加载榜单…');
   api('/api/rank?kind=' + state.rank + '&limit=30').then(function(d){
-    $('rankMeta').textContent = '数据时点 ' + (d.updated || '—') + ' · 共 ' + d.items.length + ' 只';
+    $('rankMeta').innerHTML = '<span class="ktag ktag-live">实时</span> 数据时点 ' + (d.updated || '—') + ' · 共 ' + d.items.length + ' 只（实时快照）';
     if(!d.items.length){ die(el, '无数据'); return; }
     var showPE = (state.rank === 'cap' || state.rank === 'pe' || state.rank === 'turnover');
     var h = '<table><thead><tr><th class="ctr" style="width:44px">#</th><th class="ctr" style="width:38px">自选</th><th class="l">股票</th>' +
@@ -2077,7 +2083,7 @@ function runScreen(){
   api('/api/screener?' + qs(p)).then(function(d){
     state.screenRows = d.items;
     state.screenPage = 1;
-    $('screenerMeta').textContent = '股票池 ' + d.universe + ' 只 · 时点 ' + (d.updated || '—');
+    $('screenerMeta').innerHTML = '<span class="ktag ktag-eod">盘后</span> 股票池 ' + d.universe + ' 只 · 时点 ' + (d.updated || '—');
     $('screenCount').textContent = '命中 ' + d.total + ' 只';
     renderScreen();
   }).catch(function(e){ die(el, '筛选失败：' + e.message); });
@@ -2245,6 +2251,9 @@ function renderStock(d){
     '<span style="font-size:12px;color:var(--tx2)">一键直达策略回测页，并自动跑一次默认策略</span>' +
     '</div>';
   // 分钟视角已并入下方 K 线卡片的周期按钮组，不再需要单独的跳转入口
+  h += '<div style="display:flex;align-items:center;gap:8px;margin:10px 0 4px">' +
+    '<span class="ktag ktag-live">实时</span>' +
+    '<span style="font-size:12px;color:var(--tx3)">实时行情快照（约每 3 分钟刷新）</span></div>';
   h += '<div class="quotegrid">' +
     qg('今开', fmt(q.open), cls(q.open - q.prev_close)) +
     qg('昨收', fmt(q.prev_close), '') +
@@ -2263,7 +2272,7 @@ function renderStock(d){
   if(ind){
     var lv = ind.latest;
     h += '<div class="card"><div class="card-h"><h2>技术面结论</h2>' +
-      '<div class="meta">截至 ' + esc(lv.date) + ' 收盘</div></div><div class="card-b">';
+      '<div class="meta"><span class="ktag ktag-eod">盘后</span> 截至 ' + esc(lv.date) + ' 收盘</div></div><div class="card-b">';
     h += '<div class="verdict">' +
       '<div class="vbox"><div class="lb">综合评分</div>' +
         '<div class="vl ' + scoreCls(ind.score) + '">' + ind.score + ' <span style="font-size:13px">/100</span></div>' +
@@ -3764,11 +3773,11 @@ function loadNews(){
   api('/api/newsfeed?limit=60').then(function(d){
     var bits = [];
     Object.keys(d.sources || {}).forEach(function(k){ bits.push(k + ' ' + d.sources[k] + '条'); });
-    bits.push((d.cached ? '缓存' : '实时') + ' ' + ts2str(d.ts).slice(11));
     if(d.errors && Object.keys(d.errors).length){
       bits.push('⚠ ' + Object.keys(d.errors).join('/'));
     }
-    meta.textContent = bits.join(' · ');
+    var ntag = d.cached ? '<span class="ktag ktag-eod">缓存</span>' : '<span class="ktag ktag-live">实时</span>';
+    meta.innerHTML = ntag + ' ' + bits.join(' · ') + (bits.length ? ' · ' : '') + ts2str(d.ts).slice(11);
     if(!d.items || !d.items.length){ die(el, '暂无快讯'); return; }
     var h = '';
     d.items.forEach(function(x){
@@ -3859,6 +3868,21 @@ function loadAbout(){
       '<p>· <b>个股分析</b>：K线（日/周/月）叠加 MA5/10/20/60，并可选叠加 <b>布林带 / 唐安奇通道 / 肯特纳通道 / 吊灯止损线</b>；MACD、RSI、KDJ、成交量四组指标图；<b>全套技术指标</b>（' + ind.total + ' 项，分均线/趋势/震荡/通道/量能/情绪/波动率七类，附自动信号汇总）；5 个量化策略的滚动信号与多策略共振；<b>9 类关键价位</b>；以及 <b>资金流向</b>（主力/超大单/大单/中单/小单净额 + 5/10/20 日主力净额）、<b>筹码分布</b>（平均成本、获利盘比例、70%/90% 集中度）、<b>基本面</b>（三大报表关键指标 + 分红历史）、<b>机构研报</b>（含评级）与 <b>公司公告</b>。<i>全套指标与通道借鉴 Klang；关键价位借鉴 tick-stock-panel；资金面/筹码/基本面/研报公告来自 westock 数据源</i>。</p>' +
       '<p>· <b>多股对比</b>：同时对比最多 8 只股票的最新价、涨跌幅、RSI14、MACD、KDJ-J、ADX、量比、布林位置、换手率、PE、市值，自动标注组内最优/最差并给出强弱速览。<i>借鉴 Klang 的 compare 命令</i>。</p>' +
       '<p>· <b>策略表达</b>：两种自定义策略方式。① <b>自然语言</b>——用一句话描述策略（如「均线金叉并且放量，跌破10日线止损，激进风格」），自动解析出指标、策略类型、风险偏好、入场/出场规则与建议止损止盈，可直接一键回测；② <b>通达信公式</b>——直接编写 TDX 公式（支持 MA/EMA/SMA/WMA/HHV/LLV/SUM/REF/COUNT/STD/CROSS/IF/BARSLAST/EXIST/EVERY/BETWEEN 等 21 个函数与 AND/OR/NOT 算子），编译后回测。<i>自然语言解析借鉴三省六部的 strategy_intent 模块，通达信公式借鉴其 tdx 模块（改为白名单 AST 解释器，杜绝任意代码执行）</i>。</p>' +
+      '<p style="margin-top:14px"><b>数据时效说明</b></p>' +
+      '<p>为避免误读，各模块数据口径如下（<span class="ktag ktag-live">实时</span>＝盘中实时快照；<span class="ktag ktag-eod">盘后</span>＝收盘后生成，非盘中实时）：</p>' +
+      '<table class="about-tbl">' +
+        '<tr><th>模块</th><th>数据口径</th><th>说明</th></tr>' +
+        '<tr><td>市场温度·涨跌/成交额</td><td><span class="ktag ktag-live">实时</span></td><td>两市涨跌家数、涨停跌停、成交额，盘中实时快照</td></tr>' +
+        '<tr><td>市场温度·评分/13维画像</td><td><span class="ktag ktag-eod">盘后</span></td><td>上游收盘后统一重算，盘中显示上一交易日</td></tr>' +
+        '<tr><td>市场宽度</td><td><span class="ktag ktag-eod">盘后</span></td><td>全市场日线（T-1），收盘后生成</td></tr>' +
+        '<tr><td>市场榜单</td><td><span class="ktag ktag-live">实时</span></td><td>实时快照排名</td></tr>' +
+        '<tr><td>快讯</td><td><span class="ktag ktag-live">实时</span></td><td>双源滚动推送（断流时显示最近缓存）</td></tr>' +
+        '<tr><td>自选股</td><td><span class="ktag ktag-live">实时</span></td><td>实时行情报价</td></tr>' +
+        '<tr><td>个股·行情条</td><td><span class="ktag ktag-live">实时</span></td><td>实时快照（约每 3 分钟刷新）</td></tr>' +
+        '<tr><td>个股·技术面结论/指标</td><td><span class="ktag ktag-eod">盘后</span></td><td>日线收盘计算</td></tr>' +
+        '<tr><td>小白/策略/条件选股</td><td><span class="ktag ktag-eod">盘后</span></td><td>基于历史日线计算（条件选股页内「分钟级扫描」为盘中实时）</td></tr>' +
+        '<tr><td>策略回测</td><td><span class="ktag ktag-eod">盘后</span></td><td>历史日线回测，本身即历史口径</td></tr>' +
+      '</table>' +
       '<p style="margin-top:14px"><b>技术实现</b></p>' +
       '<p>· 数据源：腾讯财经行情/K线接口（多域自动降级：ifzq → proxy.finance → web.ifzq）；股票池来自中证指数公司成分股清单。</p>' +
       '<p>· 计算核心：复用 <code>a-stock-data-quant</code> 技能的 MyTT 指标库与策略引擎（内置 71 个指标函数，面板已启用其中 ' + ind.total + ' 项），与命令行工具口径一致。</p>' +
@@ -4372,7 +4396,7 @@ function runStrategyScan(){
   var qs = '/api/strategy_scan?keys=' + encodeURIComponent(stratState.picked.join(',')) +
            '&mode=' + stratState.mode + '&pool=' + encodeURIComponent(pool) + '&limit=200';
   api(qs).then(function(d){
-    $('stratResultMeta').textContent = '命中 ' + d.total + ' 只 · 更新 ' + (d.updated || '—');
+    $('stratResultMeta').innerHTML = '<span class="ktag ktag-eod">盘后</span> 命中 ' + d.total + ' 只 · 更新 ' + (d.updated || '—');
     // 历史日线滞后于快照时（盘中运行），明确提示指标口径
     var lag = d.diag && d.diag.data_lag_days;
     var note = d.diag && d.diag.data_note;
@@ -6319,7 +6343,7 @@ function renderBreadth(d){
   var body = $('breadthBody'), meta = $('breadthMeta');
   if(!body) return;
   var L = d.latest || {};
-  if(meta) meta.textContent = '最新 ' + (L.date || d.as_of || '—') + ' · 序列 ' + d.days + ' 个交易日 · 基于全市场日线（T-1）';
+  if(meta) meta.innerHTML = '<span class="ktag ktag-eod">盘后</span> 最新 ' + (L.date || d.as_of || '—') + ' · 近 ' + d.days + ' 个交易日 · 全市场日线（T-1，收盘后生成）';
 
   // 摘要行
   var sum =
@@ -6361,6 +6385,7 @@ function renderBreadth(d){
     (g2 ? '<div style="margin-top:10px"><div style="font-size:12px;color:var(--muted);margin-bottom:2px">站上 20 日线的股票比例（近 ' + d.days + ' 日 · 越低市场越弱）</div>' + g2 + '</div>' : '') +
     (g3 ? '<div style="margin-top:10px"><div style="font-size:12px;color:var(--muted);margin-bottom:2px">市场震荡指数 Chop（近 ' + d.days + ' 日 · &lt;38.2 趋势市 / &gt;61.8 震荡市 · 合成全市场等权指数）</div>' + g3 + '</div>' : '') +
     '<div style="margin-top:6px;font-size:11px;color:var(--muted);line-height:1.6">' +
+      '<b style="color:var(--tx2)">〔盘后 · 收盘后日线〕</b> ' +
       '<b>怎么看</b>：宽度是市场的「健康档案」。站上20日线比例跌到一年内 5% 分位以下 → 历史上常在阶段底部附近；' +
       '冲到 95% 分位以上 → 普涨过热。指数涨但新高家数在萎缩 = 上涨后劲不足（背离）。' +
       'Chop 震荡指数由全市场等权指数的波动结构合成（非真实指数，仅供相对强弱参考）：持续走高 = 横盘震荡、趋势策略吃力；' +
@@ -6494,7 +6519,7 @@ function renderWatchItems(items){
   items.forEach(function(it){
     if((it.change_pct || 0) > 0) up++; else if((it.change_pct || 0) < 0) down++;
   });
-  if(meta) meta.textContent = (f ? f.name : '') + ' · 共 ' + items.length +
+  if(meta) meta.innerHTML = '<span class="ktag ktag-live">实时</span> ' + (f ? f.name : '') + ' · 共 ' + items.length +
     ' 只（涨 ' + up + ' / 跌 ' + down + '）';
 
   var h = '';
