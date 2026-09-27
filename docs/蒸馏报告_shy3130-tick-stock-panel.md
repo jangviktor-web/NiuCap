@@ -157,3 +157,128 @@ YAML 声明契约，支持六数据集（`daily`/`adj_factor`/`realtime`/`minute
 7. 因子/分钟/ETF（P2，远期）
 
 > 备注：以上编号（#95–#100）为建议新任务，待你确认后入队。当前待办队列中 #90 自选股成本线盈亏 / #91 盯盘提醒 / #92 hover 弹图 / #93 AI 深度分析 / #94 港美股 仍可保留，#91 可由 #96 吸收。
+
+---
+
+## 8. 源码级移植规格（二次深抓，本次新增）
+
+> 二次抓取方式：同样经 WebFetch 代理，`/raw/` 直取对方 `backend/app/services/` 下关键源文件，已拿到 **market_phase.py / market_mainline.py / alert_store.py / webhook_adapter.py / tool_catalog.py** 完整源码。下方给出可直接照搬的常量、公式与接口；标注「〔栈差异〕」处需按我们 SQLite/pandas 栈改写。
+
+### 8.1 市场情绪周期（来自 market_phase.py，可直接搬常量）
+
+**阶段词汇与优先级**（一字不改可复用）：
+```python
+PHASE_ICE, PHASE_IGNITE, PHASE_RALLY, PHASE_CLIMAX, PHASE_EBB, PHASE_REPAIR = (
+    "ice", "ignite", "rally", "climax", "ebb", "repair")
+PHASE_LABELS = {"ice":"冰点","ignite":"启动","rally":"主升","climax":"高潮","ebb":"退潮","repair":"修复"}
+_PHASE_PRIORITY = (PHASE_CLIMAX, PHASE_RALLY, PHASE_EBB, PHASE_IGNITE, PHASE_ICE)  # 修复兜底
+```
+
+**阈值常量（标定自 2020-08~2026-08 分位数，原样可用）**：
+```python
+CLIMAX_GE2 = 50; CLIMAX_FIRST_BOARD = 220
+RALLY_HEIGHT = 7; RALLY_GE2 = 15; RALLY_PROMO = 0.23; RALLY_PROMO_ALT = 0.30; RALLY_GE2_ALT = 12; RALLY_HEIGHT_ALT = 5
+EBB_PROMO = 0.15; EBB_PROMO_STRICT = 0.13; EBB_SEAL = 0.57; EBB_RECENT_GE2 = 12; EBB_RECENT_HEIGHT = 6
+IGNITE_GE2_DELTA = 3; IGNITE_GE2 = 8; IGNITE_PROMO = 0.20; IGNITE_HEIGHT_DELTA = 1; IGNITE_HEIGHT = 5; IGNITE_PROMO_SOFT = 0.19
+ICE_HEIGHT = 4; ICE_GE2 = 6; ICE_FIRST_BOARD = 24
+PROMO_MIN_POOL = 10          # 晋级率最小池，低于此记 null（小样本噪声）
+_EMA_ALPHA = 1.0/3.0         # EMA 约 5 日
+_CONFIRM_DAYS = 2            # 连续 2 日同标签才切换
+_VETO_STATES = {"weak","lean_weak"}   # 大盘弱档否决（见下）
+```
+
+**判定顺序要点（踩坑已记在源码注释里，照搬即可避坑）**：
+1. 高潮：`ge2>=50` 或 `首板>=220`。
+2. 主升：高度/宽度/晋级率同时过 p60，或晋级率≥0.30 配合高度≥5、ge2≥12。
+3. **冰点优先于退潮**（否则长期死寂市场会被误标退潮）：高度≤4 且 ge2≤6 且首板≤24。
+4. 退潮：自 5 日前高位回落 且 晋级率≤0.15；或晋级率≤0.13 且封板率≤0.57。
+5. 启动：ge2 较 5 日前 +3 且≥8，或高度抬升且≥5，晋级率恢复 ~0.19/0.20。
+6. 兜底 repair（占比最高 ~74% 天数）。
+7. **弱档否决**：正向阶段（主升/高潮/启动）出现在 5 档 `state∈{weak,lean_weak}` 的日子，一律降为 repair——修复「连板强但大盘崩」误判（2024-01 微盘流动性危机）。
+8. **持续性**：每个新标签需连续 `_CONFIRM_DAYS=2` 日才生效，否则沿用旧标签（防一日游抖动）。
+
+〔栈差异〕对方的 `classify_phase_series` 是 Polars DataFrame，我们的 `daily_bars` 是 SQLite/pandas。判定函数 `raw_label(i)` 是纯 Python（依赖 EMA 平滑后的 height/first_board/ge2/promo/seal 序列），**可直接照抄**，只需把 Polars 聚合换成我们的 SQL/pandas 聚合（见 8.3）。`state` 列（5 档弱档否决）我们目前没有——**首版可先去掉否决**（依赖我们 13 维温度画像做等价弱市判断即可），或先用 `market_overview` 的综合评分分档近似。
+
+### 8.2 主线分（来自 market_mainline.py，一行加权）
+
+```python
+_SCORE_WEIGHTS = {"limit_up_count":0.35, "max_boards":0.25, "rungs_filled":0.25, "ge2_count":0.15}
+_MIN_LIMIT_UP = 3            # 单概念当日涨停 <3 家不排名
+_TOP_PER_DAY = 30            # 每日持久化 top30
+# 截面 rank 归一(0-1) → 加权主线分(0-100)
+score = 100 * sum(_SCORE_WEIGHTS[c] * rank_norm(c) for c in _SCORE_WEIGHTS)
+```
+
+〔栈差异〕聚合依赖 `ext_gn_ths` 概念映射快照（我们仓无历史概念成分表）。**首版可用我们已有关联股票映射（快讯 ext / go-stock 概念）近似**，或先只做「涨停数 / 最高板 / 梯队」的纯价维度主线，概念映射后续补。注意对方 `MEMBERSHIP_NOTE` 明确：概念成分是当前快照回看历史，早年有归属漂移——我们若做也需同样的口径提示。
+
+### 8.3 连板数推导（我们 `daily_bars` 的迁移实现参考）〔关键前置〕
+
+对方存 `consecutive_limit_ups` 列；我们 `daily_bars(code/date/open/close/high/low/volume/amount)` 无此列，但可由 `close/prev_close` 推。参考实现（pandas）：
+```python
+def is_limit_up(close, prev_close, board="main"):
+    # 主板 10% / 创业板·科创板 20% / 北交所 30%（ST 5%）；用 0.5% 容差吸收四舍五入
+    thr = {"main":0.10, "cyb":0.20, "kj":0.20, "bse":0.30}.get(board, 0.10)
+    return (close - prev_close) / prev_close >= thr - 0.005
+
+def consecutive_limit_ups(df):
+    # df 已按 symbol,date 排序；返回每只每个交易日截至当日的连续涨停天数
+    df = df.sort_values(["code","date"])
+    df["is_lu"] = df.apply(lambda r: is_limit_up(r.close, r.prev_close, board_of(r.code)), axis=1)
+    # 连续计数：遇非涨停归零，否则 +1
+    grp = df.groupby("code")["is_lu"]
+    df["consec"] = grp.apply(lambda s: s.groupby((~s).cumsum()).cumsum())
+    return df
+```
+派生量：`height=当日最大consec`、`first_board=consec==1 求和`、`ge2=consec>=2 求和`、`promo=昨日连板池今日继续封板比例`、`rungs_filled=consec>=2 的档位数`。
+
+〔数据可行性〕已核实：我们的 `daily_bars` 有 `close` 与按 code+date 排序可取的 `prev_close`（`prev_close` 可用 `lag(close) over(partition by code order by date)` 算，无需新增采集）。**前提是每只股票要知道板块类型**（主板/创业板/科创板/北交所）才能选对涨停阈值——可补一张 `instruments` 基础表（code→板块），或用主板 10% 近似（误差仅创业板科创板，影响 ge2/高度统计，不影响阶段逻辑主框架）。
+
+### 8.4 监控中心（来自 alert_store.py + webhook_adapter.py）
+
+**告警落盘 schema（alerts.jsonl，每行一个 JSON）**——照搬 `append()` 字段约定：
+```json
+{"ts": 1717000000000, "rule_id": "r1", "source": "price|signal|strategy|market",
+ "type": "limit_up|rsi>80|...", "symbol": "600519", "severity": "info|warn|critical",
+ "msg": "...", "value": 88.5}
+```
+- 保留策略：`MAX_DAYS=7` + `MAX_RECORDS=5000`，每 `PRUNE_EVERY=20` 次写入触发一次滚动清理（线程锁 `_lock` 保护）。
+- 未读徽标：`count()` 返回总数；点击标记已读 = `delete_one(ts)` 或 `clear()`。
+- 规则引擎四类型：**策略监控（扫描结果变化）/ 个股信号（如 RSI>80）/ 价格涨跌 / 全市场异动**；多条件 AND/OR + 冷却期去重 + 严重级别。〔栈差异〕规则 Schema 用我们 `server/` 新增 `alerts.py` 实现，前端加「监控中心」tab + 右下角 toast。
+
+**外部推送（webhook_adapter.py，签名可直接抄）**：
+- 飞书：`open.feishu.cn/open-apis/bot/v2/hook/`，签名 `HmacSHA256(timestamp+"\n"+secret)` 后 Base64，放 `timestamp`+`sign` 字段；瞬时失败退避重试 3 次（冷却在事件生成时打戳，瞬时 5xx 不重试会被冷却窗口压掉）。
+- 企业微信：`qyapi.weixin.qq.com/cgi-bin/webhook/send?key=`，markdown 原生支持，按**字节**截断 4096（中文 3 字节），每分钟≤20 条靠 cooldown 兜底。
+- 通用第三方：`secret` 时 HMAC-SHA256 签原始 body，头 `X-TickFlow-Timestamp` + `X-TickFlow-Signature: sha256=<hex>`；信封 `{event, timestamp, title, body, data}`。
+- 铁律：**推送失败静默降级，绝不阻断告警主流程**（落盘/SSE 优先）。
+
+### 8.5 AI 助手工具范式（来自 tool_catalog.py）
+
+范式（非半成品，值直接抄）：
+1. **工具目录 = OpenAI tools JSON Schema 列表**，`build_tool_schemas()` 纯静态序列化（因子/策略/数据源能力/回测 4 类目录工具），让 LLM 按需检索，**不把全量塞进 system prompt**。
+2. **`execute_tool(name, args)` 统一分发**，返回 `{"ok":bool,"result"|"error"}`——工具异常统一回填 LLM，不打断循环。
+3. **回测工具白名单**：`run_backtest` 只回传精简 stats 键（total_return/annual_return/max_drawdown/sharpe/sortino/calmar/win_rate/profit_factor/n_trades/avg_pnl），**绝不把 equity_curve/成交明细喂给 LLM**（控 token）。
+4. **fail-closed**：无 Key / 不支持 tool-calling 的供应商 → 入口直接关闭，不降级裸返回。
+5. **流式 + 工具足迹卡**：每次工具调用显示「工具名/参数/耗时/结果摘要可展开」，取数可核对是设计铁律。
+
+〔栈差异〕对方「18 工具」在 features.md 描述，但 `tool_catalog.py` 只注册了 4 个目录/回测工具（其余在 assistant 路由层按需注入）。我们 #93 可直接按此范式：先实现 `list_strategies`/`run_backtest`/`list_factors`(我们有 61 指标可作「因子」)/`list_data_capabilities` 四个只读工具 + 逐字流式 + 足迹卡即可，不必重造。**注意对方明确「本分支开发中」，仅参考范式，勿抄半成品代码**。
+
+### 8.6 个股 9 类关键价位（来自 features，标准公式清单）
+
+我们已有 K 线通道（压力/支撑），补其余 8 类纯函数即可：① 成交密集区（N 日成交量加权均价附近密集成交带）② 枢轴点 Pivot（(H+L+C)/3，R1/S1=2P-H/L，R2/S2=P±(H-L)）③ 前高前低（N 日极值）④ Keltner 通道（EMA20±2·ATR）⑤ ATR 通道（均值±k·ATR）⑥ 缺口（跳空高/低开未补缺口）⑦ 斐波那契（0/23.6/38.2/50/61.8/100 回撤位）⑧ 整数关口（心理价位）。均为毫秒级纯函数，零新增采集。
+
+---
+
+## 9. 二次蒸馏结论（与首次对照）
+
+| 维度 | 首次（文档层） | 本次（源码层）新增价值 |
+|------|----------------|------------------------|
+| 情绪周期 | 阈值表 + 思路 | **完整常量 + `raw_label` 判定顺序 + 冰点优先/弱档否决/持续性 3 个踩坑** → 可直接落代码 |
+| 主线 | 权重公式 | **截面 rank 归一 + top30 + 概念快照回看限制** → 实现路径明确 |
+| 连板前置 | 「需确认库能否算」 | **pandas 推导参考实现 + 板块阈值表 + 数据可行性已闭环** |
+| 监控 | 规则 Schema 思路 | **alerts.jsonl 字段 + 飞书/企微 HMAC 签名代码 + 静默降级铁律** → 可照抄 |
+| AI 助手 | 18 工具描述 | **tool_catalog 分发范式 + 回测 stats 白名单 + fail-closed** → 架构范本 |
+| 关键价位 | 9 类清单 | 标准公式清单（纯函数，零采集） |
+
+**落地清晰度提升**：#95（情绪周期）与 #96（监控）已从「建议」升级为「带常量/签名的移植规格」，开工即可写。#93（AI）范式确定。建议排期不变（#95→#96→#97→#98→#99→#100）。
+
+> 备注：以上编号（#95–#100）为建议新任务，待你确认后入队。当前待办队列中 #90 自选股成本线盈亏 / #91 盯盘提醒 / #92 hover 弹图 / #93 AI 深度分析 / #94 港美股 仍可保留，#91 可由 #96 吸收。
