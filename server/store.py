@@ -466,6 +466,38 @@ CREATE INDEX IF NOT EXISTS idx_sessions_user  ON sessions(user_id);
 CREATE INDEX IF NOT EXISTS idx_positions_user ON positions(user_id);
 CREATE INDEX IF NOT EXISTS idx_trades_user    ON trades(user_id, created_at DESC);
 
+-- #96 监控中心：规则（结构化条件，字段/算子白名单，绝不 eval）
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id           TEXT PRIMARY KEY,
+    name         TEXT    NOT NULL,
+    kind         TEXT    NOT NULL,          -- price|signal|market|strategy
+    code         TEXT    NOT NULL DEFAULT '',
+    conds        TEXT    NOT NULL DEFAULT '[]',
+    logic        TEXT    NOT NULL DEFAULT 'AND',
+    severity     TEXT    NOT NULL DEFAULT 'warn',
+    cooldown_min INTEGER NOT NULL DEFAULT 60,
+    push         INTEGER NOT NULL DEFAULT 1,
+    enabled      INTEGER NOT NULL DEFAULT 1,
+    last_fired   REAL    NOT NULL DEFAULT 0,
+    fired_count  INTEGER NOT NULL DEFAULT 0,
+    created_at   REAL    NOT NULL,
+    params       TEXT    NOT NULL DEFAULT '{}'
+);
+
+-- #96 告警流：ts 作主键（毫秒级），保留 7 天 / 5000 条
+CREATE TABLE IF NOT EXISTS alerts (
+    ts        REAL PRIMARY KEY,
+    rule_id   TEXT NOT NULL,
+    rule_name TEXT NOT NULL DEFAULT '',
+    kind      TEXT NOT NULL,
+    code      TEXT NOT NULL DEFAULT '',
+    severity  TEXT NOT NULL DEFAULT 'warn',
+    msg       TEXT NOT NULL,
+    value     REAL,
+    is_read   INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_alerts_read ON alerts(is_read, ts DESC);
+
 -- 网格计划（虚拟盘内的实盘网格）：档位由 grid.build_levels 实时算，不落库；
 -- fired 只记已成交过的档位下标，避免刷新后重复提示
 CREATE TABLE IF NOT EXISTS grids (
@@ -603,6 +635,37 @@ CREATE TABLE IF NOT EXISTS trades (
     created_at  DOUBLE NOT NULL,
     KEY idx_trades_user(user_id, created_at DESC),
     FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
+-- #96 监控中心（MySQL 版：TEXT 不建索引，REAL 改 DOUBLE）
+CREATE TABLE IF NOT EXISTS alert_rules (
+    id           VARCHAR(32) PRIMARY KEY,
+    name         VARCHAR(128) NOT NULL,
+    kind         VARCHAR(16)  NOT NULL,
+    code         VARCHAR(32)  NOT NULL DEFAULT '',
+    conds        TEXT NULL,
+    logic        VARCHAR(8)   NOT NULL DEFAULT 'AND',
+    severity     VARCHAR(16)  NOT NULL DEFAULT 'warn',
+    cooldown_min BIGINT NOT NULL DEFAULT 60,
+    push         BIGINT NOT NULL DEFAULT 1,
+    enabled      BIGINT NOT NULL DEFAULT 1,
+    last_fired   DOUBLE NOT NULL DEFAULT 0,
+    fired_count  BIGINT NOT NULL DEFAULT 0,
+    created_at   DOUBLE NOT NULL,
+    params       TEXT NULL
+);
+
+CREATE TABLE IF NOT EXISTS alerts (
+    ts        DOUBLE PRIMARY KEY,
+    rule_id   VARCHAR(32) NOT NULL,
+    rule_name VARCHAR(128) NOT NULL DEFAULT '',
+    kind      VARCHAR(16) NOT NULL,
+    code      VARCHAR(32) NOT NULL DEFAULT '',
+    severity  VARCHAR(16) NOT NULL DEFAULT 'warn',
+    msg       TEXT NULL,
+    value     DOUBLE NULL,
+    is_read   BIGINT NOT NULL DEFAULT 0,
+    KEY idx_alerts_read(is_read, ts)
 );
 
 CREATE TABLE IF NOT EXISTS grids (

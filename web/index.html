@@ -588,6 +588,19 @@ td .starbtn{font-size:16px}
   display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600}
 .uname{cursor:default}
 .ulogout{color:var(--tx3);cursor:pointer;font-size:12px}
+/* #96 监控中心：未读小红点 */
+.adot{display:inline-block;min-width:16px;height:16px;line-height:16px;margin-left:6px;
+  padding:0 4px;border-radius:8px;background:var(--up);color:#fff;
+  font-size:11px;font-weight:700;text-align:center}
+/* 规则行 / 告警行 */
+.alrow{display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--line);
+  border-radius:8px;margin-bottom:6px;font-size:12px;flex-wrap:wrap}
+.alrow.off{opacity:.5}
+.alsev{display:inline-flex;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600}
+.alsev.info{background:#eef2f7;color:#475569}
+.alsev.warn{background:#fff7e6;color:#b45309}
+.alsev.critical{background:#fdecec;color:#c0392b}
+.alempty{padding:20px;text-align:center;color:var(--tx3);font-size:12px}
 /* 巡检告警角标 */
 .hbadge{display:inline-flex;align-items:center;gap:4px;font-size:12px;line-height:1;
   padding:6px 10px;border-radius:8px;cursor:pointer;white-space:nowrap;
@@ -766,6 +779,7 @@ td .starbtn{font-size:16px}
     <button data-tab="stock">📈 个股分析</button>
     <button data-tab="compare">⚖️ 多股对比</button>
     <button data-tab="news">📰 快讯</button>
+    <button data-tab="alerts">🔔 监控中心<span class="adot" id="alertDot" style="display:none"></span></button>
     <button data-tab="about">ℹ️ 关于</button>
     <button data-tab="admin" id="tabBtnAdmin" style="display:none">⚙️ 后台管理</button>
   </div>
@@ -1670,6 +1684,88 @@ td .starbtn{font-size:16px}
     </div>
   </div>
 
+  <!-- ================= 监控中心（#96） ================= -->
+  <div class="tab" id="tab-alerts">
+    <div class="card">
+      <div class="card-h">
+        <h2>🔔 监控中心</h2>
+        <div class="meta" id="altMeta">—</div>
+      </div>
+      <div class="card-b">
+        <div class="btnrow">
+          <button class="btn" onclick="altCheck()">立即检测一轮</button>
+          <button class="btn" onclick="altReadAll()">全部已读</button>
+          <button class="btn" onclick="altClear()">清空告警</button>
+          <button class="btn" onclick="altToggleWebhook()">⚙️ 推送配置</button>
+          <button class="btn primary" onclick="altToggleForm()">+ 新建规则</button>
+        </div>
+
+        <!-- 新建/编辑规则表单 -->
+        <div id="altForm" style="display:none;margin-top:12px;padding:12px;
+             border:1px solid var(--line);border-radius:10px">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+            <input id="alfName" placeholder="规则名，如：茅台涨超5%" style="flex:1;min-width:180px">
+            <select id="alfKind" onchange="altKindChanged()">
+              <option value="price">价格涨跌</option>
+              <option value="signal">个股信号</option>
+              <option value="market">全市场异动</option>
+              <option value="strategy">策略扫描</option>
+            </select>
+            <input id="alfCode" placeholder="代码，如 sh600519" style="width:150px">
+            <select id="alfLogic"><option value="AND">全部满足</option><option value="OR">任一满足</option></select>
+            <select id="alfSev">
+              <option value="info">提示</option><option value="warn" selected>警告</option>
+              <option value="critical">严重</option>
+            </select>
+            <input id="alfCd" type="number" value="60" min="0" style="width:70px" title="冷却分钟">
+          </div>
+          <div id="alfConds" style="margin-top:8px"></div>
+          <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button class="btn" onclick="altAddCond()">+ 条件</button>
+            <label style="font-size:12px"><input type="checkbox" id="alfPush" checked> 外部推送</label>
+            <span id="alfHint" style="font-size:11px;color:var(--tx3)"></span>
+          </div>
+          <div style="margin-top:10px;display:flex;gap:8px">
+            <button class="btn primary" onclick="altSaveRule()">保存规则</button>
+            <button class="btn" onclick="altToggleForm()">取消</button>
+          </div>
+        </div>
+
+        <!-- 推送配置 -->
+        <div id="altWebhook" style="display:none;margin-top:12px;padding:12px;
+             border:1px solid var(--line);border-radius:10px">
+          <div style="font-size:12px;color:var(--tx3);margin-bottom:8px">
+            推送失败只记日志，<b>不影响告警落盘</b>；可发测试消息验证配置。
+          </div>
+          <label style="font-size:12px"><input type="checkbox" id="awhEnabled"> 启用外部推送</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+            <input id="awhFeishu" placeholder="飞书机器人 Webhook 地址" style="flex:1;min-width:200px">
+            <input id="awhFeishuSec" type="password" placeholder="飞书签名密钥(可空)" style="width:170px">
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+            <input id="awhWecom" type="password" placeholder="企业微信机器人 key" style="flex:1;min-width:200px">
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+            <input id="awhGeneric" placeholder="通用 Webhook URL" style="flex:1;min-width:200px">
+            <input id="awhGenericSec" type="password" placeholder="通用签名密钥(可空)" style="width:170px">
+          </div>
+          <div style="margin-top:10px;display:flex;gap:8px">
+            <button class="btn primary" onclick="altSaveWebhook()">保存配置</button>
+            <button class="btn" onclick="altTestPush()">发测试消息</button>
+          </div>
+          <div id="awhMsg" style="margin-top:8px;font-size:12px;color:var(--tx3)"></div>
+        </div>
+
+        <div style="margin-top:14px"><b>监控规则</b> <span class="ktag ktag-live">实时</span></div>
+        <div id="altRules" style="margin-top:6px"><div class="alempty">加载中…</div></div>
+
+        <div style="margin-top:16px"><b>告警记录</b>
+          <span class="ktag ktag-eod" style="margin-left:6px">保留7天</span></div>
+        <div id="altList" style="margin-top:6px"><div class="alempty">加载中…</div></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ================= 关于 ================= -->
   <div class="tab" id="tab-about">
     <div class="card">
@@ -1828,6 +1924,8 @@ document.querySelectorAll('.tabs button').forEach(function(b){
     if(want === 'paper' && !ppState.loaded) loadPaper();
     // 懒加载：进入「快讯」即拉取（30s 内是缓存，随便切）
     if(want === 'news') loadNews();
+    // 懒加载：进入「监控中心」即拉取规则与告警
+    if(want === 'alerts') loadAlerts();
     // 懒加载：首次进入「条件选股」时拉取分钟扫描的预设条件
     // （扫描器已并入本页，不再是独立页签）
     if(want === 'screen' && !idState.presetLoaded) loadIntradayPresets();
@@ -3767,6 +3865,244 @@ document.querySelectorAll('[data-adm]').forEach(function(b){
    快讯（双源：新浪7x24 + 同花顺，30s TTL，情绪来自 #89 词典）
    ========================================================================= */
 var newsTimer = null;
+/* =========================================================================
+   监控中心（#96）：规则管理 + 告警流 + 推送配置
+   ========================================================================= */
+var altState = { rules: [], alerts: [], editId: null, conds: [],
+                 fields: { price: ['price','change_pct','change','open','high','low',
+                                   'prev_close','amount','turnover','volume'],
+                           signal: ['close','ma5','ma10','ma20','ma60','ma_align',
+                                    'chg20','chg60','hhv20','hhv60','llv20',
+                                    'vol_ma5','vol_ma20','vol_ratio','bias_ma20'],
+                           market: ['limit_up_cnt','anomaly_cnt'],
+                           strategy: ['close','ma20','ma_align','chg20','vol_ratio'] } };
+
+function loadAlerts(){
+  Promise.all([api('/api/alerts/rules'), api('/api/alerts?limit=80')])
+    .then(function(rs){
+      altState.rules = (rs[0].items) || [];
+      altState.alerts = (rs[1].items) || [];
+      altRenderRules(); altRenderAlerts();
+      var m = $('altMeta');
+      if(m) m.textContent = '规则 ' + altState.rules.length + ' 条 · 未读 ' +
+        (rs[1].unread || 0) + ' 条 · 每 60 秒自动检测';
+      altDot(rs[1].unread || 0);
+    }).catch(function(e){
+      var m = $('altMeta'); if(m) m.textContent = '加载失败：' + e.message;
+    });
+}
+
+function altDot(n){
+  var d = $('alertDot'); if(!d) return;
+  d.textContent = n > 99 ? '99+' : String(n);
+  d.style.display = n > 0 ? 'inline-block' : 'none';
+}
+
+function altRenderRules(){
+  var el = $('altRules'); if(!el) return;
+  if(!altState.rules.length){
+    el.innerHTML = '<div class="alempty">还没有规则。点「+ 新建规则」：'
+      + '如茅台涨超 5%、涨停家数超 80、RSI 超买等。</div>'; return;
+  }
+  var h = '';
+  altState.rules.forEach(function(r){
+    var conds = (r.conds || []).map(function(c){
+      return c.field + ' ' + c.op + ' ' + c.value; }).join(r.logic === 'OR' ? ' 或 ' : ' 且 ');
+    h += '<div class="alrow' + (r.enabled ? '' : ' off') + '">'
+      + '<span class="alsev ' + r.severity + '">' + esc(r.name) + '</span>'
+      + '<span style="color:var(--tx3)">' + ({price:'价格',signal:'信号',market:'市场',
+          strategy:'策略'}[r.kind] || r.kind) + '</span>'
+      + (r.code ? '<b>' + esc(r.code) + '</b>' : '')
+      + '<span style="color:var(--tx3)">' + esc(conds || '—') + '</span>'
+      + '<span style="color:var(--tx3)">冷却' + r.cooldown_min + '分 · 已触发'
+      + (r.fired_count || 0) + '次</span>'
+      + '<span style="margin-left:auto;display:flex;gap:6px">'
+      + '<button class="btn" onclick="altToggleRule(\'' + r.id + '\',' + (r.enabled ? 0 : 1)
+      + ')">' + (r.enabled ? '停用' : '启用') + '</button>'
+      + '<button class="btn" onclick="altDelRule(\'' + r.id + '\')">删除</button>'
+      + '</span></div>';
+  });
+  el.innerHTML = h;
+}
+
+function altRenderAlerts(){
+  var el = $('altList'); if(!el) return;
+  if(!altState.alerts.length){
+    el.innerHTML = '<div class="alempty">暂无告警。规则命中后会实时出现在这里。</div>';
+    return;
+  }
+  var h = '';
+  altState.alerts.forEach(function(a){
+    var t = new Date(a.ts * 1000);
+    var ts = String(t.getHours()).padStart(2,'0') + ':' + String(t.getMinutes()).padStart(2,'0');
+    h += '<div class="alrow' + (a.is_read ? ' off' : '') + '">'
+      + '<span style="color:var(--tx3)">' + ts + '</span>'
+      + '<span class="alsev ' + a.severity + '">' + esc(a.rule_name || '—') + '</span>'
+      + '<span>' + esc(a.msg) + '</span>'
+      + '<span style="margin-left:auto;display:flex;gap:6px">'
+      + (a.code ? '<button class="btn" onclick="alertJump(\'' + a.code + '\')">看盘</button>' : '')
+      + (a.is_read ? '' : '<button class="btn" onclick="altReadOne(' + a.ts + ')">已读</button>')
+      + '</span></div>';
+  });
+  el.innerHTML = h;
+}
+
+function alertJump(code){
+  openStock(code);          // normCode 内部会统一 sh600519 / 600519.SH 两种写法
+}
+
+function altToggleForm(){
+  var f = $('altForm'); if(!f) return;
+  var show = f.style.display === 'none';
+  f.style.display = show ? 'block' : 'none';
+  if(show && !altState.conds.length){ altState.editId = null; altAddCond(); }
+}
+
+function altKindChanged(){
+  var k = $('alfKind').value;
+  $('alfCode').style.display = (k === 'price' || k === 'signal') ? '' : 'none';
+  altState.conds = []; $('alfConds').innerHTML = ''; altAddCond();
+  $('alfHint').textContent = ({
+    price: '实时行情：change_pct 为涨跌幅%，price 为现价',
+    signal: '日线指标：ma20 为20日均线，ma_align 为 bull/bear/mixed',
+    market: '全市场：limit_up_cnt 涨停家数，anomaly_cnt 异动家数',
+    strategy: '扫全市场：命中数达到阈值即告警（阈值默认 1）'
+  })[k] || '';
+}
+
+function altAddCond(){
+  var k = $('alfKind').value;
+  var fields = altState.fields[k] || ['close'];
+  var idx = altState.conds.length;
+  altState.conds.push({ field: fields[0], op: '>=', value: 0 });
+  var d = document.createElement('div');
+  d.style.cssText = 'display:flex;gap:6px;align-items:center;margin-top:4px';
+  d.innerHTML = '<select data-i="' + idx + '" class="alf-f">'
+    + fields.map(function(f){ return '<option value="' + f + '">' + f + '</option>'; }).join('')
+    + '</select><select data-i="' + idx + '" class="alf-o">'
+    + ['>=','>','<=','<','==','!='].map(function(o){
+        return '<option value="' + o + '">' + o + '</option>'; }).join('')
+    + '</select><input data-i="' + idx + '" class="alf-v" type="text" value="0" style="width:110px">'
+    + '<button class="btn" onclick="altDelCond(' + idx + ')">×</button>';
+  $('alfConds').appendChild(d);
+  altBindConds();
+}
+
+function altBindConds(){
+  var box = $('alfConds'); if(!box) return;
+  box.querySelectorAll('.alf-f').forEach(function(s){
+    s.onchange = function(){ altState.conds[+s.dataset.i].field = s.value; }; });
+  box.querySelectorAll('.alf-o').forEach(function(s){
+    s.onchange = function(){ altState.conds[+s.dataset.i].op = s.value; }; });
+  box.querySelectorAll('.alf-v').forEach(function(s){
+    s.oninput = function(){ altState.conds[+s.dataset.i].value = s.value; }; });
+}
+
+function altDelCond(i){
+  altState.conds.splice(i, 1);
+  $('alfConds').innerHTML = '';
+  var saved = altState.conds.slice(); altState.conds = [];
+  saved.forEach(function(c){ altAddCond(); });
+  // 回填
+  var box = $('alfConds');
+  saved.forEach(function(c, k){
+    box.querySelectorAll('.alf-f')[k].value = c.field;
+    box.querySelectorAll('.alf-o')[k].value = c.op;
+    box.querySelectorAll('.alf-v')[k].value = c.value;
+  });
+}
+
+function altSaveRule(){
+  var payload = {
+    name: $('alfName').value || '未命名规则',
+    kind: $('alfKind').value,
+    code: ($('alfCode').value || '').trim(),
+    conds: altState.conds.filter(function(c){ return c.field; }),
+    logic: $('alfLogic').value,
+    severity: $('alfSev').value,
+    cooldown_min: parseInt($('alfCd').value || '60', 10),
+    push: $('alfPush').checked ? 1 : 0,
+    enabled: 1
+  };
+  if(!payload.conds.length){ alert('至少需要一个条件'); return; }
+  if((payload.kind === 'price' || payload.kind === 'signal') && !payload.code){
+    alert('价格类 / 信号类规则需要填股票代码'); return;
+  }
+  api('/api/alerts/rules', { method: 'POST', body: payload }).then(function(){
+    altState.conds = []; $('alfConds').innerHTML = '';
+    $('alfName').value = ''; altToggleForm(); loadAlerts();
+  }).catch(function(e){ alert('保存失败：' + e.message); });
+}
+
+function altToggleRule(id, enabled){
+  api('/api/alerts/rules/' + id, { method: 'PUT', body: { enabled: enabled } })
+    .then(loadAlerts).catch(function(e){ alert('操作失败：' + e.message); });
+}
+
+function altDelRule(id){
+  if(!confirm('删除这条规则？')) return;
+  api('/api/alerts/rules/' + id, { method: 'DELETE' })
+    .then(loadAlerts).catch(function(e){ alert('删除失败：' + e.message); });
+}
+
+function altCheck(){
+  var m = $('altMeta'); if(m) m.textContent = '检测中…';
+  api('/api/alerts/check', { method: 'POST' }).then(function(r){
+    loadAlerts();
+    if(m) m.textContent = '检测完成：命中 ' + r.fired + ' 条 / 检查 ' + r.checked + ' 条规则';
+  }).catch(function(e){ if(m) m.textContent = '检测失败：' + e.message; });
+}
+
+function altReadOne(ts){
+  api('/api/alerts/read', { method: 'POST', body: { ts: ts } })
+    .then(loadAlerts).catch(function(){});
+}
+
+function altReadAll(){
+  api('/api/alerts/read', { method: 'POST', body: { all: true } })
+    .then(loadAlerts).catch(function(){});
+}
+
+function altClear(){
+  if(!confirm('清空全部告警记录？')) return;
+  api('/api/alerts', { method: 'DELETE' }).then(loadAlerts).catch(function(){});
+}
+
+function altToggleWebhook(){
+  var f = $('altWebhook'); if(!f) return;
+  f.style.display = (f.style.display === 'none') ? 'block' : 'none';
+  if(f.style.display === 'block'){
+    api('/api/alerts/webhook').then(function(c){
+      $('awhEnabled').checked = !!c.enabled;
+      $('awhFeishu').value = c.feishu_url || '';
+      $('awhWecom').value = '';
+      $('awhGeneric').value = c.generic_url || '';
+      $('awhMsg').textContent = '（密钥不会回显，留空表示不修改）';
+    }).catch(function(){});
+  }
+}
+
+function altSaveWebhook(){
+  var payload = { enabled: $('awhEnabled').checked ? 1 : 0,
+                  feishu_url: $('awhFeishu').value.trim(),
+                  wecom_key: $('awhWecom').value.trim(),
+                  generic_url: $('awhGeneric').value.trim() };
+  // 密钥留空 = 不修改；填了才覆盖
+  if($('awhFeishuSec').value) payload.feishu_secret = $('awhFeishuSec').value.trim();
+  if($('awhGenericSec').value) payload.generic_secret = $('awhGenericSec').value.trim();
+  api('/api/alerts/webhook', { method: 'PUT', body: payload }).then(function(){
+    $('awhMsg').textContent = '已保存';
+  }).catch(function(e){ $('awhMsg').textContent = '保存失败：' + e.message; });
+}
+
+function altTestPush(){
+  $('awhMsg').textContent = '发送中…';
+  api('/api/alerts/test', { method: 'POST' }).then(function(r){
+    $('awhMsg').textContent = r.ok ? ('测试成功：已推送 ' + r.sent + ' 个渠道')
+      : ('发送失败：' + JSON.stringify(r.detail));
+  }).catch(function(e){ $('awhMsg').textContent = '发送失败：' + e.message; });
+}
+
 function loadNews(){
   var el = $('newsBody'), meta = $('newsMeta');
   if(!el) return;
@@ -7253,8 +7589,20 @@ function afterLogin(){
     });
     loadMe();
     loadHealth();          // 加载巡检告警状态（未跑过巡检则不显示角标）
+    // #96 监控中心未读角标：启动取一次，之后每 30 秒轮询（不进该页也可见）
+    altPoll();
+    setInterval(altPoll, 30000);
   });
 })();
+
+function altPoll(){
+  api('/api/alerts?limit=1').then(function(d){
+    altDot(d.unread || 0);
+    // 正停在该页时顺便刷新列表，保证告警实时出现
+    var t = $('tab-alerts');
+    if(t && t.classList.contains('on')) loadAlerts();
+  }).catch(function(){});
+}
 
 /* =========================================================================
    虚拟盘：持仓 / 买入 / 卖出 / 流水

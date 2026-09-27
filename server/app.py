@@ -71,6 +71,8 @@ import tdx as tdxc
 import newbie as nwb
 import grid as grd
 import market_phase as mp
+import alerts as alt
+import webhook
 import etf
 import store
 import pandas as pd
@@ -211,6 +213,14 @@ def startup():
 
     threading.Thread(target=_warm, daemon=True).start()
     threading.Thread(target=_warm_history, daemon=True).start()
+
+    # #96 监控中心：检测轮询（独立线程/独立连接；无规则时空转）
+    try:
+        alt.start_loop(interval=60,
+                       engine_getter=lambda: scr.get_history_engine(auto_load=False),
+                       htk=htk)
+    except Exception as e:
+        print(f"[alerts] 监控轮询启动失败（不影响其他功能）：{e}")
 
 
 def _resolve_name(code: str) -> str:
@@ -2190,6 +2200,93 @@ def api_market_phase():
     # 否则主线 bug 会静默变成 unavailable，难以定位（曾因权重字段名不匹配踩过）。
     data["mainline"] = mp.get_mainline(htk)
     return data
+
+
+@app.get("/api/alerts/rules")
+def api_alert_rules():
+    """#96 监控规则列表。"""
+    return {"items": alt.list_rules(), "kinds": alt.KIND_LABELS}
+
+
+@app.post("/api/alerts/rules")
+def api_alert_rule_add(payload: Dict[str, Any] = Body(...)):
+    """#96 新建监控规则。"""
+    if not payload.get("conds"):
+        raise HTTPException(400, "至少需要一个条件")
+    if str(payload.get("kind")) not in alt.KIND_LABELS:
+        raise HTTPException(400, "未知规则类型")
+    return {"ok": True, "item": alt.add_rule(payload)}
+
+
+@app.put("/api/alerts/rules/{rule_id}")
+def api_alert_rule_update(rule_id: str, payload: Dict[str, Any] = Body(...)):
+    """#96 更新规则（含启停）。"""
+    item = alt.update_rule(rule_id, payload)
+    if not item:
+        raise HTTPException(404, "规则不存在")
+    return {"ok": True, "item": item}
+
+
+@app.delete("/api/alerts/rules/{rule_id}")
+def api_alert_rule_delete(rule_id: str):
+    alt.delete_rule(rule_id)
+    return {"ok": True}
+
+
+@app.get("/api/alerts")
+def api_alerts(limit: int = 50, unread: int = 0):
+    """#96 告警流。"""
+    return {"items": alt.list_alerts(limit=limit, unread_only=bool(unread)),
+            "unread": alt.unread_count()}
+
+
+@app.post("/api/alerts/read")
+def api_alerts_read(payload: Dict[str, Any] = Body(...)):
+    """#96 标记已读：body {ts} 单条，或 {all:true} 全部。"""
+    if payload.get("all"):
+        alt.mark_read(all_=True)
+    elif payload.get("ts") is not None:
+        alt.mark_read(ts=float(payload["ts"]))
+    return {"ok": True, "unread": alt.unread_count()}
+
+
+@app.delete("/api/alerts")
+def api_alerts_clear():
+    alt.clear_alerts()
+    return {"ok": True}
+
+
+@app.get("/api/alerts/webhook")
+def api_alerts_webhook_get():
+    cfg = alt.get_webhook_cfg()
+    # 密钥只回传「是否已配置」，不把明文密钥返回前端
+    return {k: (("***已配置***" if v else "") if k.endswith(("secret", "key")) else v)
+            for k, v in cfg.items()}
+
+
+@app.put("/api/alerts/webhook")
+def api_alerts_webhook_set(payload: Dict[str, Any] = Body(...)):
+    return {"ok": True, "item": alt.set_webhook_cfg(payload)}
+
+
+@app.post("/api/alerts/test")
+def api_alerts_test():
+    """#96 发一条测试推送，验证 Webhook 配置是否可用。"""
+    cfg = alt.get_webhook_cfg()
+    if not cfg.get("enabled"):
+        raise HTTPException(400, "推送未启用")
+    res = webhook.push(cfg, "牛来选股面板 · 测试推送",
+                       "这是一条来自监控中心的测试消息。")
+    return {"ok": res["failed"] == 0, "sent": res["sent"],
+            "failed": res["failed"], "detail": res["detail"]}
+
+
+@app.post("/api/alerts/check")
+def api_alerts_check():
+    """#96 手动触发一轮检测（自检/演示用）。"""
+    stat = alt.check_once(
+        engine=scr.get_history_engine(auto_load=False), htk=htk)
+    return {"ok": True, **stat, "unread": alt.unread_count()}
 
 
 @app.get("/api/market_overview")
