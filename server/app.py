@@ -70,6 +70,7 @@ import intent as itt
 import tdx as tdxc
 import newbie as nwb
 import grid as grd
+import market_phase as mp
 import etf
 import store
 import pandas as pd
@@ -2171,6 +2172,24 @@ def api_newsfeed(limit: int = Query(50, ge=1, le=100), force: int = Query(0)):
     f = nf.get_feed(force=bool(force))
     return {"items": f["items"][:limit], "sources": f["sources"],
             "errors": f["errors"], "ts": f["ts"], "cached": f.get("cached", False)}
+
+
+@app.get("/api/market_phase")
+def api_market_phase():
+    """市场情绪周期（6 阶段）与实时主线。"""
+    import sqlite3
+
+    conn = sqlite3.connect(store.DB_PATH, timeout=15.0)
+    try:
+        data = mp.get_phase_data(conn)
+    finally:
+        conn.close()
+    if not data.get("ready"):
+        return data
+    # ponytail: get_mainline 内部已兜底网络异常，这里不再吞异常——
+    # 否则主线 bug 会静默变成 unavailable，难以定位（曾因权重字段名不匹配踩过）。
+    data["mainline"] = mp.get_mainline(htk)
+    return data
 
 
 @app.get("/api/market_overview")

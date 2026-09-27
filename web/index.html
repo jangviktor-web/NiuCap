@@ -4962,6 +4962,9 @@ function loadMarketTemp(){
     }
     h += '</div>';
 
+    // 情绪周期（6 阶段）占位：异步加载 /api/market_phase 后填充
+    h += '<div id="phaseBlock"></div>';
+
     // 涨跌分布条
     var total = (cd.up||0) + (cd.down||0) + (cd.flat||0);
     if(total > 0){
@@ -4988,7 +4991,74 @@ function loadMarketTemp(){
            '维度评分 1~5 分，5 分最强。<span class="ktag ktag-eod">盘后</span> 数据来源：腾讯自选股（westock），收盘后统一重算</div>';
     }
     body.innerHTML = h;
+    renderMarketPhase();
   }).catch(function(e){ die(body, '市场总览加载失败：' + e.message); meta.textContent = '—'; });
+}
+
+/* 情绪周期（6 阶段）+ 实时主线：异步填充 #phaseBlock */
+function renderMarketPhase(){
+  var box = $('phaseBlock'); if(!box) return;
+  api('/api/market_phase').then(function(p){
+    if(!p || !p.ready){
+      box.innerHTML = '<div style="margin-top:14px;font-size:12px;color:var(--tx3)">'
+        + '情绪周期：计算中（首次约 1~2 秒，之后即时）…</div>';
+      return;
+    }
+    var col = p.color || '#94a3b8';
+    var h = '<div style="margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)">';
+    // 头部：标题 + 盘后标签 + 数据日期
+    h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+       + '<span style="font-size:13px;font-weight:600;color:var(--tx1)">市场情绪周期</span>'
+       + '<span class="ktag ktag-eod">盘后</span>'
+       + '<span style="font-size:11px;color:var(--tx3)">基于连板梯队 · 数据日 ' + (p.as_of || '—') + '</span></div>';
+    // 阶段大标签
+    h += '<div style="margin-top:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">'
+       + '<span style="display:inline-flex;align-items:center;gap:8px;padding:6px 16px;border-radius:10px;'
+       + 'background:' + col + '1a;color:' + col + ';font-size:20px;font-weight:700;border:1px solid ' + col + '55">'
+       + p.label + '</span>';
+    var L = p.ladder || {};
+    h += '<span style="font-size:12px;color:var(--tx3)">连板高度 <b style="color:var(--tx1)">' + (L.height||0)
+       + '</b> · 首板 <b style="color:var(--tx1)">' + (L.first_board||0) + '</b> · 二板及以上 <b style="color:var(--tx1)">'
+       + (L.ge2||0) + '</b> 家'
+       + (L.promo_rate!=null ? ' · 晋级率 <b style="color:var(--tx1)">' + (L.promo_rate*100).toFixed(0) + '%</b>' : '')
+       + '</span></div>';
+    // 近 N 日阶段色条
+    var hist = p.history || [];
+    if(hist.length){
+      h += '<div style="margin-top:10px;display:flex;gap:3px;flex-wrap:wrap" title="近 ' + hist.length + ' 个交易日情绪周期">';
+      hist.forEach(function(d){
+        h += '<span title="' + d.date + ' ' + d.label + '" style="width:14px;height:14px;border-radius:3px;'
+           + 'background:' + (d.color||'#94a3b8') + '"></span>';
+      });
+      h += '</div>';
+    }
+    // 实时主线
+    var ml = p.mainline || {};
+    var items = ml.items || [];
+    h += '<div style="margin-top:12px"><div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">'
+       + '<span style="font-size:12px;font-weight:600;color:var(--tx1)">今日主线</span>'
+       + '<span class="ktag ktag-live">实时</span>'
+       + (ml.source==='unavailable' ? '<span style="font-size:11px;color:var(--tx3)">（数据源暂不可用）</span>' : '')
+       + '</div>';
+    if(items.length){
+      h += '<div style="display:flex;flex-direction:column;gap:4px">';
+      items.slice(0,8).forEach(function(r){
+        var ld = (r.leaders||[]).map(function(x){ return x.name ? x.name + (x.boards>1?'('+x.boards+'板)':'') : ''; }).filter(Boolean).join('、');
+        h += '<div style="display:flex;align-items:center;gap:8px;font-size:12px">'
+           + '<span style="min-width:92px;color:var(--tx1);font-weight:600">' + esc(r.reason) + '</span>'
+           + '<span style="color:var(--tx3)">涨停 ' + r.count + ' 家 · 最高 ' + r.max_boards + ' 板</span>'
+           + (ld ? '<span style="color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:320px">｜' + esc(ld) + '</span>' : '')
+           + '</div>';
+      });
+      h += '</div>';
+    } else {
+      h += '<div style="font-size:11px;color:var(--tx3)">收盘后暂无实时涨停数据，开盘后自动更新</div>';
+    }
+    h += '</div>'; // 情绪周期块
+    box.innerHTML = h;
+  }).catch(function(e){
+    box.innerHTML = '<div style="margin-top:14px;font-size:12px;color:var(--tx3)">情绪周期加载失败：' + e.message + '</div>';
+  });
 }
 
 /* =========================================================================
