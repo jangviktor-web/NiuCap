@@ -1,7 +1,7 @@
 """WeStock CLI 数据源封装。
 
 本模块把 `westock` 命令行返回的结构化 Markdown 表格解析为 Python 结构，
-为 Tick 选股面板补充资金面、筹码、基本面、研报公告与市场热点等维度。
+为牛来选股面板补充资金面、筹码、基本面、研报公告与市场热点等维度。
 
 设计要点：
 - CLI 位于 /root/.local/bin/westock（可能不在 PATH 中，需显式拼接）；

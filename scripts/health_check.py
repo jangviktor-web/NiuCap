@@ -265,7 +265,7 @@ def _print_report(res: Dict[str, Any], st: Dict[str, Any]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(
-        description="Tick 选股面板健康巡检",
+        description="牛来选股面板健康巡检",
         epilog="地址可用 --url 传入，或设环境变量 TICK_SITE_URL。")
     ap.add_argument("--url", default=DEFAULT_URL,
                     help="要探测的地址（也可用环境变量 TICK_SITE_URL）")
