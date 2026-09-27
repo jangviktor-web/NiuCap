@@ -423,7 +423,10 @@ tbody tr:hover{background:#f7f9fc}
 /* ---------- 市场温度 ---------- */
 .tempgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
 .tempkpi{background:#fafbfc;border:1px solid var(--line2);border-radius:8px;padding:11px 13px}
-.tempkpi .k{font-size:12px;color:var(--tx3);margin-bottom:4px}
+.tempkpi .k{font-size:12px;color:var(--tx3);margin-bottom:4px;display:flex;align-items:center;gap:6px}
+.ktag{font-size:10px;line-height:1;padding:2px 6px;border-radius:4px;font-weight:600;flex-shrink:0;white-space:nowrap}
+.ktag-live{background:#e6f0ff;color:#1677ff}
+.ktag-eod{background:#eef1f5;color:#5b6675}
 .tempkpi .v{font-size:21px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.4px}
 .tempkpi .s{font-size:11.5px;color:var(--tx2);margin-top:3px}
 .dimgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(215px,1fr));gap:8px;margin-top:14px}
@@ -3847,7 +3850,7 @@ function loadAbout(){
       '<p><b>功能说明</b></p>' +
       '<p>· <b>小白选股</b>：面向完全不懂股票的人。不用填任何条件，从四套方案里挑一个最像自己想法的——<b>稳健白马</b>（怕亏本金、想拿住）、<b>超跌反弹</b>（想捡便宜）、<b>成长活跃</b>（想赚快钱）、<b>打板热点</b>（就想追最热的票）——点一下即出结果。每只票都会给一个 <b>0~100 友好度评分</b>，并用大白话逐条说明「为什么选它」，配市值档位、估值档位等标签，可一键跳个股详情。评分不是玄学：每套方案有独立的评分函数，逐项加分并在理由里标明依据；最终得分按全市场排名压到 40~98 区间，避免出现「人人 99 分」。<b>超跌反弹</b>会真的拉取日K计算「20 日跌幅」与「距 60 日高点回撤」，只保留跌得够透且刚站上 5 日均线的票（因行情接口限流，该方案由后台预计算，结果最多滞后一个刷新周期）。</p>' +
       '<p>· <b>市场榜单</b>：涨幅榜、跌幅榜、成交额榜、换手率榜、市值榜、低估值榜，快速把握市场结构。</p>' +
-      '<p>· <b>市场温度</b>：市场综合评分 + <b>13 维市场画像</b>（短期/中长期趋势、估值水平、成交量能、风格轮动、板块宽度、技术指标、情绪指标、大小盘轮动等，1~5 分），以及两市涨跌家数、涨停跌停家数、成交额与环比变化。<i>数据来自 westock 数据源</i>。</p>' +
+      '<p>· <b>市场温度</b>：<b>〔盘后〕</b>市场综合评分 + <b>13 维市场画像</b>（短期/中长期趋势、估值水平、成交量能、风格轮动、板块宽度、技术指标、情绪指标、大小盘轮动等，1~5 分，由腾讯自选股 westock 收盘后统一重算，盘中显示上一交易日）；<b>〔实时〕</b>两市涨跌家数、涨停跌停家数、成交额与环比变化（盘中实时）。</p>' +
       '<p>· <b>市场热点</b>：<b>人气热榜</b>（同花顺特色数据，含热度值与排名变动）、<b>龙虎榜</b>（净买额/买入额/卖出额）、<b>行业榜</b>（124 个行业涨跌幅 + 主力净流入 + 5 日净额 + 换手率 + 上涨家数 + 领涨股）、<b>涨停池 / 连板天梯 / 炸板池 / 异动解读</b>。<i>热榜与涨停系数据来自同花顺 hithink 特色数据接口，龙虎榜与行业榜来自 westock</i>。</p>' +
       '<p>· <b>策略选股</b>：' + stg.total + ' 个内置策略（趋势形态/量价涨停/反转波动/形态相似度/经典指标/分钟级六类），支持多策略并集/交集组合，秒级扫描全市场，结果标注命中策略。<i>借鉴 tick-stock-panel 的内置策略体系</i>。</p>' +
       '<p>· <b>策略回测</b>：单股单策略回测 + 全策略对比，含 T+1、手续费、印花税、滑点真实约束，<b>支持止损/止盈设置</b>，输出净值曲线、年化、最大回撤、夏普、<b>卡玛比率</b>、胜率、盈亏比、<b>最大连亏</b>、平均持仓与基准对照，并统计平仓原因（信号/止损/止盈）。<b>支持金字塔分批加仓</b>（持仓浮盈每达设定步长补一批，最多 8 批），交易明细按 <b>批次（lots）</b> 展示，精确模拟分批建仓与部分减仓，卖出按 FIFO 消耗且受 <b>T+1 可卖量</b>约束。<i>回测引擎借鉴 tick-stock-panel 与 Klang，批次持仓与 T+1 可卖量借鉴三省六部框架的尚书省调度逻辑</i>。</p>' +
@@ -4906,12 +4909,12 @@ function loadMarketTemp(){
     if(!ov.dims || !ov.dims.length){
       die(body, '市场总览数据暂不可用'); meta.textContent = '—'; return;
     }
-    meta.textContent = '数据日期 ' + (ov.date || '—');
+    meta.textContent = '温度画像 ' + (ov.date || '—') + '（盘后）· 涨跌/成交额 实时';
     if(ov.stale){
-      meta.textContent = '温度画像 ' + ov.date + ' · 涨跌实时';
-      meta.title = ov.note || ('温度画像的数据日期为 ' + ov.date + '，是上游最近一次重算的日期');
+      meta.title = ov.note || ('温度画像的数据日期为 ' + ov.date + '，是上游最近一次重算的日期；涨跌家数与成交额为实时数据');
       meta.className = 'meta stale';
     } else {
+      meta.title = '温度画像为上游收盘后重算的快照；涨跌家数、涨停跌停、成交额为实时数据';
       meta.className = 'meta';
     }
 
@@ -4921,16 +4924,16 @@ function loadMarketTemp(){
     var sentiment = upRatio >= 65 ? '情绪偏高' : (upRatio <= 35 ? '情绪偏冷' : '情绪中性');
 
     var h = '<div class="tempgrid">';
-    h += '<div class="tempkpi"><div class="k">市场综合评分</div><div class="v ' + scoreColor + '">' +
+    h += '<div class="tempkpi"><div class="k">市场综合评分 <span class="ktag ktag-eod">盘后</span></div><div class="v ' + scoreColor + '">' +
          score.toFixed(1) + '</div><div class="s">原始 ' + (ov.raw_score||0).toFixed(1) + ' · 满分 60</div></div>';
-    h += '<div class="tempkpi"><div class="k">上涨 / 下跌</div><div class="v"><span class="' + UP + '">' +
+    h += '<div class="tempkpi"><div class="k">上涨 / 下跌 <span class="ktag ktag-live">实时</span></div><div class="v"><span class="' + UP + '">' +
          (cd.up||0) + '</span> <span style="color:var(--tx3);font-size:15px">/</span> <span class="' + DOWN + '">' +
          (cd.down||0) + '</span></div><div class="s">平盘 ' + (cd.flat||0) + ' · 停牌 ' + (cd.suspend||0) + '</div></div>';
-    h += '<div class="tempkpi"><div class="k">涨停 / 跌停</div><div class="v"><span class="' + UP + '">' +
+    h += '<div class="tempkpi"><div class="k">涨停 / 跌停 <span class="ktag ktag-live">实时</span></div><div class="v"><span class="' + UP + '">' +
          (cd.up_limit||0) + '</span> <span style="color:var(--tx3);font-size:15px">/</span> <span class="' + DOWN + '">' +
          (cd.down_limit||0) + '</span></div><div class="s">' + sentiment + '（上涨占比 ' + upRatio + '%）</div></div>';
     if(cd.turnover_yi){
-      h += '<div class="tempkpi"><div class="k">两市成交额</div><div class="v">' + fmtYi(cd.turnover_yi) +
+      h += '<div class="tempkpi"><div class="k">两市成交额 <span class="ktag ktag-live">实时</span></div><div class="v">' + fmtYi(cd.turnover_yi) +
            '</div><div class="s">较上日 ' + sign(cd.turnover_delta_yi || 0) + '亿</div></div>';
     }
     h += '</div>';
@@ -4939,7 +4942,7 @@ function loadMarketTemp(){
     var total = (cd.up||0) + (cd.down||0) + (cd.flat||0);
     if(total > 0){
       var pu = (cd.up/total*100), pd = (cd.down/total*100), pf = (cd.flat/total*100);
-      h += '<div style="margin-top:14px"><div style="font-size:12px;color:var(--tx3)">涨跌家数分布</div>' +
+      h += '<div style="margin-top:14px"><div style="font-size:12px;color:var(--tx3);display:flex;align-items:center;gap:6px">涨跌家数分布 <span class="ktag ktag-live">实时</span></div>' +
            '<div class="distbar">' +
            (pu>0?'<div style="width:'+pu+'%;background:var(--up)">'+(pu>=8?cd.up:'')+'</div>':'') +
            (pf>0?'<div style="width:'+pf+'%;background:var(--line)">'+(pf>=8?cd.flat:'')+'</div>':'') +
@@ -4957,8 +4960,8 @@ function loadMarketTemp(){
              '</span><span class="dots">' + dots + '</span></div>';
       });
       h += '</div>';
-      h += '<div style="margin-top:10px;font-size:12px;color:var(--tx3)">' +
-           '维度评分 1~5 分，5 分最强。数据来源：腾讯自选股（westock）</div>';
+      h += '<div style="margin-top:10px;font-size:12px;color:var(--tx3);display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+           '维度评分 1~5 分，5 分最强。<span class="ktag ktag-eod">盘后</span> 数据来源：腾讯自选股（westock），收盘后统一重算</div>';
     }
     body.innerHTML = h;
   }).catch(function(e){ die(body, '市场总览加载失败：' + e.message); meta.textContent = '—'; });
