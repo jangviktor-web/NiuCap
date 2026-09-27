@@ -1,0 +1,16 @@
+# 运行时依赖（轻量，无需 akshare/mootdx）
+fastapi>=0.100
+uvicorn>=0.23
+requests>=2.28
+numpy>=1.24
+pandas>=1.5
+
+# 云数据库模式（设置了 TICK_DB_HOST 时）才用到，SQLite 模式不需要
+pymysql>=1.1.0
+
+# 历史行情批量取数（可选）。缺失时自动回落到腾讯源，不影响运行。
+# 支持批量取数，全市场 5575 只 × 250 根日线约 16 秒（腾讯源逐只需约 48 分钟）；
+# 并提供腾讯源缺失的成交额(amount)字段。
+# ⚠️ 许可证为 ELTDX Research-Only License，仅限个人学习/研究，禁止商业使用。
+#    详见 server/sources/eltdx_source.py 的模块说明。
+eltdx>=3.2
