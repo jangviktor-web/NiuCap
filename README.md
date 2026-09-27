@@ -36,13 +36,66 @@ python server/run.py          # 或 ./deploy.sh（后台常驻 + 可选 Cloudfla
 
 > 需要 Python ≥ 3.11。无需任何 API Key，纯免费公开行情源（腾讯 / 新浪 / 同花顺 / 东财）。
 
-### 方式 B：WorkBuddy 一键发布到云平台
+### 方式 B：WorkBuddy 一键发布到云平台（推荐零运维）
 
-本项目已满足云发布要求（单 HTTP 端口、读 `$PORT`、绑 `0.0.0.0`、有 `/api/health`）。在 WorkBuddy 里对仓库说「发布为应用」即可生成可访问的分享链接，无需自己买服务器。
+本项目已满足云发布要求，在 WorkBuddy 里对仓库说「发布为应用」即可生成可访问的分享链接，无需自己买服务器。完整步骤见下方 **[📘 部署教程](#-部署教程一键发布到-workbuddy-云平台)**。
 
 ### 方式 C：Docker 自托管（数据常驻）
 
 仓库未内置 Dockerfile；如需容器化，按 `server/run.py` 暴露的 `8899` 端口自行封装即可，数据卷挂到 `./data`。
+
+---
+
+## 📘 部署教程：一键发布到 WorkBuddy 云平台
+
+本面板无需自己买服务器，直接在 WorkBuddy 里一键发布为在线应用，生成形如 `https://ab1dde4ffb5e275c5.app.workbuddy.host/` 的分享链接——把链接发给朋友，浏览器打开即用。当前线上示例（已验证可达，HTTP 200）即这一流程的产物。
+
+### 为什么能直接发布
+
+项目已满足 WorkBuddy 云平台的发布要求，发布脚本（`publish.js`）可自动完成「探测运行时 → 装依赖 → 起服务 → 就绪校验 → 出链接」：
+
+| 平台要求 | 本项目实际情况 |
+|---|---|
+| 单 HTTP 端口 | `server/run.py` 用 FastAPI + uvicorn 起单端口服务 |
+| 读取 `$PORT` | `resolve_port()` 优先读 `os.environ["PORT"]`，默认 `8899` |
+| 绑定 `0.0.0.0` | uvicorn `host="0.0.0.0"`，网关可访问 |
+| 健康检查 | `GET /api/health` 供就绪探测 |
+| 声明依赖 | `requirements.txt`（轻量，无 akshare / mootdx） |
+
+### 发布步骤
+
+1. **打开项目**：在 WorkBuddy 中打开本仓库（已 `git clone` 或导入 `niucap`）。
+2. **发起发布**：对助手说「发布为应用」或「publish」。助手会执行发布脚本，等价于：
+   ```bash
+   node <skill-dir>/scripts/publish.js \
+     --dir /workspace/tick-stock-panel \
+     --language python \
+     --install-cmd "pip install -r requirements.txt" \
+     --start-cmd "python server/run.py"
+   ```
+   > 脚本会注入 `PORT` 环境变量，`server/run.py` 自动监听该端口；`--start-cmd` 不写死端口，交给 `$PORT`。
+3. **拿到链接**：脚本输出 JSON，形如
+   ```json
+   { "shareLink": "https://ab1dde4ffb5e275c5.app.workbuddy.host/", "verified": true }
+   ```
+   把 `shareLink` **整条**（若带 `?sharecode=...` 也要一并保留）发给对方。**不要删掉 `?sharecode=`**——它是访问凭据，缺了对方打开会看到「链接不完整」。
+4. **访问**：浏览器打开链接，页面即「牛来选股面板」。首次打开是空库，数据初始化见下方说明。
+
+### 重复发布 / 更新线上
+
+- **同一项目重复发布，保持同一链接**——链接背后的内容会被覆盖，且对所有已拿到链接的人立即生效。
+- 本地改完代码后，再对助手说「发布为应用」即可把新版本同步上线；建议先在本地预览确认，避免直接覆盖别人正在看的页面。
+- 若 `verified` 为 `false`，稍等几秒再刷新链接（平台就绪有短暂延迟）。
+
+### 下线
+
+对助手说「取消发布 / 下线 / unpublish」，脚本会取消发布并使分享链接失效（破坏性操作，需你明确授权）。
+
+### 云平台注意事项
+
+- **数据临时**：云实例存储通常是临时的，重启 / 重新发布会清空本地 SQLite，需重新同步一次（后台管理 → 运行参数 → 开始同步）。
+- 想要**数据常驻、多人共享**，用上方「首次部署必读」的云端 MySQL 协议库方案（填 `TICK_DB_HOST` 等，重启不丢数据）。
+- 无需任何 API Key，行情来自腾讯 / 新浪 / 同花顺 / 东财公开接口。
 
 ---
 
