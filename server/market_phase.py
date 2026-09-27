@@ -314,6 +314,54 @@ def ensure_ready(conn, cache_path: str = _CACHE_PATH_DEFAULT, force: bool = Fals
         return _CACHE
 
 
+def _abs_cache_path(path: str = _CACHE_PATH_DEFAULT) -> str:
+    """默认常量是相对路径 'data/...'，取决于启动 cwd，纳管前必须归一成绝对路径。"""
+    if os.path.isabs(path):
+        return path
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), path)
+
+
+def cache_status(path: str = _CACHE_PATH_DEFAULT) -> dict:
+    """缓存占用情况，供后台「缓存统一管理」展示（#97）。
+
+    内存缓存可能为空（进程刚起还没算过），此时只报磁盘 JSON 的体量。
+    """
+    p = _abs_cache_path(path)
+    b = os.path.getsize(p) if os.path.isfile(p) else 0
+    c = _CACHE or {}
+    rows = c.get("rows") or []
+    ph = None
+    if rows:
+        ph = rows[-1].get("phase")
+        ph = PHASE_LABELS.get(ph, ph)
+    return {
+        "ready": bool(rows),
+        "in_memory": _CACHE is not None,
+        "max_date": c.get("max_date") or "",
+        "rows": len(rows),
+        "phase": ph,
+        "path": p,
+        "bytes": b,
+        "mtime": (datetime.fromtimestamp(os.path.getmtime(p)).strftime("%Y-%m-%d %H:%M:%S")
+                  if b else None),
+    }
+
+
+def clear_cache(path: str = _CACHE_PATH_DEFAULT) -> dict:
+    """清掉内存 + 磁盘缓存。下次访问会重算——窗口剪枝后约 2 秒，不阻塞。"""
+    global _CACHE
+    with _lock:
+        _CACHE = None
+    p = _abs_cache_path(path)
+    had = os.path.isfile(p)
+    try:
+        if had:
+            os.remove(p)
+    except Exception as e:
+        return {"ok": False, "cleared": had, "error": f"{type(e).__name__}: {e}"}
+    return {"ok": True, "cleared": had}
+
+
 # ───────────────────────── 对外聚合 ─────────────────────────
 def get_phase_data(conn, cache_path: str = _CACHE_PATH_DEFAULT,
                    history_days: int = 20) -> dict:

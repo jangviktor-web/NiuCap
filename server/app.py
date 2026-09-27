@@ -73,6 +73,7 @@ import grid as grd
 import market_phase as mp
 import alerts as alt
 import webhook
+import maintain as mt
 import etf
 import store
 import pandas as pd
@@ -2868,21 +2869,21 @@ def api_admin_health(request: Request, limit: int = Query(50, ge=1, le=200)):
 @app.get("/api/admin/logs")
 def api_admin_logs(request: Request, lines: int = Query(200, ge=10, le=2000),
                    name: str = Query("")):
-    """读日志尾部。默认读告警日志；name 可指定 data/ 下的文件名（防目录穿越）。"""
+    """读日志尾部。默认读告警日志；name 可指定 data/ 下的 .log/.json。"""
     _require_admin(request)
-    import os.path as _p
     fname = name or "health_alerts.log"
-    # 只允许 data 目录下的普通文件名，挡掉 ../ 之类
-    if "/" in fname or "\\" in fname or fname.startswith("."):
-        raise HTTPException(400, "非法文件名")
-    path = os.path.join(_DATA_DIR, fname)
-    if not _p.isfile(path):
+    # 与 maintain 同一套白名单：只认 data/ 下的普通 .log/.json 文件名，挡掉 ../ 之类
+    if not mt._valid_log_name(fname):
+        raise HTTPException(400, "非法文件名（只支持 data/ 下的 .log / .json）")
+    path = mt._safe_log_path(fname)
+    if not path:
         return {"name": fname, "lines": [], "exists": False}
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             tail = f.readlines()[-lines:]
         return {"name": fname, "lines": [x.rstrip() for x in tail],
-                "exists": True, "size": _p.getsize(path)}
+                "exists": True, "size": os.path.getsize(path),
+                "size_h": mt._human(os.path.getsize(path))}
     except Exception as e:
         raise HTTPException(500, f"{type(e).__name__}: {e}")
 
@@ -2907,13 +2908,12 @@ def api_admin_logfiles(request: Request):
 
 
 # ===========================================================================
-# 策略体检缓存 + 系统备份（仅管理员）
+# 策略体检缓存（仅管理员）
 #
-# 这两个是「运维动作」，不该藏在数据落库里：
-#  - 体检缓存是单槽，预热/清空前先看清楚槽里现在装的是哪组参数（之前踩过坑：
-#    e2e_strategy_eval 只预 40 天，把启动预热的 120 挤掉，导致模拟净值卡片 4 条挂）。
-#  - 系统备份此前完全没有接口，库是 483MB 单文件 + 228MB WAL，停服拷不安全，
-#    用 sqlite3 在线一致备份（读穿 WAL）。MySQL 后端只提示用 mysqldump。
+# 体检缓存是单槽，预热/清空前先看清楚槽里现在装的是哪组参数（之前踩过坑：
+# e2e_strategy_eval 只预 40 天，把启动预热的 120 挤掉，导致模拟净值卡片 4 条挂）。
+#
+# 备份 / 数据库维护 / 缓存统一管理 / 日志运维在下面 #97 那一组（server/maintain.py）。
 # ===========================================================================
 
 @app.get("/api/admin/eval_cache")
@@ -2949,64 +2949,122 @@ def api_admin_eval_cache_clear(request: Request):
     return _se.clear_cache()
 
 
+# ===========================================================================
+# 数据库维护 / 备份 / 缓存 / 日志运维（#97，仅管理员）
+#
+# 逻辑全部在 server/maintain.py，这里只做鉴权与 HTTP 语义映射。
+# 两条约定：
+#   - 路径类参数一律过 maintain 的白名单入口，接口层不自己拼路径（防 ../ 穿越）。
+#   - checkpoint 撞上活跃读事务时「busy」不是故障，返回 200 + 说明让前端提示
+#     稍后重试；只有真异常才 500。
+# ===========================================================================
+
+@app.get("/api/admin/db")
+def api_admin_db(request: Request):
+    """数据库体积（db+wal+shm）、页统计、各表行数、磁盘余量。"""
+    _require_admin(request)
+    return mt.db_status()
+
+
+@app.post("/api/admin/db/checkpoint")
+def api_admin_db_checkpoint(request: Request, payload: Dict[str, Any] = Body(default={})):
+    """WAL 落盘。mode=passive（默认，不阻塞）/ truncate（截断 WAL 文件）。"""
+    _require_admin(request)
+    r = mt.db_checkpoint(mode=str(payload.get("mode", "passive") or "passive"))
+    if r.get("bad_mode"):
+        raise HTTPException(400, r.get("error", "未知 checkpoint 模式"))
+    if not r.get("ok") and not r.get("busy"):
+        raise HTTPException(500, r.get("error", "checkpoint 失败"))
+    return r
+
+
 @app.get("/api/admin/backups")
 def api_admin_backups(request: Request):
-    """data 目录下的备份清单（按时间倒序）。"""
+    """备份清单（倒序）。非白名单文件不纳入管理。"""
     _require_admin(request)
-    import store as _store
-    out = []
-    if _store.BACKEND == "sqlite":
-        d = os.path.join(_store.DATA_DIR, "backups")
-        try:
-            for fn in sorted(os.listdir(d), reverse=True):
-                if not fn.endswith(".db"):
-                    continue
-                p = os.path.join(d, fn)
-                if os.path.isfile(p):
-                    out.append({"name": fn,
-                                "size": os.path.getsize(p),
-                                "mtime": datetime.fromtimestamp(
-                                    os.path.getmtime(p)).strftime("%Y-%m-%d %H:%M:%S")})
-        except FileNotFoundError:
-            pass
-    return {"backend": _store.BACKEND, "items": out}
+    return mt.backup_list()
 
 
 @app.post("/api/admin/backup")
 def api_admin_backup(request: Request, payload: Dict[str, Any] = Body(default={})):
-    """在线一致备份数据库。SQLite 用 sqlite3.backup 读穿 WAL，服务无需停。"""
+    """在线一致备份（sqlite3.backup 读穿 WAL，服务无需停）。"""
     _require_admin(request)
-    import store as _store
-    if _store.BACKEND != "sqlite":
-        raise HTTPException(400, "当前为 MySQL 后端，请在宿主机用 mysqldump 备份")
-    src = _store.DB_PATH
-    if not os.path.isfile(src):
-        raise HTTPException(404, f"数据库文件不存在：{src}")
-    d = os.path.join(_store.DATA_DIR, "backups")
-    os.makedirs(d, exist_ok=True)
-    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    dst = os.path.join(d, f"tick_{ts}.db")
-    try:
-        import sqlite3
-        con = sqlite3.connect(f"file:{src}?mode=ro", uri=True, timeout=30.0)
-        try:
-            bk = sqlite3.connect(dst, timeout=30.0)
-            try:
-                con.backup(bk)
-            finally:
-                bk.close()
-        finally:
-            con.close()
-    except Exception as e:
-        # 失败时把半成品删掉，免得清单里出现 0 字节残档
-        try:
-            if os.path.exists(dst):
-                os.remove(dst)
-        except Exception:
-            pass
-        raise HTTPException(500, f"备份失败：{type(e).__name__}: {e}")
-    return {"ok": True, "name": os.path.basename(dst),
-            "size": os.path.getsize(dst), "path": dst}
+    r = mt.backup_create()
+    if not r.get("ok"):
+        raise HTTPException(500, r.get("error", "备份失败"))
+    return r
+
+
+@app.get("/api/admin/backups/{name}/download")
+def api_admin_backup_download(request: Request, name: str):
+    """流式下载备份（462MB 级，绝不整体读进内存）。"""
+    _require_admin(request)
+    p = mt._safe_backup_path(name)
+    if not p:
+        raise HTTPException(400, "非法备份名")
+    return FileResponse(p, filename=name, media_type="application/octet-stream")
+
+
+@app.delete("/api/admin/backups/{name}")
+def api_admin_backup_delete(request: Request, name: str):
+    _require_admin(request)
+    r = mt.backup_delete(name)
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("error", "删除失败"))
+    return r
+
+
+@app.post("/api/admin/backups/{name}/restore")
+def api_admin_backup_restore(request: Request, name: str):
+    """用备份覆盖当前库：恢复前强制自动快照，返回 need_restart 提示重启。"""
+    _require_admin(request)
+    r = mt.backup_restore(name)
+    if not r.get("ok"):
+        raise HTTPException(500, r.get("error", "恢复失败"))
+    return r
+
+
+@app.get("/api/admin/modules")
+def api_admin_modules(request: Request):
+    """新模块纳管：#95 情绪周期 / #88 快讯 / #96 监控中心 / 日线同步。只读本地。"""
+    _require_admin(request)
+    return mt.modules_status()
+
+
+@app.get("/api/admin/caches")
+def api_admin_caches(request: Request):
+    """统一缓存状态：体检 / 情绪周期 / 快讯 / 行情快照。"""
+    _require_admin(request)
+    return mt.cache_status(market_getter=lambda: MARKET.get())
+
+
+@app.post("/api/admin/caches/clear")
+def api_admin_cache_clear(request: Request, payload: Dict[str, Any] = Body(default={})):
+    _require_admin(request)
+    r = mt.cache_clear(str(payload.get("key", "") or ""))
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("error", "清理失败"))
+    return r
+
+
+@app.delete("/api/admin/logs")
+def api_admin_log_clear(request: Request, name: str = Query("")):
+    """清空日志内容（truncate 保留 inode，正在写的句柄不会断）。"""
+    _require_admin(request)
+    r = mt.log_clear(name)
+    if not r.get("ok"):
+        raise HTTPException(400, r.get("error", "清空失败"))
+    return r
+
+
+@app.get("/api/admin/logs/download")
+def api_admin_log_download(request: Request, name: str = Query("")):
+    """下载日志文件（流式）。"""
+    _require_admin(request)
+    p = mt._safe_log_path(name)
+    if not p:
+        raise HTTPException(400, "非法文件名")
+    return FileResponse(p, filename=name, media_type="text/plain; charset=utf-8")
 
 
 # ===========================================================================

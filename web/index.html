@@ -1789,6 +1789,9 @@ td .starbtn{font-size:16px}
           <button class="btn" data-adm="users">👥 用户管理</button>
           <button class="btn" data-adm="config">🔧 运行参数</button>
           <button class="btn" data-adm="bars">🗄️ 数据落库</button>
+          <button class="btn" data-adm="database">🛠️ 数据库</button>
+          <button class="btn" data-adm="modules">🧩 模块状态</button>
+          <button class="btn" data-adm="services">🧹 缓存管理</button>
           <button class="btn" data-adm="evalcache">🎯 体检缓存</button>
           <button class="btn" data-adm="backup">💾 系统备份</button>
           <button class="btn" data-adm="logs">📜 巡检与日志</button>
@@ -3247,12 +3250,18 @@ var ADMIN_TABS = [
    desc:'7 项可调，改完立即生效无需重启（连接池 / 批量取数 / 缓存时长 / 扫描取样根数 / 停牌占位等）；优先级为 管理页设置 &gt; 环境变量 &gt; 内置默认，每项标注来源并可一键还原；写入前过校验器，脏值永不落库。'},
   {key:'bars', name:'数据落库', emo:'🗄️',
    desc:'日线覆盖率、同步进度、失败清单（含原因，可跳个股）；一键触发全市场补数据（250 根），后台线程跑并实时进度，同一时刻只允许一个任务。'},
+  {key:'database', name:'数据库', emo:'🛠️',
+   desc:'数据库体积画像：主库 / WAL / SHM 分别多大、页统计与可回收空间、磁盘余量；各表行数与占用（含索引 TOP5）。WAL 可一键落盘（默认不阻塞，也可截断收回文件）——曾出现 228MB 僵死，靠这个面板一眼看出来。'},
+  {key:'modules', name:'模块状态', emo:'🧩',
+   desc:'新模块纳管：#95 市场情绪周期（缓存到哪天、当前阶段）、#88 双源快讯（条数与源错误）、#96 监控中心（规则数 / 告警数 / 未读 / 推送渠道）、日线同步守门。只做本地探测，不联网。'},
+  {key:'services', name:'缓存管理', emo:'🧹',
+   desc:'统一查看并清理四类缓存：策略体检（内存单槽）、情绪周期（内存 + 磁盘 JSON）、快讯流（30 秒 TTL）、全市场行情快照（只读）。每项标注位置、体量与清理后的代价。'},
   {key:'evalcache', name:'体检缓存', emo:'🎯',
    desc:'显示当前体检缓存装的哪组参数（回看天数 / 前向窗口）、覆盖策略数、耗时与上次计算时间；可一键预热 120 天 / 40 天或清空。体检结果单槽缓存，切换天数前先看清楚槽里装的是哪组。'},
   {key:'backup', name:'系统备份', emo:'💾',
-   desc:'一键在线一致备份（SQLite backup() 读穿 WAL，无需停服），落在 data/backups/，页面有清单。刻意不做一键恢复——恢复需重启进程指向旧数据，不该藏在确认弹窗后。'},
+   desc:'一键在线一致备份（SQLite backup() 读穿 WAL，无需停服），落在 data/backups/。清单里可<b>下载</b>到本地、<b>删除</b>腾空间、<b>恢复</b>覆盖当前库——恢复前会自动先快照一份当前库，手滑还能回退；恢复完需重启服务进程。'},
   {key:'logs', name:'巡检与日志', emo:'📜',
-   desc:'健康巡检状态 / 连续失败次数 / 最近成功失败时间与历史；日志查看器（data/ 下 .log/.json，5 秒自动刷新，目录穿越防护）。'}
+   desc:'健康巡检状态 / 连续失败次数 / 最近成功失败时间与历史；日志查看器（data/ 下 .log/.json，5 秒自动刷新，目录穿越防护），可<b>下载</b>全文或<b>清空</b>内容（清空保留文件句柄，不会让正在写的日志丢目标）。'}
 ];
 
 function admApi(path, opt){
@@ -3292,7 +3301,8 @@ function loadAdmin(force){
   loading(el, '加载中…');
   var fns = {
     overview: admOverview, users: admUsers, config: admConfig,
-    bars: admBars, evalcache: admEvalCache, backup: admBackup, logs: admLogs
+    bars: admBars, database: admDatabase, modules: admModules,
+    services: admServices, evalcache: admEvalCache, backup: admBackup, logs: admLogs
   };
   (fns[admState.cur] || admOverview)(el);
 }
@@ -3693,10 +3703,220 @@ function admEvalCache(el){
   }).catch(function(e){ die(el, '读取失败：' + e.message); });
 }
 
+/* ---------- ① 数据库健康与维护 ---------- */
+/* 库是 462MB 单文件 + WAL，曾出现 WAL 228MB 僵死（长事务占住读标记不释放），
+   当时只能靠 shell 才看得出来。这里把体积、页统计、表行数摆到面上，
+   并提供 WAL 落盘（默认 passive 不阻塞，truncate 可收回文件）。 */
+function admDatabase(el){
+  admApi('/db').then(function(d){
+    admState.loaded.database = 1;
+    var f = d.files || {}, pg = d.pages || {}, dk = d.disk || {};
+    var h = '<div class="card"><div class="card-h"><h2>🛠️ 数据库占用</h2>' +
+            '<div class="meta">' + esc(d.time || '') + ' · ' + esc(d.backend || '') +
+            '</div></div><div class="card-b">';
+    if(f.path){
+      h += '<div class="verdict">' +
+        '<div class="vbox"><div class="lb">主库</div><div class="vl" style="font-size:15px">' +
+          esc(f.db_h || '—') + '</div><div class="sub">tick.db</div></div>' +
+        '<div class="vbox"><div class="lb">WAL</div><div class="vl ' +
+          ((f.wal || 0) > 50 * 1048576 ? 'down' : '') + '" style="font-size:15px">' +
+          esc(f.wal_h || '0 B') + '</div><div class="sub">预写日志</div></div>' +
+        '<div class="vbox"><div class="lb">合计</div><div class="vl" style="font-size:15px">' +
+          esc(f.total_h || '—') + '</div><div class="sub">含 shm</div></div>' +
+        '<div class="vbox"><div class="lb">磁盘余量</div><div class="vl" style="font-size:15px">' +
+          esc(dk.free_h || '—') + '</div><div class="sub">已用 ' +
+          (dk.used_pct != null ? dk.used_pct + '%' : '—') + '</div></div></div>';
+      h += '<div style="margin-top:10px;font-size:12px;color:var(--tx3);word-break:break-all">' +
+           esc(f.path) + '</div>';
+      h += '<div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+           '<button class="btn" id="admCkptPassive">WAL 落盘（不阻塞）</button>' +
+           '<button class="btn" id="admCkptTrunc">落盘并截断 WAL</button>' +
+           '<span id="admCkptMsg" style="font-size:12px;color:var(--tx3)"></span></div>';
+      h += '<div class="admtip" style="margin-top:8px">WAL 会随写入增长并由 SQLite 自动回落。' +
+           '若长期停在几百 MB 不降，说明有长事务占住读标记——点「落盘并截断」可收回。' +
+           '提示 <b>busy</b> 表示此刻有读事务在跑，稍后重试即可，<b>不影响业务</b>。</div>';
+    } else {
+      h += '<div class="admtip">' + esc(f.note || '—') + '</div>';
+    }
+    h += '</div></div>';
+
+    if(pg.size){
+      h += '<div class="card"><div class="card-h"><h2>页与索引</h2>' +
+           '<div class="meta">' + esc(pg.journal_mode || '') + ' 模式</div></div><div class="card-b">';
+      h += '<div class="verdict">' +
+           '<div class="vbox"><div class="lb">页大小</div><div class="vl" style="font-size:15px">' +
+             fmtNum(pg.size) + ' B</div></div>' +
+           '<div class="vbox"><div class="lb">页数</div><div class="vl">' +
+             fmtNum(pg.count) + '</div><div class="sub">' + esc(pg.used || '') + '</div></div>' +
+           '<div class="vbox"><div class="lb">空闲页</div><div class="vl">' +
+             fmtNum(pg.freelist || 0) + '</div><div class="sub">可回收 ' +
+             esc(pg.reclaimable || '0 B') + '</div></div>' +
+           '</div>';
+      if((d.indexes || []).length){
+        h += '<div class="tblw" style="margin-top:12px"><table class="tbl"><thead><tr>' +
+             '<th>索引</th><th class="r">占用</th></tr></thead><tbody>';
+        d.indexes.slice(0, 6).forEach(function(x){
+          h += '<tr><td style="font-size:12px">' + esc(x.name) + '</td>' +
+               '<td class="r">' + esc(x.bytes_h || '') + '</td></tr>';
+        });
+        h += '</tbody></table></div>';
+      }
+      h += '<div class="admtip" style="margin-top:8px">空闲页为 0 表示没有碎片，' +
+           '无需整理。刻意不提供一键 VACUUM——它要独占整库数分钟并额外占用一倍磁盘，' +
+           '收益却只有这点碎片。</div>';
+      h += '</div></div>';
+    }
+
+    if((d.tables || []).length){
+      h += '<div class="card"><div class="card-h"><h2>表行数</h2>' +
+           '<div class="meta">共 ' + d.tables.length + ' 张表</div></div><div class="card-b np">' +
+           '<div class="tblw"><table class="tbl"><thead><tr><th>表名</th>' +
+           '<th class="r">行数</th><th class="r">占用</th></tr></thead><tbody>';
+      d.tables.slice().sort(function(a, b){ return (b.rows || 0) - (a.rows || 0); })
+        .forEach(function(t){
+        h += '<tr><td style="font-size:12px">' + esc(t.name) +
+             (t.est ? ' <span style="color:var(--tx3)">(估算)</span>' : '') + '</td>' +
+             '<td class="r">' + (t.rows == null ? '—' : fmtNum(t.rows)) + '</td>' +
+             '<td class="r" style="color:var(--tx3)">' + esc(t.bytes_h || '—') + '</td></tr>';
+      });
+      h += '</tbody></table></div></div></div>';
+    }
+    el.innerHTML = h;
+
+    function ckpt(mode){
+      var m = $('admCkptMsg'); if(m) m.textContent = '执行中…';
+      admApi('/db/checkpoint', {method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({mode: mode})})
+        .then(function(r){
+          if(m){
+            var txt = r.ok
+              ? ('✅ WAL ' + esc(r.wal_before_h) + ' → ' + esc(r.wal_after_h) +
+                 (r.degraded ? '（已降级 ' + esc(r.mode) + '）' : '') +
+                 (r.busy ? ' ⚠ busy：有读事务在跑，稍后重试' : ''))
+              : ('⚠ ' + esc(r.error || '失败'));
+            m.textContent = txt;
+          }
+          setTimeout(function(){ if(admState.cur === 'database') loadAdmin(true); }, 1200);
+        })
+        .catch(function(e){ if(m) m.textContent = '失败：' + e.message; });
+    }
+    if($('admCkptPassive')) $('admCkptPassive').onclick = function(){ ckpt('passive'); };
+    if($('admCkptTrunc')) $('admCkptTrunc').onclick = function(){
+      if(!confirm('截断 WAL 会尝试收回 WAL 文件占用的空间。\n若此刻有查询在跑会自动降级为「不阻塞」模式。\n确定继续？')) return;
+      ckpt('truncate');
+    };
+  }).catch(function(e){ die(el, '读取失败：' + e.message); });
+}
+
+/* ---------- ③ 新模块纳管 ---------- */
+/* #95 情绪周期 / #88 双源快讯 / #96 监控中心 上线后后台完全看不见，
+   这里给出各自的运行状态。只做本地探测，一个都不联网。 */
+function admModules(el){
+  admApi('/modules').then(function(d){
+    admState.loaded.modules = 1;
+    var items = d.items || [];
+    var h = '<div class="card"><div class="card-h"><h2>🧩 模块状态</h2>' +
+            '<div class="meta">' + esc(d.time || '') + '</div></div><div class="card-b np">' +
+            '<div class="tblw"><table class="tbl"><thead><tr><th>模块</th>' +
+            '<th class="ctr">任务</th><th class="ctr">状态</th><th>详情</th>' +
+            '</tr></thead><tbody>';
+    items.forEach(function(m){
+      var cls = m.state === 'ready' ? 'up' : (m.state === 'unknown' ? '' : '');
+      var txt = m.state === 'ready' ? '● 就绪'
+              : (m.state === 'unknown' ? '? 未知' : '○ 空闲');
+      var extra = '';
+      if(m.webhook){
+        extra = '<div style="margin-top:3px;color:var(--tx3)">推送：' +
+          (m.webhook.enabled
+            ? (m.webhook.channels.length ? esc(m.webhook.channels.join(' / ')) : '已开启（未配置渠道）')
+            : '未开启') + '</div>';
+      }
+      if(m.sources && Object.keys(m.sources).length){
+        extra += '<div style="margin-top:3px;color:var(--tx3)">源：' +
+          Object.keys(m.sources).map(function(k){
+            return esc(k) + ' ' + m.sources[k]; }).join('，') + '</div>';
+      }
+      if(m.errors && Object.keys(m.errors).length){
+        extra += '<div style="margin-top:3px" class="down">源错误：' +
+          Object.keys(m.errors).map(function(k){
+            return esc(k) + ' ' + esc(m.errors[k]); }).join('；') + '</div>';
+      }
+      if(m.cache_file){
+        extra += '<div style="margin-top:3px;color:var(--tx3);word-break:break-all">' +
+          esc(m.cache_file) + (m.cache_bytes_h ? ' · ' + esc(m.cache_bytes_h) : '') +
+          (m.cache_mtime ? ' · ' + esc(m.cache_mtime) : '') + '</div>';
+      }
+      h += '<tr><td><b>' + esc(m.name) + '</b></td>' +
+           '<td class="ctr" style="font-size:12px;color:var(--tx3)">' + esc(m.task || '') + '</td>' +
+           '<td class="ctr ' + cls + '">' + txt + '</td>' +
+           '<td style="font-size:12px">' + esc(m.detail || '') + extra + '</td></tr>';
+    });
+    h += '</tbody></table></div></div></div>';
+    h += '<div class="card"><div class="card-h"><h2>说明</h2></div><div class="card-b">' +
+         '<div class="admtip">「空闲」不等于故障——情绪周期要等市场页首次访问才建缓存，' +
+         '监控中心要先建规则才会有告警。未知状态表示该模块探测时报错，详情列会给出原因。</div>' +
+         '</div></div>';
+    el.innerHTML = h;
+  }).catch(function(e){ die(el, '读取失败：' + e.message); });
+}
+
+/* ---------- ④ 缓存统一管理 ---------- */
+/* 之前只有体检缓存一个入口，情绪周期、快讯的缓存看不见也清不掉。
+   这里统一列出，并写清楚清掉之后的代价。 */
+function admServices(el){
+  admApi('/caches').then(function(d){
+    admState.loaded.services = 1;
+    var items = d.items || [];
+    var h = '<div class="card"><div class="card-h"><h2>🧹 缓存管理</h2>' +
+            '<div class="meta">' + esc(d.time || '') + '</div></div><div class="card-b np">' +
+            '<div class="tblw"><table class="tbl"><thead><tr><th>缓存</th><th>位置</th>' +
+            '<th class="ctr">状态</th><th>详情</th><th class="ctr">操作</th>' +
+            '</tr></thead><tbody>';
+    items.forEach(function(c){
+      var st = c.state === 'unknown' ? '? 未知'
+             : (c.ready ? '● 有数据' : '○ 空');
+      var meta = '';
+      if(c.size_h) meta += '<div style="color:var(--tx3)">' + esc(c.size_h) + '</div>';
+      if(c.mtime) meta += '<div style="color:var(--tx3)">' + esc(c.mtime) + '</div>';
+      if(c.path) meta += '<div style="color:var(--tx3);word-break:break-all;font-size:11px">' +
+                         esc(c.path) + '</div>';
+      h += '<tr><td><b>' + esc(c.name) + '</b>' +
+             (c.note ? '<div style="margin-top:3px;color:var(--tx3);font-size:11px">' +
+                       esc(c.note) + '</div>' : '') + '</td>' +
+           '<td style="font-size:12px;color:var(--tx3)">' + esc(c.where || '') + '</td>' +
+           '<td class="ctr ' + (c.ready ? 'up' : '') + '">' + st + '</td>' +
+           '<td style="font-size:12px">' + esc(c.detail || '') + meta + '</td>' +
+           '<td class="ctr">' + (c.clearable
+             ? '<button class="btn" data-clear="' + attr(c.key) + '">清空</button>'
+             : '<span style="color:var(--tx3);font-size:12px">—</span>') + '</td></tr>';
+    });
+    h += '</tbody></table></div></div></div>';
+    el.innerHTML = h;
+
+    el.querySelectorAll('[data-clear]').forEach(function(b){
+      b.onclick = function(){
+        var k = b.getAttribute('data-clear');
+        if(!confirm('确定清空该缓存？\n清空后下次访问会重新计算（见上表说明），期间可能慢几秒。')) return;
+        b.disabled = true; b.textContent = '清理中…';
+        admApi('/caches/clear', {method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({key: k})})
+          .then(function(){ loadAdmin(true); })
+          .catch(function(e){
+            b.disabled = false; b.textContent = '清空';
+            alert('清理失败：' + e.message);
+          });
+      };
+    });
+  }).catch(function(e){ die(el, '读取失败：' + e.message); });
+}
+
 /* ---------- 系统备份 ---------- */
 /* 此前完全没有备份接口：库是 483MB 单文件 + 228MB WAL，停服拷不安全。
    这里做 SQLite 在线一致备份（读穿 WAL，服务无需停）。MySQL 后端不编排
-   dump，只提示去宿主机跑 mysqldump（YAGNI）。 */
+   dump，只提示去宿主机跑 mysqldump（YAGNI）。
+   #97：补上下载 / 删除 / 恢复。恢复前后端会强制先快照当前库。 */
 function admBackup(el){
   admApi('/backups').then(function(d){
     admState.loaded.backup = 1;
@@ -3707,9 +3927,11 @@ function admBackup(el){
       h += '<div class="admtip">当前为 <b>MySQL</b> 后端，本接口不做 dump。请在宿主机执行 ' +
         '<code>mysqldump -h$HOST -u$USER -p $DB &gt; tick_$(date +%Y%m%d).sql</code> 备份。</div>';
     } else {
-      h += '<div class="admtip">点击「立即备份」会在线复制数据库（读穿 WAL，<b>无需停服务</b>）。' +
-        '备份落在 <code>data/backups/</code>，文件名带时间戳。恢复=把文件拷回 <code>data/tick.db</code>。' +
-        '<b>注意</b>：恢复会让正在运行的进程指向旧数据，需重启服务。此操作只负责备份，不在页面上提供一键恢复。</div>';
+      h += '<div class="admtip">点击「立即备份」会在线复制数据库（读穿 WAL，<b>无需停服务</b>），' +
+        '落在 <code>data/backups/</code>，文件名带时间戳。清单里可<b>下载</b>到本地留档、' +
+        '<b>删除</b>腾空间、<b>恢复</b>覆盖当前库。' +
+        '恢复会先自动快照一份当前库（<code>auto_before_restore_*</code>），手滑还能回退；' +
+        '<b>恢复完必须重启服务进程</b>，否则旧连接仍持有缓存页。</div>';
       h += '<div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
         '<button class="btn pri" id="admBackupNow">💾 立即备份</button>' +
         '<span id="admBackupMsg" style="font-size:12px;color:var(--tx3)"></span></div>';
@@ -3720,11 +3942,18 @@ function admBackup(el){
       h += '<div class="card"><div class="card-h"><h2>已有备份</h2>' +
            '<div class="meta">共 ' + items.length + ' 个</div></div><div class="card-b np">' +
            '<div class="tblw"><table class="tbl"><thead><tr><th>文件名</th>' +
-           '<th class="ctr">大小</th><th>备份时间</th></tr></thead><tbody>';
+           '<th class="ctr">大小</th><th>备份时间</th><th class="ctr">操作</th>' +
+           '</tr></thead><tbody>';
       items.forEach(function(b){
-        h += '<tr><td style="font-size:12px">' + esc(b.name) + '</td>' +
+        h += '<tr><td style="font-size:12px">' + esc(b.name) +
+             (b.auto ? ' <span style="color:var(--tx3)">(恢复前自动快照)</span>' : '') + '</td>' +
              '<td class="ctr">' + (b.size >= 1048576 ? (b.size/1048576).toFixed(0) + ' MB' : fmtNum(b.size) + ' B') + '</td>' +
-             '<td style="font-size:12px;color:var(--tx3)">' + esc(b.mtime) + '</td></tr>';
+             '<td style="font-size:12px;color:var(--tx3)">' + esc(b.mtime) + '</td>' +
+             '<td class="ctr" style="white-space:nowrap">' +
+             '<button class="btn" data-dl="' + attr(b.name) + '">下载</button> ' +
+             '<button class="btn" data-rs="' + attr(b.name) + '">恢复</button> ' +
+             '<button class="btn" data-rm="' + attr(b.name) + '">删除</button>' +
+             '</td></tr>';
       });
       h += '</tbody></table></div></div></div>';
     } else {
@@ -3732,6 +3961,48 @@ function admBackup(el){
            '<div class="empty">还没有备份，点上面的「立即备份」生成第一个。</div></div></div>';
     }
     el.innerHTML = h;
+
+    // 下载：直接走浏览器导航，由后端 FileResponse 流式吐（462MB 级不进内存）
+    el.querySelectorAll('[data-dl]').forEach(function(b){
+      b.onclick = function(){
+        var n = b.getAttribute('data-dl');
+        window.location.href = '/api/admin/backups/' + encodeURIComponent(n) + '/download';
+      };
+    });
+    // 恢复：后端会先自动快照当前库，这里只负责把后果讲清楚
+    el.querySelectorAll('[data-rs]').forEach(function(b){
+      b.onclick = function(){
+        var n = b.getAttribute('data-rs');
+        if(!confirm('确定用这个备份覆盖当前数据库？\n\n' + n +
+            '\n\n· 覆盖前会自动先备份一份当前库（auto_before_restore_*）\n' +
+            '· 覆盖后必须重启服务进程，否则旧连接仍持有缓存页\n' +
+            '· 当前库中此备份之后产生的数据会丢失\n\n确定继续？')) return;
+        b.disabled = true; b.textContent = '恢复中…';
+        admApi('/backups/' + encodeURIComponent(n) + '/restore', {method:'POST'})
+          .then(function(r){
+            alert('✅ 已恢复。\n自动快照：' + (r.snapshot || '') + '\n\n' +
+                  (r.msg || '请重启服务进程。'));
+            loadAdmin(true);
+          })
+          .catch(function(e){
+            b.disabled = false; b.textContent = '恢复';
+            alert('恢复失败：' + e.message);
+          });
+      };
+    });
+    el.querySelectorAll('[data-rm]').forEach(function(b){
+      b.onclick = function(){
+        var n = b.getAttribute('data-rm');
+        if(!confirm('删除备份 ' + n + ' ？\n删除后不可恢复（当前数据库不受影响）。')) return;
+        b.disabled = true; b.textContent = '删除中…';
+        admApi('/backups/' + encodeURIComponent(n), {method:'DELETE'})
+          .then(function(){ loadAdmin(true); })
+          .catch(function(e){
+            b.disabled = false; b.textContent = '删除';
+            alert('删除失败：' + e.message);
+          });
+      };
+    });
 
     var bn = $('admBackupNow');
     if(bn) bn.onclick = function(){
@@ -3806,6 +4077,9 @@ function admLogs(el){
          }).join('') + '</select>' +
          '<button class="btn pri" id="admLogReload">刷新</button>' +
          '<label style="font-size:12px;color:var(--tx3)"><input type="checkbox" id="admLogAuto"> 每5秒自动刷新</label>' +
+         '<span style="flex:1"></span>' +
+         '<button class="btn" id="admLogDl">下载全文</button>' +
+         '<button class="btn" id="admLogClear">清空内容</button>' +
          '</div><pre id="admLogBox" style="max-height:420px;overflow:auto;font-size:12px;' +
          'line-height:1.6;background:var(--bg2,#f6f6f6);padding:12px;border-radius:8px;' +
          'white-space:pre-wrap;word-break:break-all">选择文件后加载…</pre></div></div>';
@@ -3823,6 +4097,26 @@ function admLogs(el){
       }).catch(function(e){ box.textContent = '读取失败：' + e.message; });
     }
     if($('admLogReload')) $('admLogReload').onclick = loadFile;
+    if($('admLogDl')) $('admLogDl').onclick = function(){
+      var name = $('admLogFile').value;
+      if(!name){ alert('先选一个日志文件'); return; }
+      window.location.href = '/api/admin/logs/download?name=' + encodeURIComponent(name);
+    };
+    /* 清空而非删除文件：删了 inode，正在写的进程会继续往已 unlink 的文件里写，
+       页面上看着「清空了」，磁盘却还在涨——比不清更坑。 */
+    if($('admLogClear')) $('admLogClear').onclick = function(){
+      var name = $('admLogFile').value;
+      if(!name){ alert('先选一个日志文件'); return; }
+      if(!confirm('清空 ' + name + ' 的全部内容？\n\n文件保留（写日志的句柄不会断），' +
+                  '只把内容截到 0 字节。此操作不可撤销。')) return;
+      admApi('/logs?name=' + encodeURIComponent(name), {method:'DELETE'})
+        .then(function(r){
+          alert('✅ 已清空（原 ' + fmtNum(r.before || 0) + ' B）');
+          loadFile();
+          admApi('/logfiles').catch(function(){ return {items:[]}; });
+        })
+        .catch(function(e){ alert('清空失败：' + e.message); });
+    };
     if($('admLogFile')) $('admLogFile').onchange = loadFile;
     var timer = null;
     if($('admLogAuto')) $('admLogAuto').onchange = function(e){

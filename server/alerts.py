@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 import store
@@ -33,6 +34,7 @@ DEFAULT_COOLDOWN_MIN = 60
 _lock = threading.Lock()
 _write_count = 0
 _loop_running = False
+_last_check: dict = {}      # 最近一轮检测统计，供后台纳管展示（#97）
 
 # ───────────────────────── 字段白名单（防 eval） ─────────────────────────
 PRICE_FIELDS = ("price", "change_pct", "change", "open", "high", "low",
@@ -311,12 +313,19 @@ def clear_alerts() -> int:
 
 
 # ───────────────────────── 检测 ─────────────────────────
+def _record(stat: dict) -> dict:
+    """记下本轮结果供后台纳管展示（#97）。"""
+    global _last_check
+    _last_check = {**stat, "ts": _now()}
+    return stat
+
+
 def check_once(engine=None, htk=None) -> dict:
     """跑一轮全部启用规则。返回 {"checked":n,"fired":n,"skipped":n}。"""
     rules = [r for r in list_rules() if r.get("enabled")]
     stat = {"checked": len(rules), "fired": 0, "skipped": 0}
     if not rules:
-        return stat
+        return _record(stat)
     c = store._conn()
     cfg = get_webhook_cfg()
     now = _now()
@@ -376,7 +385,7 @@ def check_once(engine=None, htk=None) -> dict:
                         stat["fired"] += 1
         except Exception as e:
             logger.warning("alerts rule %s failed: %s", r.get("id"), e)
-    return stat
+    return _record(stat)
 
 
 def _scan_strategy(rule: dict, engine) -> List[str]:
@@ -448,3 +457,29 @@ def start_loop(interval: int = 60, engine_getter=None, htk=None):
     threading.Thread(target=_run, daemon=True).start()
     logger.info("alerts loop started, interval=%ss", interval)
     return True
+
+
+# ───────────────────────── 后台纳管（#97） ─────────────────────────
+def admin_status() -> dict:
+    """监控中心运行画像：规则数 / 告警数 / 未读 / 推送配置（密钥脱敏）/ 检测线程。"""
+    c = store._conn()
+    try:
+        n_rules = c.execute("SELECT COUNT(*) n FROM alert_rules").fetchone()["n"]
+        n_on = c.execute("SELECT COUNT(*) n FROM alert_rules WHERE enabled=1").fetchone()["n"]
+        n_alerts = c.execute("SELECT COUNT(*) n FROM alerts").fetchone()["n"]
+        last_ts = c.execute("SELECT MAX(ts) m FROM alerts").fetchone()["m"]
+    except Exception as e:
+        return {"state": "unknown", "error": f"{type(e).__name__}: {e}"}
+    cfg = get_webhook_cfg()
+    chans = [k for k in ("feishu_url", "wecom_key", "generic_url") if (cfg.get(k) or "").strip()]
+    return {
+        "n_rules": n_rules, "n_rules_on": n_on, "n_alerts": n_alerts,
+        "unread": unread_count(),
+        "last_alert": (datetime.fromtimestamp(float(last_ts)).strftime("%Y-%m-%d %H:%M:%S")
+                       if last_ts else None),
+        "loop_running": _loop_running,
+        "last_check": (datetime.fromtimestamp(_last_check["ts"]).strftime("%Y-%m-%d %H:%M:%S")
+                       if _last_check.get("ts") else None),
+        "last_check_stat": {k: v for k, v in _last_check.items() if k != "ts"},
+        "webhook": {"enabled": bool(cfg.get("enabled")), "channels": chans},
+    }

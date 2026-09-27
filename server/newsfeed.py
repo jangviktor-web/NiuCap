@@ -162,6 +162,33 @@ def get_feed(force: bool = False) -> Dict[str, Any]:
         return {**_cache, "cached": False}
 
 
+def cache_status() -> Dict[str, Any]:
+    """缓存占用情况，供后台「缓存统一管理」展示（#97）。纯内存读取，不联网。"""
+    with _lock:
+        ts = float(_cache.get("ts") or 0)
+        items = _cache.get("items") or []
+        age = int(time.time() - ts) if ts else None
+        return {
+            "items": len(items),
+            "ttl": TTL,
+            "age": age,
+            "fresh": age is not None and age < TTL,
+            "sources": dict(_cache.get("sources") or {}),
+            "errors": dict(_cache.get("errors") or {}),
+            "ts": ts,
+            "ts_text": _ts_text(ts) if ts else None,
+        }
+
+
+def clear_cache() -> Dict[str, Any]:
+    """清空快讯内存缓存。下次打开会重新抓两个源——免费源别薅太狠，慎用。"""
+    global _cache
+    with _lock:
+        had = len(_cache.get("items") or [])
+        _cache = {"ts": 0.0, "items": [], "errors": {}, "sources": {}}
+    return {"ok": True, "cleared": had}
+
+
 def selfcheck() -> int:
     """归一化/去重/合并 的纯逻辑真值表 + 一次真实抓取冒烟。"""
     fails = []
