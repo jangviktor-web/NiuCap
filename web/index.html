@@ -21,6 +21,9 @@ if (typeof echarts === 'undefined') {
   --warn:#e08c1a; --warn-bg:#fef6e8;
   --shadow:0 1px 3px rgba(20,26,40,.06),0 1px 2px rgba(20,26,40,.04);
   --radius:10px;
+  /* ponytail: 以下 4 个令牌此前从未定义却被引用 64 处，导致 var() 计算失败、
+     全站次级文字/边框回退成近黑。补齐到既有语义色，消除根因 */
+  --muted:var(--tx3); --tx1:var(--tx); --bg2:#f7f8fa; --border:var(--line);
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:var(--bg);color:var(--tx);
@@ -132,8 +135,6 @@ tbody tr:hover{background:#f7f9fc}
 .nmcell{display:flex;flex-direction:column;gap:1px;line-height:1.35}
 .nmcell b{font-weight:600;font-size:13px}
 .nmcell span{font-size:11.5px;color:var(--tx3);font-variant-numeric:tabular-nums}
-.tag{display:inline-block;padding:1px 6px;border-radius:4px;font-size:10.5px;font-weight:600;
-  line-height:1.6;vertical-align:middle}
 .tag.p{background:#eef3fd;color:var(--accent)}
 .tag.n{background:#f3f4f7;color:var(--tx3)}
 .tag.bj{background:#fef6e8;color:var(--warn)}
@@ -819,6 +820,17 @@ td .starbtn{font-size:16px}
 @media(max-width:640px){
   .th-row{grid-template-columns:1.2fr 1.6fr .7fr 1fr;gap:6px}
   .th-d:nth-child(5),.th-l{display:none}
+}
+
+/* ---------- 无障碍（#101） ---------- */
+/* 键盘焦点可见，但鼠标点击不显示（:focus-visible 仅键盘聚焦触发） */
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+.tabs button:focus-visible,.nd-item:focus-visible,.btn:focus-visible,
+.ubtn:focus-visible,.wtfolder:focus-visible{outline-offset:-2px}
+/* 尊重「减弱动画」系统偏好：停掉 spin/pulse/transition，但保留形态（spinner 仍是圆） */
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
+    transition-duration:.001ms!important;scroll-behavior:auto!important}
 }
 </style>
 </head>
@@ -2082,14 +2094,19 @@ function setupNavDrawer(){
   function openNavDrawer(){
     drawer.classList.add('open'); drawer.setAttribute('aria-hidden','false');
     toggle.setAttribute('aria-expanded','true');
+    document.body.style.overflow = 'hidden';  // 锁定背景滚动，避免抽屉后穿透
   }
   function closeNavDrawer(){
     drawer.classList.remove('open'); drawer.setAttribute('aria-hidden','true');
     toggle.setAttribute('aria-expanded','false');
+    document.body.style.overflow = '';  // 所有关闭路径统一还原
   }
   toggle.onclick = openNavDrawer;
   if(mask) mask.onclick = closeNavDrawer;
   if(close) close.onclick = closeNavDrawer;
+  document.addEventListener('keydown', function(e){
+    if(e.key === 'Escape' && drawer.classList.contains('open')) closeNavDrawer();
+  });
   setupNavDrawer._rebuild = function(){ setupNavDrawer(); };  // 供后台管理显隐后重建
 }
 setupNavDrawer();
