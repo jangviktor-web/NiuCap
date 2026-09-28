@@ -421,6 +421,18 @@ def modules_status() -> Dict[str, Any]:
     except Exception as e:
         add("alerts", "监控中心", "#96", "unknown", f"{type(e).__name__}: {e}")
 
+    # --- #100 连板梯队 + 题材雷达 ---
+    try:
+        add("limitup", "连板梯队", "#100", "ready",
+            "实时计算：涨停子集取 K 线判连板天数，按交易日缓存 + 后台预热")
+    except Exception as e:
+        add("limitup", "连板梯队", "#100", "unknown", f"{type(e).__name__}: {e}")
+    try:
+        add("theme", "题材雷达", "#100", "ready",
+            "westock 行业板块四维评分 + 融合去重（概念口径待东财开放）")
+    except Exception as e:
+        add("theme", "题材雷达", "#100", "unknown", f"{type(e).__name__}: {e}")
+
     # --- 数据同步守门（#85/#38） ---
     try:
         import store as _s

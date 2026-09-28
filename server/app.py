@@ -74,6 +74,8 @@ import market_phase as mp
 import alerts as alt
 import webhook
 import maintain as mt
+import limitup as lp
+import theme_radar as tr
 import etf
 import store
 import pandas as pd
@@ -2220,6 +2222,41 @@ def api_market_phase():
     # 否则主线 bug 会静默变成 unavailable，难以定位（曾因权重字段名不匹配踩过）。
     data["mainline"] = mp.get_mainline(htk)
     return data
+
+
+# ===========================================================================
+# 连板梯队 + 情绪周期（蒸馏 easy-stock 超短连板 / 复用 #95 情绪周期）#100
+# ===========================================================================
+
+@app.get("/api/limitup")
+def api_limitup(limit: int = Query(200, ge=1, le=500)):
+    """连板梯队：今日涨停 + 连板天数分组 + 连板率 + 6 阶段情绪周期。"""
+    import sqlite3
+
+    try:
+        rows = MARKET.ensure()
+        cached = lp.ensure_cached(rows, limit)  # 首跑同步算(~9s)，之后走缓存
+        data = lp.build_ladder(rows, limit=limit, board_cache=cached, background=False)
+        # 注入 #95 市场情绪周期（6 阶段 + 主线），不重造
+        conn = sqlite3.connect(store.DB_PATH, timeout=15.0)
+        try:
+            ph = mp.get_phase_data(conn)
+        finally:
+            conn.close()
+        data["phase"] = ph.get("phase")
+        data["phase_ready"] = bool(ph.get("ready"))
+        return data
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+@app.get("/api/theme")
+def api_theme(limit: int = Query(40, ge=1, le=200)):
+    """题材雷达：行业板块四维评分 + 融合去重。"""
+    try:
+        return tr.build_radar(limit=limit)
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
 @app.get("/api/alerts/rules")
