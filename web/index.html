@@ -64,6 +64,32 @@ nav{background:var(--card);border-bottom:1px solid var(--line)}
 .tabs button:hover{color:var(--tx)}
 .tabs button.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 
+/* 手机端汉堡按钮（桌面隐藏，仅 ≤640px 显示） */
+.nav-toggle{display:none;align-items:center;gap:5px;background:var(--accent-bg);color:var(--accent);
+  border:1px solid var(--line);border-radius:8px;padding:7px 11px;font-size:13px;font-weight:600;
+  cursor:pointer;font-family:inherit;flex-shrink:0;line-height:1}
+.nav-toggle .bars{font-size:15px;line-height:1}
+
+/* 手机端抽屉（左侧滑出） */
+.navdrawer{position:fixed;inset:0;z-index:300;display:none}
+.navdrawer.open{display:block}
+.nd-mask{position:absolute;inset:0;background:rgba(15,20,30,.42);opacity:0;transition:opacity .2s}
+.navdrawer.open .nd-mask{opacity:1}
+.nd-panel{position:absolute;top:0;left:0;bottom:0;width:min(82vw,340px);background:var(--card);
+  box-shadow:0 0 40px rgba(0,0,0,.25);transform:translateX(-100%);transition:transform .22s ease;
+  display:flex;flex-direction:column}
+.navdrawer.open .nd-panel{transform:translateX(0)}
+.nd-head{display:flex;align-items:center;justify-content:space-between;padding:15px 16px;
+  border-bottom:1px solid var(--line);font-weight:650;font-size:15px}
+.nd-close{background:none;border:none;font-size:18px;color:var(--tx2);cursor:pointer;line-height:1;padding:4px}
+.nd-list{overflow-y:auto;-webkit-overflow-scrolling:touch;padding:8px}
+.nd-item{display:flex;align-items:center;gap:10px;width:100%;text-align:left;background:none;border:none;
+  padding:15px 12px;border-radius:10px;font-size:15px;color:var(--tx);cursor:pointer;font-family:inherit;
+  border-bottom:1px solid var(--line2)}
+.nd-item:active{background:var(--accent-bg)}
+.nd-item.on{background:var(--accent-bg);color:var(--accent);font-weight:650}
+.nd-item .nd-ico{font-size:17px;min-width:20px;text-align:center}
+
 /* ---------- 卡片 ---------- */
 .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
   box-shadow:var(--shadow);margin-top:16px;overflow:hidden}
@@ -218,6 +244,11 @@ tbody tr:hover{background:#f7f9fc}
   .hd{padding:10px 11px;gap:9px}
   .logo{font-size:15px} .logo small{display:none}
   .navinner{padding:0 11px}
+  /* 手机端：inline tab 行被 navright 挤压成约 5px 不可点 → 改用汉堡抽屉 */
+  .nav-toggle{display:inline-flex}
+  .tabs{display:none}
+  .navright .reftip{display:none}
+  .mktclock{max-width:148px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .tabs button{padding:11px 11px;font-size:13px}
   .card-b{padding:14px}
   .card-h{padding:12px 14px}
@@ -808,6 +839,7 @@ td .starbtn{font-size:16px}
 
 <nav>
   <div class="navinner">
+  <button class="nav-toggle" id="navToggle" aria-label="菜单" aria-expanded="false"><span class="bars">☰</span>菜单</button>
   <div class="tabs">
     <button class="on" data-tab="rank">📊 市场榜单</button>
     <!-- ponytail: 原「市场热点」「异动监控」两个页签已合并进「市场榜单」工具栏；
@@ -838,6 +870,15 @@ td .starbtn{font-size:16px}
   </div>
   </div>
 </nav>
+
+<!-- 手机端汉堡抽屉：复用现有 tab 列表，避免 navright 把标签栏挤压成不可点 -->
+<div class="navdrawer" id="navDrawer" aria-hidden="true">
+  <div class="nd-mask" id="navMask"></div>
+  <div class="nd-panel" role="dialog" aria-label="模块菜单">
+    <div class="nd-head"><span>选择模块</span><button class="nd-close" id="navClose" aria-label="关闭">✕</button></div>
+    <div class="nd-list" id="navList"></div>
+  </div>
+</div>
 
 <div class="wrap">
 
@@ -1975,47 +2016,82 @@ function die(el, msg){
 /* =========================================================================
    导航
    ========================================================================= */
-document.querySelectorAll('.tabs button').forEach(function(b){
-  b.onclick = function(){
-    var want = b.dataset.tab;
-    // ponytail: 隐藏的旧页签按钮（hot / moves）没有自己的容器，
-    // 点它 = 回「市场榜单」页并落到下拉里的对应项（value 形如 'hot:lhb'）
-    if(!$('tab-' + want)){
-      var board = (want === 'hot') ? 'hot:' + hotState.cur
-                : (want === 'moves') ? 'moves:' + movesState.cur
-                : (want === 'rank') ? 'rank:' + state.rank : null;
-      if(!board) return;
-      syncTabs('rank');
-      showBoard(board);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
-    }
-    syncTabs(want);
+/* ponytail: 抽出 switchTab 供 inline tab 与手机抽屉共用，删除重复绑定 */
+function switchTab(want){
+  // 隐藏的旧页签按钮（hot / moves）没有自己的容器，
+  // 点它 = 回「市场榜单」页并落到下拉里的对应项（value 形如 'hot:lhb'）
+  if(!$('tab-' + want)){
+    var board = (want === 'hot') ? 'hot:' + hotState.cur
+              : (want === 'moves') ? 'moves:' + movesState.cur
+              : (want === 'rank') ? 'rank:' + state.rank : null;
+    if(!board) return;
+    syncTabs('rank');
+    showBoard(board);
     window.scrollTo({ top: 0, behavior: 'smooth' });
-    Object.keys(state.charts).forEach(function(k){
-      if(state.charts[k]) setTimeout(function(){ state.charts[k].resize(); }, 60);
-    });
-    // 懒加载：首次进入「小白选股」时拉取方案
-    if(want === 'newbie' && !nbState.loaded) loadNewbiePresets();
-    // 懒加载：首次进入「我的自选」时拉取
-    if(want === 'watch' && !wtState.loaded) loadWatch();
-    // 懒加载：首次进入「虚拟盘」时拉取
-    if(want === 'paper' && !ppState.loaded) loadPaper();
-    // 懒加载：进入「快讯」即拉取（30s 内是缓存，随便切）
-    if(want === 'news') loadNews();
-    // 懒加载：进入「监控中心」即拉取规则与告警
-    if(want === 'alerts') loadAlerts();
-    // 懒加载：首次进入「条件选股」时拉取分钟扫描的预设条件
-    // （扫描器已并入本页，不再是独立页签）
-    if(want === 'screen' && !idState.presetLoaded) loadIntradayPresets();
-    // 懒加载：首次进入「连板梯队」时拉取（#100）
-    if(want === 'limitup' && !luState.loaded) loadLimitup();
-    // 懒加载：首次进入「题材雷达」时拉取（#100）
-    if(want === 'theme' && !thState.loaded) loadTheme();
-    // 懒加载：首次进入「后台管理」时拉取
-    if(want === 'admin') loadAdmin();
-  };
+    return;
+  }
+  syncTabs(want);
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+  Object.keys(state.charts).forEach(function(k){
+    if(state.charts[k]) setTimeout(function(){ state.charts[k].resize(); }, 60);
+  });
+  // 懒加载：首次进入「小白选股」时拉取方案
+  if(want === 'newbie' && !nbState.loaded) loadNewbiePresets();
+  // 懒加载：首次进入「我的自选」时拉取
+  if(want === 'watch' && !wtState.loaded) loadWatch();
+  // 懒加载：首次进入「虚拟盘」时拉取
+  if(want === 'paper' && !ppState.loaded) loadPaper();
+  // 懒加载：进入「快讯」即拉取（30s 内是缓存，随便切）
+  if(want === 'news') loadNews();
+  // 懒加载：进入「监控中心」即拉取规则与告警
+  if(want === 'alerts') loadAlerts();
+  // 懒加载：首次进入「条件选股」时拉取分钟扫描的预设条件
+  // （扫描器已并入本页，不再是独立页签）
+  if(want === 'screen' && !idState.presetLoaded) loadIntradayPresets();
+  // 懒加载：首次进入「连板梯队」时拉取（#100）
+  if(want === 'limitup' && !luState.loaded) loadLimitup();
+  // 懒加载：首次进入「题材雷达」时拉取（#100）
+  if(want === 'theme' && !thState.loaded) loadTheme();
+  // 懒加载：首次进入「后台管理」时拉取
+  if(want === 'admin') loadAdmin();
+}
+document.querySelectorAll('.tabs button').forEach(function(b){
+  b.onclick = function(){ switchTab(b.dataset.tab); };
 });
+
+/* 手机端抽屉：复用现有 tab 列表生成大点击区清单（#mobile-nav） */
+function setupNavDrawer(){
+  var drawer = $('navDrawer'), list = $('navList'), toggle = $('navToggle'),
+      mask = $('navMask'), close = $('navClose');
+  if(!drawer || !list || !toggle) return;
+  // 只列可见模块（跳过 hot/moves 及未登录的 admin）。
+  // 用内联 style.display 判断：手机端 .tabs 整体 display:none 会让 offsetParent 全为 null，
+  // 不能据此过滤，否则抽屉列表变空。
+  var items = [];
+  document.querySelectorAll('.tabs button[data-tab]').forEach(function(b){
+    if(b.style.display === 'none') return;
+    items.push({tab:b.dataset.tab, html:b.innerHTML});
+  });
+  list.innerHTML = items.map(function(it){
+    return '<button class="nd-item" data-tab="' + it.tab + '">' + it.html + '</button>';
+  }).join('');
+  list.querySelectorAll('.nd-item').forEach(function(el){
+    el.onclick = function(){ switchTab(el.dataset.tab); closeNavDrawer(); };
+  });
+  function openNavDrawer(){
+    drawer.classList.add('open'); drawer.setAttribute('aria-hidden','false');
+    toggle.setAttribute('aria-expanded','true');
+  }
+  function closeNavDrawer(){
+    drawer.classList.remove('open'); drawer.setAttribute('aria-hidden','true');
+    toggle.setAttribute('aria-expanded','false');
+  }
+  toggle.onclick = openNavDrawer;
+  if(mask) mask.onclick = closeNavDrawer;
+  if(close) close.onclick = closeNavDrawer;
+  setupNavDrawer._rebuild = function(){ setupNavDrawer(); };  // 供后台管理显隐后重建
+}
+setupNavDrawer();
 
 /* 同步页签高亮与容器可见性。合并后 hot/moves 的高亮落到 rank 上 */
 function syncTabs(tabName){
@@ -2025,6 +2101,10 @@ function syncTabs(tabName){
   if(btn) btn.classList.add('on');
   var box = $('tab-' + tabName);
   if(box) box.classList.add('on');
+  // 手机抽屉同步高亮
+  document.querySelectorAll('.nd-item').forEach(function(x){
+    if(x.dataset.tab === tabName) x.classList.add('on'); else x.classList.remove('on');
+  });
 }
 
 
@@ -3372,6 +3452,8 @@ function probeAdmin(){
 }
 function showAdminTab(){
   var b = $('tabBtnAdmin'); if(b) b.style.display = '';
+  // 后台管理显隐后重建手机抽屉清单，使其纳入 admin 模块
+  if(typeof setupNavDrawer !== 'undefined' && setupNavDrawer._rebuild) setupNavDrawer._rebuild();
 }
 function hideAdminTab(){
   var b = $('tabBtnAdmin');
