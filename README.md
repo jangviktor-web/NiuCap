@@ -1,16 +1,22 @@
 <div align="center">
 
-# 🐂 牛来选股面板（Niucap）
+# 🐂 牛来选股面板 · Niucap
 
 **本地自托管的 A 股量化「选股 + 择时 + 复盘」一体化面板**
 
-*25+ 选股策略 · 实时行情 · 龙虎榜后验 · 双源快讯 · 词典情绪 · 策略回测 · 虚拟盘*
+*25+ 选股策略 · 实时行情 · 连板梯队 · 题材雷达 · 龙虎榜后验 · 双源快讯 · 词典情绪 · 策略回测 · 虚拟盘 · 命令面板*
 
+<br>
+
+![GitHub Stars](https://img.shields.io/github/stars/jangviktor-web/niucap?style=social)
+![GitHub last commit](https://img.shields.io/github/last-commit/jangviktor-web/niucap)
+![Repo size](https://img.shields.io/github/repo-size/jangviktor-web/niucap)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com/)
-[![Platform](https://img.shields.io/badge/平台-WorkBuddy云%20%7C%20本机%20%7C%20Docker-orange.svg)](#-快速开始)
-[![API Key](https://img.shields.io/badge/API%20Key-不需要-success.svg)](#-快速开始)
+[![No API Key](https://img.shields.io/badge/API%20Key-不需要-success.svg)](#-快速开始)
+[![Self-hosted](https://img.shields.io/badge/部署-本机%20%7C%20云端%20%7C%20Docker-orange.svg)](#-快速开始)
+[![Mobile](https://img.shields.io/badge/移动端-响应式-9cf.svg)](#-快速开始)
 
 **一条命令起，数据完全在自己手里** · [在线示例](https://ab1dde4ffb5e275c5.app.workbuddy.host/)
 
@@ -19,6 +25,8 @@
 </div>
 
 > 仓库名 `niucap`（牛 = capture 牛股，A 股梗）；产品中文名「牛来选股面板」。两者指同一个项目。
+>
+> **A self-hosted A-share quant dashboard** — stock screening, limit-up ladder, sector radar, backtesting & paper trading. **No API key. 100% local.**
 
 ---
 
@@ -27,10 +35,14 @@
 - [✨ 功能总览](#-功能总览)
 - [🖼 页面预览](#-页面预览)
 - [🚀 快速开始](#-快速开始)
+- [💡 快速上手示例](#-快速上手示例)
+- [🧱 技术栈](#-技术栈)
 - [📘 部署教程：一键发布到 WorkBuddy 云平台](#-部署教程一键发布到-workbuddy-云平台)
 - [⚠️ 首次部署必读：数据初始化](#️-首次部署必读数据初始化)
 - [⚙️ 配置（.env，可选）](#️-配置env可选)
 - [📁 目录结构](#-目录结构)
+- [🤝 贡献方式](#-贡献方式)
+- [🗺️ 路线图](#️-路线图)
 - [❓ 常见问题](#-常见问题)
 - [📜 许可证](#-许可证)
 
@@ -41,15 +53,21 @@
 | 模块 | 说明 |
 |---|---|
 | 🌟 **小白选股** | 完全不懂 K 线也能用：四套方案（稳健白马 / 超跌反弹 / 成长活跃 / 打板热点）一键出结果，每只票给 0~100 友好度评分 + 大白话逐条解释「为什么选它」 |
-| 🔍 **策略选股** | 29 个内置策略（趋势形态 / 量价涨停 / 反转波动 / 形态相似度 / 经典指标 / 分钟级），支持并集 / 交集组合，秒级扫描全市场 |
+| 🔍 **策略选股** | 25+ 内置策略（趋势形态 / 量价涨停 / 反转波动 / 形态相似度 / 经典指标 / 分钟级），支持并集 / 交集组合，秒级扫描全市场 |
 | 🎯 **条件选股** | PE / PB / 市值 / 涨跌幅 / 换手率 / 成交额自由组合，内置四套预设；另有分钟级全市场实时扫描 |
-| 📈 **个股分析** | 日/周/月 K 线叠加 MA + 布林 / 唐安奇 / 肯特纳 / 吊灯止损通道；MACD / RSI / KDJ / 成交量；61 项全套技术指标与自动信号；9 类关键价位；资金流向 / 筹码分布 / 基本面 / 研报公告 |
-| 🧪 **策略回测** | T+1 / 手续费 / 印花税 / 滑点真实约束，止损止盈、金字塔分批加仓；输出净值曲线、年化、最大回撤、夏普、卡玛、胜率、盈亏比；网格交易回测与走查（过拟合检验） |
+| 📈 **个股分析** | 日/周/月 K 线叠加 MA + 布林 / 唐安奇 / 肯特纳 / 吊灯止损通道；MACD / RSI / KDJ / 成交量；60+ 项技术指标与自动信号；关键价位；资金流向 / 筹码分布 / 基本面 / 研报公告 |
+| 🔥 **连板梯队 + 情绪周期** | 涨停子集取近 12 日 K 线算连板天数（交易日历对齐），按首板 / 2 板 / 3 板 / 4+ 板分组；融合 6 阶段市场情绪（冰点→启动→主升→高潮→退潮→修复） |
+| 🎯 **题材雷达** | 行业板块四维评分（强度 / 资金 / 宽度 / 持续）+ 名称归一融合去重，一眼锁定当日最强主线 |
+| 🧪 **策略回测** | T+1 / 手续费 / 印花税 / 滑点真实约束，止损止盈、金字塔分批加仓；净值曲线、年化、最大回撤、夏普、卡玛、胜率、盈亏比；网格回测与走查（防过拟合） |
 | 📊 **市场榜单** | 涨幅 / 跌幅 / 成交额 / 换手率 / 市值 / 低估值六大榜单 + 市场温度 13 维画像 + 市场宽度（涨跌家数、站上 20 日线比例、新高新低） |
-| 🐯 **龙虎榜后验** | 东财源，D+1 / D+2 / D+5 / D+10 复权涨幅 + 上榜原因，把名单变成绩单 |
+| 🐯 **龙虎榜后验** | 上榜原因 + D+1 / D+2 / D+5 / D+10 复权涨幅，把名单变成绩单 |
 | 📰 **双源快讯** | 新浪 7×24 + 同花顺双源互备，30s 缓存，重大红条标记，词典情绪自动打「看涨 / 看跌 / 中性」，关联股票可点跳个股页 |
 | ⚖️ **多股对比** | 最多 8 只同屏对比价格 / RSI / MACD / KDJ / 量比 / 估值，自动标注组内最优 / 最差 |
-| 💹 **虚拟盘** | 费率可配，盈亏跟踪，T+1 / 费用 / 滑点约束 |
+| ⭐ **我的自选** | 自选股分组、成本线、批量盯盘 |
+| 💰 **虚拟盘** | 费率可配，盈亏跟踪，T+1 / 费用 / 滑点约束 |
+| 🏦 **ETF 筛选** | 宽基 / 行业 / 主题 ETF 多维筛选 |
+| 🔔 **监控中心** | 价格 / 涨跌幅 / 自选异动规则与告警 |
+| ⌨️ **命令面板** | `Cmd/Ctrl + K` 全局直达任意模块与股票，自带沪深交易时段时钟 |
 | 🚀 **一键部署** | Python 本机 / WorkBuddy 云平台 / Docker 自托管，任选 |
 
 ---
@@ -62,7 +80,7 @@
 
 ![小白选股](docs/screenshots/02-newbie.png)
 
-### 🔍 策略选股 —— 29 个内置策略，并集 / 交集自由组合
+### 🔍 策略选股 —— 25+ 内置策略，并集 / 交集自由组合
 
 策略按「趋势形态 / 量价涨停 / 反转波动 / 形态相似度 / 经典指标 / 分钟级」六类组织，点击卡片即选入，秒级扫描全市场，结果标注命中策略。
 
@@ -74,11 +92,18 @@ PE / PB / 市值 / 涨跌幅 / 换手率 / 成交额自由组合，内置「低�
 
 ![条件选股](docs/screenshots/04-screen.png)
 
-### 📈 个股分析 —— K 线 + 61 项指标 + 资金筹码基本面
+### 📈 个股分析 —— K 线 + 60+ 项指标 + 资金筹码基本面
 
 K 线（日/周/月，1~60 分钟）叠加均线与四种通道；技术面结论卡片直接给「偏多 / 偏空」；往下还有资金流向、筹码分布、基本面、机构研报与公司公告。
 
 ![个股分析](docs/screenshots/08-stock.png)
+
+### 🔥 连板梯队 + 题材雷达 —— 超短情绪一眼看透（#100 新增）
+
+连板天数按交易日历精确对齐，梯队分组 + 情绪周期徽标；题材雷达四维评分融合去重，当日主线一目了然。标题栏标注数据时效（盘中实时 / 收盘数据）。
+
+![连板梯队](docs/screenshots/09-limitup.png)
+![题材雷达](docs/screenshots/10-theme.png)
 
 ### 🧪 策略回测 —— 真实约束下的成绩单
 
@@ -105,7 +130,7 @@ T+1、手续费、印花税、滑点全模拟；支持止损止盈与金字塔�
 ### 方式 A：Python 本机（推荐给开发者）
 
 ```bash
-git clone https://gitee.com/jangviktor/niucap.git
+git clone https://github.com/jangviktor-web/niucap.git
 cd niucap
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -122,6 +147,56 @@ python server/run.py          # 或 ./deploy.sh（后台常驻 + 可选 Cloudfla
 ### 方式 C：Docker 自托管（数据常驻）
 
 仓库未内置 Dockerfile；如需容器化，按 `server/run.py` 暴露的 `8899` 端口自行封装即可，数据卷挂到 `./data`。
+
+---
+
+## 💡 快速上手示例
+
+**① 纯小白，只想看「现在哪些票值得关注」**
+
+打开「🌟 小白选股」→ 选「稳健白马」或「打板热点」→ 一键出结果，每只票附 0~100 友好度评分与大白话理由。
+
+**② 看盘中情绪：连板梯队 + 题材雷达**
+
+打开「🔥 连板梯队」看最高板高度与连板率；再开「🎯 题材雷达」看当日最强主线。标题栏徽标会标明数据是 **盘中实时** 还是 **收盘数据**。
+
+**③ 用命令行 / 程序直接取数（FastAPI 后端）**
+
+```bash
+# 连板梯队 + 情绪周期
+curl "http://localhost:8899/api/limitup?limit=200"
+
+# 题材雷达（评分降序、融合去重）
+curl "http://localhost:8899/api/theme?limit=40"
+```
+
+返回示例（节选）：
+
+```json
+{
+  "date": "2026-09-28",
+  "涨停": [ { "name": "新华传媒", "code": "600825", "change_pct": 10.04, "board_days": 2 } ],
+  "ladder": { "首板": 17, "2连板": 2, "3连板": 2, "4+连板": 1 },
+  "rate": 0.227,
+  "max_height": 5,
+  "phase": "ignite"
+}
+```
+
+**④ 键盘流：`Cmd/Ctrl + K`** 呼出命令面板，输入股票代码或模块名直达，无需鼠标点导航。
+
+---
+
+## 🧱 技术栈
+
+| 层 | 技术 | 说明 |
+|---|---|---|
+| 后端 | Python 3.11 · FastAPI · uvicorn | 异步 API，单端口服务，读 `$PORT` 自适应云平台 |
+| 数据 | pandas · numpy | 向量化选股 / 回测计算 |
+| 存储 | SQLite（默认） / MySQL 协议库（云端常驻） | `store.py` 自适应切换 |
+| 前端 | 原生 HTML / CSS / JS · ECharts | 单页应用，**零构建步骤**，开箱即用 |
+| 行情源 | 腾讯 / 新浪 / 同花顺 / 东财 公开接口 | `eltdx` 批量源（研究许可）加速日线同步 |
+| 部署 | 本机 · WorkBuddy 云 · Docker | 一条命令起 |
 
 ---
 
@@ -205,20 +280,50 @@ python server/run.py          # 或 ./deploy.sh（后台常驻 + 可选 Cloudfla
 ## 📁 目录结构
 
 ```
-server/         FastAPI 后端：选股引擎 / 行情 / 龙虎榜 / 快讯 / 情绪 / 虚拟盘
-  app.py          主应用（50+ 路由）
+server/         FastAPI 后端：选股引擎 / 行情 / 龙虎榜 / 快讯 / 情绪 / 连板 / 题材雷达 / 虚拟盘
+  app.py          主应用（50+ 路由，含 /api/limitup /api/theme）
   run.py          启动器（读 $PORT，绑 0.0.0.0）
   newsfeed.py     双源快讯（新浪7x24 + 同花顺，去重 + TTL）
-  sentiment.py    词典情绪（35 正 / 35 负词 + 否定反转 + 程度乘数 + 转折）
+  sentiment.py    词典情绪（正/负词 + 否定反转 + 程度乘数 + 转折）
+  limitup.py      连板梯队 + 6 阶段情绪周期（#100）
+  theme_radar.py  题材雷达：四维评分 + 融合去重（#100）
   westock.py      资金面 / 筹码 / 基本面 / 研报公告扩展数据源
   store.py        数据访问层（SQLite / MySQL 协议库自适应）
 web/            前端单页（原生 HTML/JS + ECharts，无构建步骤）
-scripts/        数据同步、健康检查、README 截图等运维脚本
+scripts/        数据同步、健康检查、发布等运维脚本
 docs/           部署指南与各功能说明（中文）+ screenshots/ 页面截图
-tests/          自检与端到端测试
+tests/          自检与端到端测试（Playwright 双视口）
 deploy.sh       一键启动 / 隧道 / 停止
 requirements.txt 运行时依赖（轻量，无需 akshare/mootdx）
 ```
+
+---
+
+## 🤝 贡献方式
+
+欢迎 Issue、PR 与建议！本项目以 **MIT** 开源，适合量化爱好者共同打磨。
+
+- **报告 Bug / 提需求**：开 [Issue](https://github.com/jangviktor-web/niucap/issues)，请尽量附上复现步骤、浏览器/系统、报错截图或日志（`server.log`）。
+- **提交代码**：
+  1. `fork` 本仓库并基于 `master` 切出特性分支（`feat/xxx` / `fix/xxx`）。
+  2. 保持提交小而聚焦，提交信息建议带前缀：`feat(#号)` / `fix(#号)` / `docs` / `test` / `chore`。
+  3. 前端改动请顺手跑 `tests/` 下相关自检（或说明手测结论）；新增功能不建议破坏现有模块（本项目遵循「纯增量、零回归」原则）。
+  4. 发起 Pull Request，描述「改了什么 / 为什么 / 如何验证」。
+- **数据源与许可**：核心行情依赖 `eltdx` 为**研究 / 学习专用许可（禁止商业使用）**；商用前请替换为其他合规数据源，并保持 `requirements.txt` 轻量。
+- **代码风格**：后端 Python（PEP8 倾向），前端原生 JS（无打包），优先复用现有 helper，删除优于新增。
+
+---
+
+## 🗺️ 路线图
+
+- [x] 连板梯队 + 情绪周期 + 题材雷达（#100）
+- [x] 移动端响应式导航（汉堡抽屉）+ 命令面板 + 交易时钟（#99）
+- [x] 前端设计令牌根因修复与无障碍（#101）
+- [ ] 形态识别 / 形态相似度可视化增强（#37 / #43）
+- [ ] 自选股成本线可视化（#90）
+- [ ] 个股页 hover 弹图（#92）
+- [ ] AI 个股卡片（需 LLM Key）（#93）
+- [ ] 港美股适配（#94）
 
 ---
 
@@ -249,7 +354,9 @@ A：本面板仅供量化学习与研究，不构成任何投资建议；虚拟�
 
 ---
 
-## 🏷️ Topics / 关键词
+## 🏷️ Topics / 关键词（建议在仓库 Settings → Topics 中填写）
 
-`a-share` · `china-stock` · `quant` · `stock-screener` · `selfhosted` · `real-time` ·
-`龙虎榜` · `快讯` · `情绪分析` · `选股` · `量化` · `trading-dashboard` · `python` · `fastapi`
+`a-share` · `china-stock-market` · `stock-screener` · `quantitative-finance` · `quantitative-trading` ·
+`stock-analysis` · `trading-dashboard` · `stock-dashboard` · `backtesting` · `technical-analysis` ·
+`real-time-data` · `sentiment-analysis` · `paper-trading` · `limit-up` · `selfhosted` ·
+`python` · `fastapi` · `pandas` · `numpy` · `echarts`
