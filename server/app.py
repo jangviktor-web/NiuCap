@@ -244,6 +244,50 @@ def startup():
     except Exception as e:
         print(f"[alerts] 监控轮询启动失败（不影响其他功能）：{e}")
 
+    # #102 健康巡检自驱动：之前依赖外部手动起 health_check.py --loop，
+    # 进程一死报告就冻住。改为随服务常驻的 daemon 线程周期性自探测并写
+    # health_state.json，服务重启自动恢复。复用 scripts/health_check 的
+    # _check/_record，不重写探测逻辑。地址优先 TICK_SITE_URL，否则本机服务。
+    try:
+        threading.Thread(target=_health_loop, daemon=True, name="health-check").start()
+    except Exception as e:
+        print(f"[health-check] 自驱动启动失败（不影响其他功能）：{e}")
+
+
+def _health_loop():
+    """#102 健康巡检自驱动：周期性调用 scripts/health_check 探测并落盘。
+
+    ponytail: 不在服务端重写探测逻辑，复用 health_check._check/_record；
+    STATE_DIR 用脚本自身路径推导，恒指向项目 data/，与 /api/admin/health
+    读取路径一致。TICK_SITE_URL 覆盖探测地址，TICK_HEALTH_INTERVAL 覆盖间隔(分)。
+    """
+    try:
+        import os as _os, sys as _sys, time as _t
+        _scripts = _os.path.join(_os.path.dirname(_os.path.dirname(
+            _os.path.abspath(__file__))), "scripts")
+        if _scripts not in _sys.path:
+            _sys.path.insert(0, _scripts)
+        import health_check as _hc
+    except Exception as e:
+        print(f"[health-check] 加载失败（跳过自驱动）：{e}")
+        return
+
+    url = _os.environ.get("TICK_SITE_URL") or "http://127.0.0.1:8899/"
+    interval = max(1.0, float(_os.environ.get("TICK_HEALTH_INTERVAL", "30"))) * 60
+    grace = max(0.0, float(_os.environ.get("TICK_HEALTH_GRACE", "60")))
+    print(f"[health-check] 自驱动已启动：探测 {url}，每 {interval/60:g} 分钟一次"
+          + (f"，首跑前宽限 {grace:g}s（等行情缓存预热）" if grace else ""))
+    # ponytail: 首跑前留宽限，避开重启瞬间行情快照尚空的误报（market_count=0）
+    if grace:
+        _t.sleep(grace)
+    while True:
+        try:
+            res = _hc._check(url)
+            _hc._record(res)
+        except Exception as e:
+            print(f"[health-check] 探测异常：{e}")
+        _t.sleep(interval)
+
 
 def _resolve_name(code: str) -> str:
     """从行情快照/搜索索引解析股票中文简称，供存储层补全名称。"""
