@@ -743,6 +743,24 @@ td .starbtn{font-size:16px}
   .flowrow .lb{width:78px;font-size:12px}
   .flowrow .vv{width:84px;font-size:12px}
 }
+/* ===== Task#99 命令面板(Cmd+K) + 沪深交易时段时钟 ===== */
+.cmdp{position:fixed;inset:0;background:rgba(15,20,30,.5);z-index:10000;display:flex;align-items:flex-start;justify-content:center;padding-top:12vh}
+.cmdp[hidden]{display:none}
+.cmdp-box{width:min(620px,92vw);background:#1b2230;border:1px solid #2a3344;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.5);overflow:hidden}
+.cmdp-input{width:100%;border:0;outline:0;padding:15px 18px;font-size:16px;background:transparent;color:#e6ebf2}
+.cmdp-list{max-height:54vh;overflow:auto;padding:6px}
+.cmdp-group{font-size:12px;color:#8b95a7;padding:8px 12px 4px}
+.cmdp-item{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:9px;cursor:pointer;font-size:14px;color:#e6ebf2}
+.cmdp-item .mc-ico{width:20px;text-align:center}
+.cmdp-item .mc-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cmdp-item .mc-sub{font-size:12px;color:#8b95a7}
+.cmdp-item.active{background:rgba(120,160,255,.16)}
+.cmdp-empty{padding:18px;text-align:center;color:#8b95a7;font-size:13px}
+.mktclock{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;padding:3px 9px;border-radius:999px;border:1px solid #2a3344;white-space:nowrap}
+.mc-open{color:#ff6b6b;border-color:rgba(255,107,107,.4)}
+.mc-call{color:#f5a623;border-color:rgba(245,166,35,.4)}
+.mc-lunch{color:#9aa4b2;border-color:rgba(154,164,178,.35)}
+.mc-closed{color:#7a8494;border-color:rgba(122,132,148,.3)}
 </style>
 </head>
 <body>
@@ -784,6 +802,7 @@ td .starbtn{font-size:16px}
     <button data-tab="admin" id="tabBtnAdmin" style="display:none">⚙️ 后台管理</button>
   </div>
   <div class="navright">
+    <span class="mktclock" id="mktClock" title="沪深交易时段（忽略法定节假日）">—</span>
     <label class="autoref"><input type="checkbox" id="autoRef" checked> 自动刷新</label>
     <span class="reftip" id="refTip">—</span>
   </div>
@@ -8495,6 +8514,144 @@ document.addEventListener('click', function(ev){
         });
       });
     }, 120);
+  });
+})();
+</script>
+
+<!-- Task#99 命令面板(Cmd+K) + 沪深交易时段时钟 入口 -->
+<div id="cmdPalette" class="cmdp" hidden>
+  <div class="cmdp-box">
+    <input id="cmdInput" class="cmdp-input" placeholder="跳转到页面，或搜股票代码/名称  (↑↓ 选择 · Enter 打开 · Esc 关闭)">
+    <div id="cmdList" class="cmdp-list"></div>
+  </div>
+</div>
+<script>
+/* ===== Task#99 命令面板(Cmd+K) + 沪深交易时段时钟 ===== */
+(function(){
+  /* ---------- 交易时段时钟（A股，忽略法定节假日） ---------- */
+  function bjParts(now){
+    var p = {};
+    new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',weekday:'short',hour:'2-digit',minute:'2-digit',hour12:false})
+      .formatToParts(now).forEach(function(x){ p[x.type]=x.value; });
+    var wd = {'周一':1,'周二':2,'周三':3,'周四':4,'周五':5,'周六':6,'周日':7}[p.weekday] || 1;
+    var h = parseInt(p.hour,10), m = parseInt(p.minute,10);
+    return { wd: wd, min: h*60+m };
+  }
+  function fmtSpan(mins){
+    if(mins<=0) return '0m';
+    var h=Math.floor(mins/60), m=mins%60;
+    return h>0 ? (h+'h '+(m<10?'0':'')+m+'m') : (m+'m');
+  }
+  function mktSession(now){
+    var t = bjParts(now);
+    if(t.wd<1 || t.wd>5){           // 周末
+      return {cls:'mc-closed', line:'休市 · 下交易日 09:15'};
+    }
+    var M=t.min;
+    if(M>=555 && M<570)  return {cls:'mc-call',  line:'集合竞价 · 09:30 开盘'};
+    if(M>=570 && M<690)  return {cls:'mc-open',  line:'交易中 · 距午休 '+fmtSpan(690-M)};
+    if(M>=690 && M<780)  return {cls:'mc-lunch', line:'午休 · 13:00 开盘'};
+    if(M>=780 && M<897)  return {cls:'mc-open',  line:'交易中 · 距收盘 '+fmtSpan(897-M)};
+    if(M>=897 && M<900)  return {cls:'mc-call',  line:'尾盘集合 · 15:00 收盘'};
+    var toOpen=(24*60-M)+555;
+    return {cls:'mc-closed', line:'已收盘 · 明日 09:15 集合竞价'};
+  }
+  var clockEl=document.getElementById('mktClock');
+  function renderMktClock(){
+    if(!clockEl) return;
+    var s=mktSession(new Date());
+    clockEl.className='mktclock '+s.cls;
+    clockEl.textContent=(s.cls==='mc-open'?'● ':'○ ')+s.line;
+    clockEl.title='沪深交易时段（北京时间，忽略法定节假日）';
+  }
+  renderMktClock();
+  setInterval(renderMktClock,1000);
+
+  /* ---------- 命令面板 ---------- */
+  var pal=document.getElementById('cmdPalette');
+  var inp=document.getElementById('cmdInput');
+  var listEl=document.getElementById('cmdList');
+  var items=[], active=0, searchTimer=null;
+
+  function visibleTabs(){
+    var out=[];
+    document.querySelectorAll('.tabs button[data-tab]').forEach(function(b){
+      if(b.offsetParent===null) return;   // 隐藏的(hot/moves/admin未登录)跳过
+      out.push({tab:b.dataset.tab, name:(b.textContent||'').replace(/\s+/g,'').trim()});
+    });
+    return out;
+  }
+  function tabItems(q){
+    q=(q||'').trim().toLowerCase();
+    return visibleTabs().filter(function(it){ return !q || it.name.toLowerCase().indexOf(q)>=0; })
+      .map(function(it){ return {kind:'tab',tab:it.tab,name:it.name,ico:'📑',sub:''}; });
+  }
+  function stockItems(q,cb){
+    q=(q||'').trim();
+    if(q.length<1){ cb([]); return; }
+    fetch('/api/search?q='+encodeURIComponent(q)).then(function(r){return r.json();}).then(function(d){
+      cb((d.items||d.results||[]).slice(0,8).map(function(x){
+        return {kind:'stock',code:x.code,name:x.name||x.code,ico:'🔍',sub:x.code};
+      }));
+    }).catch(function(){ cb([]); });
+  }
+  function render(){
+    listEl.innerHTML='';
+    if(!items.length){ var e=document.createElement('div'); e.className='cmdp-empty'; e.textContent='没有匹配项'; listEl.appendChild(e); return; }
+    var idx=0;
+    [['页面','tab'],['股票','stock']].forEach(function(g){
+      var gs=items.filter(function(i){return i.kind===g[1];});
+      if(!gs.length) return;
+      var gh=document.createElement('div'); gh.className='cmdp-group'; gh.textContent=g[0]; listEl.appendChild(gh);
+      gs.forEach(function(it){
+        var d=document.createElement('div');
+        d.className='cmdp-item'+(idx===active?' active':'');
+        d.innerHTML='<span class="mc-ico">'+it.ico+'</span><span class="mc-name">'+esc(it.name)+'</span>'+(it.sub?'<span class="mc-sub">'+esc(it.sub)+'</span>':'');
+        d.dataset.idx=idx;
+        d.onmouseenter=function(){ active=idx; markActive(); };
+        d.onclick=function(){ choose(idx); };
+        listEl.appendChild(d); idx++;
+      });
+    });
+  }
+  function markActive(){
+    Array.prototype.forEach.call(listEl.querySelectorAll('.cmdp-item'),function(d){
+      d.classList.toggle('active', +d.dataset.idx===active);
+    });
+  }
+  function syncActive(){ if(active>=items.length) active=Math.max(0,items.length-1); markActive(); }
+  function mergeStocks(q,stocks){
+    if(inp.value.trim()!==q) return;   // 输入已变，丢弃过期结果
+    items=tabItems(q).concat(stocks); render(); syncActive();
+  }
+  function rebuild(q){                 // 页面过滤即时（Enter 永远基于当前输入），股票搜索防抖后补
+    items=tabItems(q); render(); syncActive();
+  }
+  function choose(i){
+    var it=items[i]; if(!it) return;
+    closeCmd();
+    if(it.kind==='tab'){ var btn=document.querySelector('.tabs button[data-tab="'+it.tab+'"]'); if(btn) btn.click(); }
+    else if(it.kind==='stock'){ if(typeof openStock==='function') openStock(it.code); }
+  }
+  function openCmd(){ pal.hidden=false; inp.value=''; active=0; rebuild(''); inp.focus(); }
+  function closeCmd(){ pal.hidden=true; }
+  function toggleCmd(){ pal.hidden?openCmd():closeCmd(); }
+
+  inp.addEventListener('input',function(){
+    active=0; clearTimeout(searchTimer);
+    rebuild(inp.value);
+    var q=inp.value;
+    searchTimer=setTimeout(function(){ stockItems(q,function(s){ mergeStocks(q,s); }); },280);
+  });
+  inp.addEventListener('keydown',function(e){
+    if(e.key==='ArrowDown'){ e.preventDefault(); active=Math.min(items.length-1,active+1); markActive(); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); active=Math.max(0,active-1); markActive(); }
+    else if(e.key==='Enter'){ e.preventDefault(); choose(active); }
+    else if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); closeCmd(); }
+  });
+  pal.addEventListener('click',function(e){ if(e.target===pal) closeCmd(); });
+  document.addEventListener('keydown',function(e){
+    if((e.ctrlKey||e.metaKey)&&(e.key==='k'||e.key==='K')){ e.preventDefault(); toggleCmd(); }
   });
 })();
 </script>
