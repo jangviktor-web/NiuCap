@@ -20,7 +20,7 @@
 
 **一条命令起，数据完全在自己手里** · [在线示例](https://ab1dde4ffb5e275c5.app.workbuddy.host/)
 
-![市场榜单](docs/screenshots/01-dashboard.png)
+![市场榜单](docs/screenshots/01-dashboard.webp)
 
 </div>
 
@@ -78,50 +78,50 @@
 
 四套方案对应四种投资风格，点一下即出结果。每只票都有友好度评分与逐条理由，配市值档位、估值档位标签，可一键跳个股详情。
 
-![小白选股](docs/screenshots/02-newbie.png)
+![小白选股](docs/screenshots/02-newbie.webp)
 
 ### 🔍 策略选股 —— 25+ 内置策略，并集 / 交集自由组合
 
 策略按「趋势形态 / 量价涨停 / 反转波动 / 形态相似度 / 经典指标 / 分钟级」六类组织，点击卡片即选入，秒级扫描全市场，结果标注命中策略。
 
-![策略选股](docs/screenshots/03-strategy.png)
+![策略选股](docs/screenshots/03-strategy.webp)
 
 ### 🎯 条件选股 —— 像填表一样选股
 
 PE / PB / 市值 / 涨跌幅 / 换手率 / 成交额自由组合，内置「低估值蓝筹」「成长活跃股」「小市值活跃」「深度价值」四套预设。
 
-![条件选股](docs/screenshots/04-screen.png)
+![条件选股](docs/screenshots/04-screen.webp)
 
 ### 📈 个股分析 —— K 线 + 60+ 项指标 + 资金筹码基本面
 
 K 线（日/周/月，1~60 分钟）叠加均线与四种通道；技术面结论卡片直接给「偏多 / 偏空」；往下还有资金流向、筹码分布、基本面、机构研报与公司公告。
 
-![个股分析](docs/screenshots/08-stock.png)
+![个股分析](docs/screenshots/08-stock.webp)
 
 ### 🔥 连板梯队 + 题材雷达 —— 超短情绪一眼看透（#100 新增）
 
 连板天数按交易日历精确对齐，梯队分组 + 情绪周期徽标；题材雷达四维评分融合去重，当日主线一目了然。标题栏标注数据时效（盘中实时 / 收盘数据）。
 
-![连板梯队](docs/screenshots/09-limitup.png)
-![题材雷达](docs/screenshots/10-theme.png)
+![连板梯队](docs/screenshots/09-limitup.webp)
+![题材雷达](docs/screenshots/10-theme.webp)
 
 ### 🧪 策略回测 —— 真实约束下的成绩单
 
 T+1、手续费、印花税、滑点全模拟；支持止损止盈与金字塔分批加仓；另有网格交易回测与走查回测（把历史切成多段，训练段选参数、测试段验证，防过拟合）。
 
-![策略回测](docs/screenshots/06-backtest.png)
+![策略回测](docs/screenshots/06-backtest.webp)
 
 ### 📰 双源快讯 —— 新浪 7×24 + 同花顺，带情绪标签
 
 双源互备去重，重大消息红条高亮；词典情绪引擎自动打「▲ 看涨 / ▼ 看跌 / ─ 中性」标签（纯本地、零成本），关联股票可点击直达个股页。
 
-![双源快讯](docs/screenshots/05-news.png)
+![双源快讯](docs/screenshots/05-news.webp)
 
 ### ℹ️ 关于 —— 模块构成实时统计
 
 指标数、策略数由后端实时统计，新增即自动同步；附技术实现、数据源与免责声明。
 
-![关于本面板](docs/screenshots/07-about.png)
+![关于本面板](docs/screenshots/07-about.webp)
 
 ---
 
