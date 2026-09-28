@@ -51,9 +51,13 @@ header{background:var(--card);border-bottom:1px solid var(--line);position:stick
 
 /* ---------- 导航 ---------- */
 nav{background:var(--card);border-bottom:1px solid var(--line)}
-.tabs{max-width:1280px;margin:0 auto;padding:0 16px;display:flex;gap:2px;overflow-x:auto;
-  scrollbar-width:none}
-.tabs::-webkit-scrollbar{display:none}
+.navinner{max-width:1280px;margin:0 auto;padding:0 16px;display:flex;align-items:center;gap:12px}
+/* ponytail: tabs 在 navinner 内 flex:1 + min-width:0 才能收缩并内部滚动；
+   之前 scrollbar 被彻底隐藏，鼠标用户无法滑到被切掉的标签 → 改用细滚动条 */
+.tabs{flex:1 1 auto;min-width:0;display:flex;gap:2px;overflow-x:auto;
+  scrollbar-width:thin;scrollbar-color:var(--line) transparent}
+.tabs::-webkit-scrollbar{height:6px}
+.tabs::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
 .tabs button{background:none;border:none;padding:12px 15px;font-size:13.5px;color:var(--tx2);
   cursor:pointer;white-space:nowrap;font-family:inherit;border-bottom:2px solid transparent;
   transition:.15s;font-weight:500}
@@ -213,7 +217,7 @@ tbody tr:hover{background:#f7f9fc}
   .wrap{padding:0 11px 40px}
   .hd{padding:10px 11px;gap:9px}
   .logo{font-size:15px} .logo small{display:none}
-  .tabs{padding:0 11px}
+  .navinner{padding:0 11px}
   .tabs button{padding:11px 11px;font-size:13px}
   .card-b{padding:14px}
   .card-h{padding:12px 14px}
@@ -780,6 +784,7 @@ td .starbtn{font-size:16px}
 </header>
 
 <nav>
+  <div class="navinner">
   <div class="tabs">
     <button class="on" data-tab="rank">📊 市场榜单</button>
     <!-- ponytail: 原「市场热点」「异动监控」两个页签已合并进「市场榜单」工具栏；
@@ -805,6 +810,7 @@ td .starbtn{font-size:16px}
     <span class="mktclock" id="mktClock" title="沪深交易时段（忽略法定节假日）">—</span>
     <label class="autoref"><input type="checkbox" id="autoRef" checked> 自动刷新</label>
     <span class="reftip" id="refTip">—</span>
+  </div>
   </div>
 </nav>
 
