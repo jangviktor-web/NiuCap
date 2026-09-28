@@ -802,8 +802,9 @@ td .starbtn{font-size:16px}
 .lu-tier-h{font-weight:650;font-size:14px;margin:4px 0 8px;color:var(--tx);display:flex;align-items:center;gap:8px}
 .lu-cnt{font-size:12px;color:var(--tx3);background:var(--line);border-radius:10px;padding:1px 8px}
 .lu-list{display:flex;flex-wrap:wrap;gap:8px}
-.lu-item{background:var(--card2,#14202e);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:.15s}
+.lu-item{background:#f4f6fb;border:1px solid var(--line2);border-radius:8px;padding:6px 10px;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:6px;transition:.15s}
 .lu-item:hover{border-color:var(--accent);transform:translateY(-1px)}
+.lu-nm{font-weight:600;color:var(--tx)}
 .lu-item b{font-variant-numeric:tabular-nums}
 .lu-y{font-size:11px;font-variant-numeric:tabular-nums}
 .th-table{font-size:13px;overflow-x:auto}
@@ -4665,7 +4666,8 @@ function loadLimitup(){
       ';border:1px solid ' + (PHASE_COLOR[ph] || 'var(--tx3)') + '">情绪·' + (PHASE_LABEL[ph] || ph) + '</span>' : '';
     meta.innerHTML = (d.date || '') + ' · 涨停 ' + (d.涨停 || []).length + ' 只 · 最高 ' +
       (d.max_height || 0) + ' 板 · 连板率 ' + (d.rate != null ? (d.rate * 100).toFixed(1) + '%' : '—') +
-      ' ' + phTag + (d.computing ? ' <span class="ktag ktag-live">连板天数计算中…</span>' : '');
+      ' ' + phTag + (d.computing ? ' <span class="ktag ktag-live">连板天数计算中…</span>' : '') +
+      ' ' + freshBadge();
     if(!d.涨停 || !d.涨停.length){
       el.innerHTML = '<div class="innote">今日无涨停（或行情快照暂未就绪，稍后刷新）。</div>';
       return;
@@ -4682,8 +4684,8 @@ function loadLimitup(){
           (yc >= 9.5 ? '<span class="lu-y" style="color:var(--up)">昨+' + yc.toFixed(1) + '%</span>'
           : yc <= -9.5 ? '<span class="lu-y" style="color:var(--down)">昨' + yc.toFixed(1) + '%</span>'
           : '<span class="lu-y" style="color:var(--tx3)">昨' + yc.toFixed(1) + '%</span>');
-        h += '<span class="lu-item" onclick="openStock(\'' + x.code + '\')">' + esc(x.name) +
-          ' <b style="color:var(--up)">' + x.change_pct.toFixed(2) + '%</b> ' + ytag + '</span>';
+        h += '<span class="lu-item" onclick="openStock(\'' + x.code + '\')"><span class="lu-nm">' + esc(x.name) +
+          '</span> <b style="color:var(--up)">' + x.change_pct.toFixed(2) + '%</b> ' + ytag + '</span>';
       });
       h += '</div></div>';
     });
@@ -4700,13 +4702,22 @@ function scheduleLimitup(){
   }, 30000);
 }
 
+/* 数据时效徽标：复用顶部交易时段判断，标明模块是盘中实时还是收盘快照 */
+function freshBadge(){
+  var s = (typeof mktSession === 'function') ? mktSession(new Date()) : {cls:'mc-closed'};
+  if(s.cls === 'mc-open')  return '<span class="ktag ktag-live" title="盘中实时行情快照，本页开启自动刷新时每30秒更新">🔴 盘中实时</span>';
+  if(s.cls === 'mc-call')  return '<span class="ktag ktag-live" title="集合竞价阶段实时行情">🟠 集合竞价</span>';
+  if(s.cls === 'mc-lunch') return '<span class="ktag ktag-live" title="午间休市，行情冻结于上午收盘">🟡 午休·盘中</span>';
+  return '<span class="ktag ktag-eod" title="该交易日收盘快照（非盘中实时）">⚪ 收盘数据</span>';
+}
+
 function loadTheme(){
   var el = $('thBody'), meta = $('thMeta');
   if(!el) return;
   api('/api/theme?limit=40').then(function(d){
     thState.loaded = true;
     if(d.ok === false){ die(el, '题材雷达加载失败：' + (d.source_error || d.error || '数据源不可用')); return; }
-    meta.textContent = (d.date || '') + ' · 行业板块 ' + (d.count || 0) + ' 个（四维评分·融合去重）';
+    meta.innerHTML = (d.date || '') + ' · 行业板块 ' + (d.count || 0) + ' 个（四维评分·融合去重） ' + freshBadge();
     var boards = d.boards || [];
     if(!boards.length){ die(el, '暂无可展示的板块数据'); return; }
     var maxScore = boards[0].score || 1;
