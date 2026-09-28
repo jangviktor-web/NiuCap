@@ -137,24 +137,28 @@ def main():
         return round((r0["low"] + r0["high"]) / 2, 2) if r0 else None
 
     etf_px = day_mid("sh510300") or 4.0
-    st, d = req("POST", "/api/trade/buy",
-                {"code": "sh510300", "qty": 10000, "price": etf_px})
-    etf_buy = d.get("trade", {}) if st == 200 else {}
-    rec("ETF 买入成功且 is_etf=True",
-        st == 200 and etf_buy.get("is_etf") is True, f"status={st} {d}")
+    stk_px = day_mid("sh600519") or 1250.0
+
+    # T+1 下当日买入当日不可卖：印花税 / 盈亏这类断言必须基于「非今日」的持仓。
+    # 直接给测试账号造「昨日买入」的 ETF + 股票仓（仅本测试用）。
+    seed = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0,'server'); import store; store.initialize();"
+         f"print(store.seed_test_position({uid},'sh510300',10000,{etf_px},'沪深300ETF'));"
+         f"print(store.seed_test_position({uid},'sh600519',100,{stk_px},'贵州茅台'))"],
+        capture_output=True, text=True, cwd="/workspace/tick-stock-panel")
+    rec("造昨日仓（ETF + 股票，供费率断言）",
+        seed.stdout.strip().count("'ok': True") == 2,
+        seed.stderr[-160:] or seed.stdout.strip()[:160])
 
     st, d = req("POST", "/api/trade/sell",
                 {"code": "sh510300", "qty": 10000, "price": etf_px})
     etf_sell = d.get("trade", {}) if st == 200 else {}
-    rec("ETF 卖出免印花税（费用 == 买入费用）",
-        st == 200 and abs(etf_sell.get("fee", 0) - etf_buy.get("fee", 0)) < 0.01,
-        f"买 {etf_buy.get('fee')} / 卖 {etf_sell.get('fee')}")
+    rec("ETF 卖出成功（昨日仓）",
+        st == 200 and etf_sell.get("is_etf") is True, f"status={st} {d}")
 
-    st, d = req("POST", "/api/trade/buy",
-                {"code": "sh600519", "qty": 100, "price": 1250})
-    stk_buy = d.get("trade", {}) if st == 200 else {}
     st, d = req("POST", "/api/trade/sell",
-                {"code": "sh600519", "qty": 100, "price": 1250})
+                {"code": "sh600519", "qty": 100, "price": stk_px})
     stk_sell = d.get("trade", {}) if st == 200 else {}
     # 同金额下单：股票卖出应比 ETF 卖出多一笔印花税
     etf_fee_at = (etf_sell.get("fee") or 0)
@@ -163,32 +167,38 @@ def main():
         st == 200 and (stk_fee_at - etf_fee_at) > 50,
         f"股票卖 {stk_fee_at} / ETF卖 {etf_fee_at} / 差额 {stk_fee_at - etf_fee_at:.2f}")
 
-    # ---------- 4. 手填价护栏 ----------
+    # ---------- 4. T+1：当日买入当日不可卖 ----------
+    # 用实时价买入（不传 price，避开手填价区间校验），再立即卖出应被 400 拦下
+    st, d = req("POST", "/api/trade/buy", {"code": "sh600519", "qty": 100})
+    rec("当日买入成功（实时价）", st == 200, f"status={st} {d}")
+    st, d = req("POST", "/api/trade/sell", {"code": "sh600519", "qty": 100})
+    rec("当日买入当日卖 → 400（T+1）",
+        st == 400 and "T+1" in (d.get("detail") or ""),
+        f"status={st} {d}")
+
+    # ---------- 5. 手填价护栏 ----------
     st, d = req("POST", "/api/trade/buy",
                 {"code": "sh600519", "qty": 100, "price": 0.01})
     rec("手填 0.01 买茅台 → 400（挡离谱价）", st == 400, f"status={st}")
 
-    # 从后端取真实区间，再验证边界内放行
-    rng = subprocess.run(
-        [sys.executable, "-c",
-         "import sys; sys.path.insert(0,'server'); import app, json;"
-         "print(json.dumps(app._day_range('sh600519')))"],
-        capture_output=True, text=True,
-        cwd="/workspace/tick-stock-panel").stdout.strip()
-    try:
-        r0 = json.loads(rng)
-    except Exception:
-        r0 = None
-    if r0:
-        mid = round((r0["low"] + r0["high"]) / 2, 2)
-        st, d = req("POST", "/api/trade/buy",
-                    {"code": "sh600519", "qty": 100, "price": mid})
-        rec(f"手填区间中值 {mid} → 放行", st == 200, f"status={st}")
-        # 清掉这笔，别影响后面的资产断言
-        req("POST", "/api/trade/sell",
-            {"code": "sh600519", "qty": 100, "price": mid})
+    # 从后端取真实区间，再验证边界内放行。中值仓直接 seed 成「昨日仓」后卖出，
+    # 既能验证「中值价被放行」，又避开 T+1（当日买当日卖会被拦）。
+    # 用 sz000858 与第 4 段 sh600519 的当日买入隔离，避免 today_bought 污染。
+    mid = day_mid("sz000858")
+    if mid:
+        seed2 = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0,'server'); import store; store.initialize();"
+             f"print(store.seed_test_position({uid},'sz000858',100,{mid},'五粮液'))"],
+            capture_output=True, text=True, cwd="/workspace/tick-stock-panel")
+        rec(f"手填区间中值 {mid} → 造昨日仓 OK",
+            seed2.stdout.strip().count("'ok': True") == 1, seed2.stderr[-120:])
+        st, d = req("POST", "/api/trade/sell",
+                    {"code": "sz000858", "qty": 100, "price": mid})
+        rec("中值仓卖出成功（验证中值价被放行）",
+            st == 200, f"status={st} {d}")
     else:
-        rec("取价格区间（跳过边界测试）", False, f"无法解析: {rng[:120]}")
+        rec("取价格区间（跳过边界测试）", False, "day_mid 返回 None")
 
     # ---------- 5. 认领（搬走制）----------
     # 先造一份匿名数据

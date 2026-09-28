@@ -1642,6 +1642,31 @@ def sell_stock(code: str, qty: int, price: float,
         if not pos or int(pos["qty"]) <= 0:
             raise ValueError("没有该股票的持仓")
         held = int(pos["qty"])
+
+        # ── T+1：当日买入的份额当日不可卖（A 股 / A 股 ETF 均为 T+1）──
+        # ponytail: 用成交流水按「买入日期 == 今天」累加，可卖 = 总持仓 - 今日买入。
+        # 这既符合「今天买的不能卖、之前买的能卖」，又不必给 positions 加批次字段
+        # （FIFO 下今日买入永远最后卖，总仓减今日买入即最大可卖）。
+        # 用 Python 端 time.strftime 比较，避开 SQLite/MySQL 日期函数方言与时区坑，
+        # 单用户单日买入笔数很小，无性能问题。
+        today = time.strftime("%Y-%m-%d")
+        bought_today = 0
+        bs = c.execute(
+            "SELECT qty, created_at FROM trades"
+            " WHERE user_id=? AND code=? AND side='buy'",
+            (uid, code)).fetchall()
+        for r in bs:
+            try:
+                d = time.strftime("%Y-%m-%d", time.localtime(float(r["created_at"])))
+            except (TypeError, ValueError):
+                continue
+            if d == today:
+                bought_today += int(r["qty"])
+        sellable = held - bought_today
+        if qty > sellable:
+            raise ValueError(
+                f"T+1 限制：当日买入的 {bought_today} 股需下一交易日方可卖出"
+                f"（当前可卖 {sellable} 股）")
         if qty > held:
             raise ValueError(f"持仓不足：持有 {held} 股，尝试卖出 {qty} 股")
 
@@ -1678,6 +1703,48 @@ def sell_stock(code: str, qty: int, price: float,
             "amount": amount, "fee": fee, "net": net, "pnl": pnl,
             "is_etf": is_etf(code), "pspan": pspan,
             "cash": round(float(r["cash"]), 2)}
+
+
+def seed_test_position(uid: int, code: str, qty: int, price: float,
+                       name: str = "", days_ago: int = 1) -> Dict[str, Any]:
+    """仅供测试：造一条「N 天前买入」的持仓 + 流水。
+
+    ponytail: 虚拟盘已启用 T+1（当日买入当日不可卖），但印花税 / 盈亏这类断言
+    又必须基于一笔「能卖」的卖出。这里给测试一个造非今日仓的入口，避免
+    check_paper.py、selfcheck() 里到处拼脆弱的裸 SQL。生产代码勿用。
+
+    实现要点：先清掉该 (user, code) 的持仓与全部买入流水，再插入昨日仓，
+    这样无论测试前是否已有当日买入，seed 都是「干净的昨日仓」，不会和 T+1
+    的 today_bought 计算打架，也不会撞 positions 唯一约束。
+    """
+    uid = int(uid)
+    code = (code or "").strip().lower()
+    qty = int(qty)
+    price = float(price)
+    name = (name or "").strip() or _guess_name(code) or code
+    ts = int(time.time()) - 86400 * max(0, int(days_ago))
+    amount = round(price * qty, 2)
+    c = _conn()
+    try:
+        _begin(c)
+        c.execute("DELETE FROM positions WHERE user_id=? AND code=?", (uid, code))
+        c.execute("DELETE FROM trades WHERE user_id=? AND code=? AND side='buy'",
+                  (uid, code))
+        c.execute(
+            "INSERT INTO positions(user_id,code,name,qty,cost,created_at,updated_at)"
+            " VALUES(?,?,?,?,?,?,?)", (uid, code, name, qty, round(price, 4), ts, ts))
+        c.execute(
+            "INSERT INTO trades(user_id,code,name,side,qty,price,fee,amount,pnl,pspan,created_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (uid, code, name, "buy", qty, price, 0.0, amount, None, "昨收", ts))
+        c.execute("COMMIT")
+        return {"ok": True, "code": code, "qty": qty, "price": price}
+    except Exception:
+        try:
+            c.execute("ROLLBACK")
+        except Exception:
+            pass
+        raise
 
 
 def reset_account(user_id: Optional[int] = None, cash: float = _INITIAL_CASH
@@ -2074,10 +2141,20 @@ def selfcheck() -> Dict[str, Any]:
         assert pos["qty"] == 200 and 1200 < pos["cost"] < 1300
         out["steps"].append(f"加仓加权成本 OK cost={pos['cost']:.2f}")
 
+        # T+1：当日买入当日不可卖——这句必须被拒
+        try:
+            sell_stock("sh600519", 100, 1400.0, u["id"])
+            raise AssertionError("T+1：当日买入当日卖应被拒绝")
+        except ValueError as e:
+            assert "T+1" in str(e), f"应提示 T+1，实际: {e}"
+            out["steps"].append("T+1 当日卖拒绝 OK")
+
+        # 用一条「昨日建仓」验证正常卖出与盈亏计算（今日仓仍在、可卖为 0）
+        seed_test_position(u["id"], "sh600519", 100, 1200.0, "贵州茅台", days_ago=1)
         s = sell_stock("sh600519", 100, 1400.0, u["id"])
         assert s["pnl"] is not None
         assert s["is_etf"] is False
-        out["steps"].append(f"sell_stock OK 盈亏 {s['pnl']:.2f}")
+        out["steps"].append(f"sell_stock(昨日仓) OK 盈亏 {s['pnl']:.2f}")
 
         # ---------- 费率：按用户存 + ETF 免印花税 ----------
         f0 = get_fees(u["id"])
