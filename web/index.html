@@ -2675,6 +2675,12 @@ function renderStockMtSummary(d){
 
 function loadStockMinute(code, period){
   var box = $('stockPerNote');
+  // ponytail: 空代码直接说人话，别发一个必然 400 的请求再回显「未找到代码 null」
+  if(!code){
+    if(box){ box.className = 'innote err'; box.style.display = '';
+      box.textContent = '还没选个股：请先从榜单 / 选股结果 / 自选股里点开一只股票，再切分钟周期。'; }
+    return;
+  }
   if(box){ box.className = 'innote'; box.style.display = ''; box.textContent = '正在拉取 ' + period + ' 分钟线…'; }
   state.stockMinuteData = null;
   var url = '/api/kline_intraday?code=' + encodeURIComponent(code) +
@@ -7658,20 +7664,13 @@ function _renderNewbieResult(d){
   bindStars($('nbBody'));
 }
 
-// 从本地快照里找名字，跳到个股分析页
+// 跳到个股分析页。
+// ponytail: 直接复用 openStock 而不是再写一份——旧实现只设 state.code，
+// 而分钟线按钮读的是 state.stockCode，于是从自选股/新手页进来点「1分」
+// 会拿着 null 去请求，后端回「未找到代码 null」。一份入口就没这个坑。
 function goStock(code){
   try{
-    state.code = code;
-    var tabs = document.querySelectorAll('.tabs button');
-    Array.prototype.forEach.call(tabs, function(x){
-      x.classList.remove('on');
-      if(x.dataset.tab === 'stock') x.classList.add('on');
-    });
-    document.querySelectorAll('.tab').forEach(function(t){ t.classList.remove('on'); });
-    var el = document.getElementById('tab-stock');
-    if(el) el.classList.add('on');
-    loadStock(code);
-    window.scrollTo({ top:0, behavior:'smooth' });
+    openStock(code);
   }catch(e){ /* 静默：跳转失败不影响主流程 */ }
 }
 
@@ -8387,7 +8386,7 @@ function refreshTab(t){
     else if(t === 'watch') loadWatchItems(wtState.cur);
     else if(t === 'paper') loadPaper();
     else if(t === 'newbie') { if(nbState.cur) runNewbie(nbState.cur, false); }
-    else if(t === 'stock') { if(state.code) loadStock(state.code); }
+    else if(t === 'stock') { if(state.stockCode) loadStock(state.stockCode); }
   }catch(e){}
 }
 
