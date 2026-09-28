@@ -204,11 +204,30 @@ def startup():
     except Exception as e:
         print(f"[sync-bars] 调度启动失败（不影响其他功能）：{e}")
 
-    # 服务启动补跑：若今天已经落库成功（比如晚上重启过服务），而后台
-    # 还没预热过体检缓存，就在后台补算一遍，白天打开直接是现成结果
+    # #98 体检缓存每日自动预热：不依赖落库，每天 16:30 自己检查一次
+    # （先起调度，再由它决定今天要不要算——比下面的补跑更通用）
     try:
         import strategy_eval as _se
-        _se.prewarm(only_if_synced_today=True, why="启动补跑")
+        _se.start_daily_prewarm()
+    except Exception as e:
+        print(f"[eval-prewarm] 每日调度启动失败（不影响其他功能）：{e}")
+
+    # 服务启动补跑。原来是「今天必须已落库成功才补」——于是白天重启、
+    # 或落库失败的次日重启，缓存就一直空着，要等到 16:30 才有数据。
+    # 改成按缓存自身状态决定：
+    #   · 今天已算过（meta 记着，跨重启有效）→ 不重复烧那 230 秒；
+    #   · 缓存为空 / 数据比缓存新 → 补算，不再看落库脸色。
+    try:
+        import strategy_eval as _se
+        import store as _st2
+        if _st2.meta_get(_se.K_PW_OK, "") == datetime.now().date().isoformat():
+            print("[strategy-eval] 启动预热跳过：今天已预热过")
+        else:
+            due = _se.prewarm_due()
+            if due.get("due"):
+                _se.prewarm(why=f"启动补跑（{due.get('reason', '')}）")
+            else:
+                print(f"[strategy-eval] 启动预热跳过：{due.get('reason', '')}")
     except Exception as e:
         print(f"[strategy-eval] 启动预热跳过（不影响其他功能）：{e}")
 

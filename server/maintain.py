@@ -446,18 +446,23 @@ def cache_status(market_getter=None) -> Dict[str, Any]:
     """各模块缓存状态汇总。每项独立 try，坏一个不影响其它。"""
     items: List[Dict[str, Any]] = []
 
-    # 体检缓存（#80，内存单槽）
+    # 体检缓存（#80，内存单槽；#98 起每天 16:30 自动预热）
     try:
         import strategy_eval as se
         c = se.cache_status()
+        sch = c.get("schedule") or {}
         items.append({
             "key": "eval", "name": "策略体检缓存", "where": "内存（单槽）",
             "ready": c.get("ready"), "clearable": True,
             "detail": (f"{c.get('days') or 0} 天 / 前向 {c.get('forward')} / "
                        f"{c.get('n_strategies') or 0} 个策略"
-                       + (f"，耗时 {c['cost_seconds']}s" if c.get("cost_seconds") else "")),
+                       + (f"，耗时 {c['cost_seconds']}s" if c.get("cost_seconds") else "")
+                       + (f" ｜ 每日 {sch.get('at')} 自动预热"
+                          if sch.get("at") else "")),
             "size": None, "mtime": c.get("computed_at"),
-            "note": "切换回看天数会整份重算；清空后下次打开需重新体检。",
+            "note": ("按数据判脏：数据更新或缓存为空才重算（单次 230 秒，"
+                     "不无脑每天算）。清空后到点会自动补算。"),
+            "schedule": sch,
         })
     except Exception as e:
         items.append({"key": "eval", "name": "策略体检缓存", "state": "unknown",

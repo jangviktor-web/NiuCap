@@ -3257,7 +3257,8 @@ var ADMIN_TABS = [
   {key:'services', name:'缓存管理', emo:'🧹',
    desc:'统一查看并清理四类缓存：策略体检（内存单槽）、情绪周期（内存 + 磁盘 JSON）、快讯流（30 秒 TTL）、全市场行情快照（只读）。每项标注位置、体量与清理后的代价。'},
   {key:'evalcache', name:'体检缓存', emo:'🎯',
-   desc:'显示当前体检缓存装的哪组参数（回看天数 / 前向窗口）、覆盖策略数、耗时与上次计算时间；可一键预热 120 天 / 40 天或清空。体检结果单槽缓存，切换天数前先看清楚槽里装的是哪组。'},
+   desc:'显示当前体检缓存装的哪组参数（回看天数 / 前向窗口）、覆盖策略数、耗时与上次计算时间；可一键预热 120 天 / 40 天或清空。体检结果单槽缓存，切换天数前先看清楚槽里装的是哪组。' +
+        '另有<b>每日自动预热</b>（默认 16:30，环境变量可改）：不依赖落库，到点按数据判脏——数据日期变了或缓存为空才真算，周末与落库失败当天自动跳过（单次评估 230 秒，不无脑烧 CPU）。'},
   {key:'backup', name:'系统备份', emo:'💾',
    desc:'一键在线一致备份（SQLite backup() 读穿 WAL，无需停服），落在 data/backups/。清单里可<b>下载</b>到本地、<b>删除</b>腾空间、<b>恢复</b>覆盖当前库——恢复前会自动先快照一份当前库，手滑还能回退；恢复完需重启服务进程。'},
   {key:'logs', name:'巡检与日志', emo:'📜',
@@ -3667,6 +3668,38 @@ function admEvalCache(el){
       '<button class="btn" id="admWarm40">预热 40 天（体检默认）</button>' +
       '<button class="btn" id="admClearCache">🧹 清空缓存</button>' +
       '<span id="admCacheMsg" style="font-size:12px;color:var(--tx3)"></span></div>';
+    h += '</div></div>';
+
+    /* #98 每日自动预热：不依赖落库，到点自己检查。
+       重点是让管理员看得见「为什么这次没算」——否则跳过了会以为坏了。 */
+    var sch = d.schedule || {};
+    h += '<div class="card"><div class="card-h"><h2>⏰ 每日自动预热</h2>' +
+         '<div class="meta">' + (sch.enabled ? '调度运行中' : '调度未运行') +
+         '</div></div><div class="card-b">';
+    h += '<div class="verdict">' +
+      '<div class="vbox"><div class="lb">每日时间</div><div class="vl" style="font-size:15px">' +
+        esc(sch.at || '—') + '</div><div class="sub">TICK_EVAL_PREWARM_AT 可改</div></div>' +
+      '<div class="vbox"><div class="lb">下次检查</div><div class="vl" style="font-size:14px">' +
+        esc(sch.next || '—') + '</div><div class="sub">估算，跳过周末</div></div>' +
+      '<div class="vbox"><div class="lb">今天已算</div><div class="vl ' +
+        (sch.done_today ? 'up' : 'warn') + '">' + (sch.done_today ? '是' : '否') +
+        '</div><div class="sub">' + esc(sch.last_ok || '—') + '</div></div>' +
+      '<div class="vbox"><div class="lb">此刻该算吗</div><div class="vl ' +
+        (sch.due ? 'warn' : 'up') + '" style="font-size:14px">' +
+        (sch.due ? '该算' : '不用') + '</div><div class="sub">数据至 ' +
+        esc(sch.db_max_date || '—') + '</div></div>' +
+      '</div>';
+    h += '<div style="margin-top:10px;font-size:13px">' + esc(sch.due_reason || '') + '</div>';
+    if(sch.last_result){
+      h += '<div style="margin-top:6px;font-size:12px;color:var(--tx3)">上次：' +
+           esc(sch.last_result) + '</div>';
+    }
+    h += '<div class="admtip" style="margin-top:10px">到点后<b>按数据判脏</b>，不是无脑重算：' +
+      '只有 <code>daily_bars</code> 最新日期与缓存基准日不一致、或缓存为空时才真算。' +
+      '单次评估实测 <b>230 秒</b>且 CPU 满载，所以周末、节假日、当天落库失败都会自动跳过——' +
+      '数据没变，算出来的结果一模一样，没必要烧这 4 分钟。' +
+      '判脏本身只读 <code>MAX(date)</code>（走索引，0.000 秒）。' +
+      '清空缓存后到点会自动补算，不必手动点。</div>';
     h += '</div></div>';
     el.innerHTML = h;
 

@@ -48,7 +48,10 @@ IC 会误导使用者（比如用「成交量排名」冒充「市值」）。�
 """
 from __future__ import annotations
 
+import datetime as _dt
 import math
+import os
+import re
 import threading
 import time
 from collections import Counter
@@ -648,6 +651,8 @@ def cache_status() -> Dict[str, Any]:
         "cost_seconds": c.get("cost_seconds"),
         "computed_at": c.get("computed_at"),
         "prewarm": dict(_PREWARM_LAST),
+        # #98 每日自动预热调度：面板要显示「下次几点、为什么这次不用算」
+        "schedule": prewarm_schedule_state(),
     }
 
 
@@ -735,6 +740,15 @@ def prewarm(days: int = 120, forward: int = 5,
             print(f"[strategy-eval] 预热完成（{why or '落库后'}）: "
                   f"{r['days']} 个交易日 · as_of={r['as_of']} · "
                   f"耗时 {r['cost_seconds']}s")
+            # 落库状态给每日调度看：今天算完了，到点就不用再检查
+            try:
+                import store as _st
+                _st.meta_set(K_PW_OK, today)
+                _st.meta_set(K_PW_RESULT,
+                             f"{_now_text()} 完成：{r['days']} 个交易日 · "
+                             f"as_of={r['as_of']} · {r['cost_seconds']}s")
+            except Exception as _e:
+                print(f"[strategy-eval] 预热状态落库失败（不影响结果）：{_e}")
             # 顺手把市场宽度也算热：引擎刚重载过，全市场聚合仅 ~1.2s。
             # 不做这步的话，重启后头 2 分钟打开首页，宽度卡片会与体检
             # 预热抢 CPU，首算可能被拖到 1 分半（实测 98s），逼近网关超时
@@ -755,6 +769,170 @@ def prewarm(days: int = 120, forward: int = 5,
 
     threading.Thread(target=_run, daemon=True, name="eval-prewarm").start()
     return {"ok": True, "note": f"预热已启动（days={days}, {why or '落库后'}）"}
+
+
+# ---------------------------------------------------------------------------
+# 每日自动预热调度
+#
+# 为什么要单独一个调度，而不是继续搭日线落库的车：
+#   落库只在交易日跑。周末 / 节假日 / 当天落库失败，就没人预热，缓存一直
+#   停在昨天，体检页打开发现是陈的。搭车的三个触发点（落库后、启动补跑、
+#   手动按钮）全都依赖「今天落库成功」这一个前提。
+#
+# 为什么按数据判脏，而不是每天无脑算一遍：
+#   实测单次评估 230 秒（不是注释里写的 90~150 秒），CPU 满载跑 4 分钟。
+#   而判脏只读 daily_bars 的 MAX(date)——走 idx_bars_date，实测 0.000 秒。
+#   差六个数量级，没有任何理由不算清楚就重算。
+#
+# 三个做法照抄 scheduler.py（那套已经跑了很久，不重新发明）：
+#   1. 状态存 meta 表 —— 服务重启后依然知道「今天处理过没」，不需补跑逻辑。
+#   2. 用日期字符串比对，不用时间差 —— 系统休眠 / 时钟漂移都不会漏或重。
+#   3. 时间配置不合法就回落默认 —— 脏值永不生效。
+# ---------------------------------------------------------------------------
+
+K_PW_TRY = "eval_prewarm_last_try"      # 最近一次「到点检查」的日期
+K_PW_OK = "eval_prewarm_last_ok"        # 最近一次「真的算完」的日期
+K_PW_RESULT = "eval_prewarm_last_result"  # 一句话结果，给人看
+DEFAULT_PREWARM_AT = "16:30"            # 落库 15:30 之后 1 小时，留足缓冲
+_AT_RE = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+_pw_thread: Optional[threading.Thread] = None
+_pw_stop = threading.Event()
+
+
+def _now_text() -> str:
+    return _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def prewarm_at() -> str:
+    """每日预热时间点。环境变量 TICK_EVAL_PREWARM_AT 覆盖，脏值回落 16:30。"""
+    v = (os.environ.get("TICK_EVAL_PREWARM_AT") or "").strip()
+    return v if _AT_RE.match(v) else DEFAULT_PREWARM_AT
+
+
+def db_latest_date() -> str:
+    """daily_bars 最新交易日。走 idx_bars_date，实测 0.000s，可放心每分钟读。"""
+    try:
+        import store as _st
+        r = _st._conn().execute("SELECT MAX(date) FROM daily_bars").fetchone()
+        return str(r[0] or "") if r else ""
+    except Exception:
+        return ""
+
+
+def prewarm_due(days: int = 120, forward: int = 5) -> Dict[str, Any]:
+    """该不该重算体检缓存。返回 {due, reason, db_max_date, cache_as_of}。
+
+    判据按优先级：
+      ① 缓存为空      → 必算。手动清空后靠这条自愈，否则永远不预热。
+      ② 缺 as_of 标记 → 算。缓存结构不完整，判不了脏就按脏处理。
+      ③ 数据日期变了  → 算。以 DB 的 MAX(date) 为权威基准（引擎 as_of 可能
+                        因未 reload 而滞后，不能拿它当基准）。
+      ④ 其余          → 不算，并给出人话原因（周末 / 落库失败当天落这里）。
+    """
+    as_of = str(_HITS_CACHE.get("as_of") or "")
+    dbmax = db_latest_date()
+    if not _HITS_CACHE.get("hits") or not _HITS_CACHE.get("eval_days"):
+        return {"due": True, "reason": "缓存为空，需要首次计算",
+                "db_max_date": dbmax, "cache_as_of": as_of}
+    if not as_of:
+        return {"due": True,
+                "reason": f"缓存缺少数据日期标记，需重算（数据至 {dbmax or '—'}）",
+                "db_max_date": dbmax, "cache_as_of": ""}
+    if dbmax and dbmax != as_of:
+        return {"due": True, "reason": f"数据已更新到 {dbmax}，缓存停在 {as_of}",
+                "db_max_date": dbmax, "cache_as_of": as_of}
+    return {"due": False,
+            "reason": f"数据未更新（最新 {dbmax or as_of}），无需重算",
+            "db_max_date": dbmax, "cache_as_of": as_of}
+
+
+def _prewarm_next_text() -> str:
+    """下一次触发时间。**只做估算**：跳过周末，不管节假日。
+
+    真实算不算由 prewarm_due() 的数据判脏决定——这里只是给 panel 显示一句
+    人话，不做网络请求（scheduler.py 里也是这个取舍）。
+    """
+    hh, mm = (int(x) for x in prewarm_at().split(":"))
+    now = _dt.datetime.now()
+    tgt = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+    if tgt <= now:
+        tgt += _dt.timedelta(days=1)
+    while tgt.weekday() >= 5:            # 周六周日顺延
+        tgt += _dt.timedelta(days=1)
+    return tgt.strftime("%Y-%m-%d %H:%M")
+
+
+def prewarm_schedule_state(days: int = 120, forward: int = 5) -> Dict[str, Any]:
+    """给后台面板看的调度状态。**只读**，不触发任何计算。"""
+    try:
+        import store as _st
+        try_ = _st.meta_get(K_PW_TRY, "") or ""
+        ok = _st.meta_get(K_PW_OK, "") or ""
+        result = _st.meta_get(K_PW_RESULT, "") or ""
+    except Exception as e:
+        try_, ok, result = "", "", f"读取调度状态失败：{type(e).__name__}: {e}"
+    today = _dt.date.today().isoformat()
+    due = prewarm_due(days, forward)
+    return {
+        "enabled": _pw_thread is not None and _pw_thread.is_alive(),
+        "at": prewarm_at(),
+        "today": today,
+        "last_try": try_,
+        "last_ok": ok,
+        "last_result": result,
+        "checked_today": try_ == today,
+        "done_today": ok == today,
+        "next": _prewarm_next_text(),
+        "due": due["due"], "due_reason": due["reason"],
+        "db_max_date": due["db_max_date"], "cache_as_of": due["cache_as_of"],
+    }
+
+
+def start_daily_prewarm(days: int = 120, forward: int = 5) -> bool:
+    """拉起每日预热调度线程（daemon）。重复调用只启动一次。"""
+    global _pw_thread
+    if _pw_thread is not None and _pw_thread.is_alive():
+        return False
+    _pw_stop.clear()
+
+    def _loop():
+        last_checked = ""
+        while not _pw_stop.is_set():
+            try:
+                import store as _st
+                today = _dt.date.today().isoformat()
+                if last_checked != today and _st.meta_get(K_PW_TRY, "") == today:
+                    last_checked = today      # 重启后从 meta 恢复，不重复检查
+                now = _dt.datetime.now()
+                hh, mm = (int(x) for x in prewarm_at().split(":"))
+                if (now.hour, now.minute) >= (hh, mm) and last_checked != today:
+                    last_checked = today
+                    _st.meta_set(K_PW_TRY, today)
+                    if _st.meta_get(K_PW_OK, "") == today:
+                        print("[eval-prewarm] 今天已预热过，跳过检查")
+                        continue
+                    due = prewarm_due(days, forward)
+                    if not due["due"]:
+                        _st.meta_set(K_PW_RESULT,
+                                     f"{_now_text()} 跳过：{due['reason']}")
+                        print(f"[eval-prewarm] 跳过：{due['reason']}")
+                    else:
+                        r = prewarm(days=days, forward=forward,
+                                    why=f"每日自动（{due['reason']}）")
+                        if not r.get("ok"):
+                            _st.meta_set(K_PW_RESULT,
+                                         f"{_now_text()} 未能启动：{r.get('note')}")
+            except Exception as e:
+                print(f"[eval-prewarm] 调度循环异常: {type(e).__name__}: {e}")
+            _pw_stop.wait(60)      # 每分钟醒一次，比日期（同 scheduler）
+
+    _pw_thread = threading.Thread(target=_loop, daemon=True,
+                                  name="eval-prewarm-sched")
+    _pw_thread.start()
+    print(f"[eval-prewarm] 每日调度已启动：每天 {prewarm_at()} 检查一次"
+          f"（环境变量 TICK_EVAL_PREWARM_AT 可改）")
+    return True
 
 
 # ---------------------------------------------------------------------------
