@@ -78,6 +78,7 @@ import limitup as lp
 import theme_radar as tr
 import etf
 import store
+import windowsim as wsim
 import pandas as pd
 
 WEB_DIR = os.path.join(os.path.dirname(HERE), "web")
@@ -737,6 +738,25 @@ def api_screener(
                   reverse=(order == "desc"))
 
     _, upd = MARKET.get()
+    title_bits = []
+    if pe_min is not None or pe_max is not None:
+        title_bits.append(f"PE {pe_min or 0}-{pe_max or '∞'}")
+    if pb_min is not None or pb_max is not None:
+        title_bits.append(f"PB {pb_min or 0}-{pb_max or '∞'}")
+    if cap_min is not None or cap_max is not None:
+        title_bits.append(f"市值 {cap_min or 0}-{cap_max or '∞'}")
+    if chg_min is not None or chg_max is not None:
+        title_bits.append(f"涨跌幅 {chg_min or 0}%~{chg_max or '∞'}")
+    if market:
+        title_bits.append(market.upper())
+    if exclude_st:
+        title_bits.append("去ST")
+    _save_screen_history(
+        "screen", "条件·" + (" ".join(title_bits) if title_bits else "全部"),
+        {"pe": [pe_min, pe_max], "pb": [pb_min, pb_max],
+         "cap": [cap_min, cap_max], "chg": [chg_min, chg_max],
+         "market": market, "exclude_st": exclude_st, "exclude_bj": exclude_bj,
+         "sort": sort, "order": order}, hits[:limit])
     return {
         "items": hits[:limit],
         "total": len(hits),
@@ -1246,6 +1266,10 @@ def api_strategy_scan(
         items.append(it)
 
     _, upd = MARKET.get()
+    _save_screen_history(
+        "strategy", f"策略·{mode}·{','.join(key_list)}",
+        {"keys": key_list, "mode": mode, "pool": pool, "market": market,
+         "exclude_st": exclude_st, "tune": override}, items)
     return {
         "keys": key_list, "mode": mode, "total": len(hit), "items": items,
         "updated": (datetime.fromtimestamp(upd).strftime("%Y-%m-%d %H:%M:%S")
@@ -1979,7 +2003,98 @@ def api_newbie_pick(
     out["updated"] = st["updated"]
     if st["error"]:
         out["note"] = (out.get("note") or "") + f"（后台计算出错：{st['error']}）"
+    _save_screen_history("newbie",
+                         f"小白·{out.get('preset', {}).get('name', '')}",
+                         {"preset": preset, "limit": limit}, out.get("items"))
     return out
+
+
+# ===========================================================================
+# 选股历史自动存档（小白 / 策略 / 条件 每次执行后落库，便于过后回看胜率）
+# ===========================================================================
+
+def _norm_screen_items(raw_items):
+    """把各模块返回的股票条目归一化为 {code, name, price, change_pct}。"""
+    out = []
+    for it in raw_items or []:
+        code = it.get("code")
+        if not code:
+            continue
+        price = it.get("price")
+        if price is None:
+            price = it.get("close") or it.get("current")
+        out.append({
+            "code": code,
+            "name": it.get("name", "") or "",
+            "price": price,
+            "change_pct": it.get("change_pct"),
+        })
+    return out
+
+
+def _save_screen_history(module, title, params, raw_items):
+    """静默存档一次选股结果；任何异常都不影响选股主流程。"""
+    try:
+        items = _norm_screen_items(raw_items)
+        if not items:
+            return
+        store.save_screen_history(module, title, params, items)
+    except Exception as e:
+        print(f"[screen-history] 存档失败(module={module}): {e}")
+
+
+# ===========================================================================
+# 选股历史回看：窗口胜率回测 + 历史列表/明细
+# ===========================================================================
+
+@app.post("/api/sim/window")
+def api_sim_window(payload: Dict[str, Any]):
+    """窗口胜率回测：对一批股票模拟 09:30–09:50 VWAP 买入、当天收盘结算。
+
+    纯统计，与虚拟盘资金/持仓完全隔离。codes 为 [{code, name}] 或纯代码串。
+    """
+    store.initialize()
+    raw = payload.get("codes") or []
+    if not isinstance(raw, list) or not raw:
+        raise HTTPException(400, "codes 不能为空")
+    codes = []
+    for c in raw:
+        if isinstance(c, str) and c.strip():
+            codes.append({"code": c.strip()})
+        elif isinstance(c, dict) and c.get("code"):
+            codes.append({"code": c["code"], "name": c.get("name", "")})
+    if not codes:
+        raise HTTPException(400, "codes 不能为空")
+    if len(codes) > 30:
+        codes = codes[:30]
+    try:
+        amount_per = float(payload.get("amount_per") or 10000.0)
+        days = int(payload.get("days") or 10)
+    except (TypeError, ValueError):
+        amount_per, days = 10000.0, 10
+    days = max(1, min(30, days))
+    try:
+        return wsim.window_winrate(codes, amount_per=amount_per, days=days)
+    except Exception as e:
+        raise HTTPException(502, f"回测计算失败：{e}")
+
+
+@app.get("/api/screen/history")
+def api_screen_history(module: Optional[str] = None,
+                       limit: int = Query(200, ge=1, le=1000)):
+    """选股历史列表（按时间倒序）。module 可过滤 newbie/strategy/screen。"""
+    store.initialize()
+    return {"items": store.list_screen_history(module=module, limit=limit)}
+
+
+@app.get("/api/screen/history/{hid}")
+def api_screen_history_detail(hid: int):
+    """选股历史明细（含当时存档的个股列表）。"""
+    store.initialize()
+    rec = store.get_screen_history(hid)
+    if not rec:
+        raise HTTPException(404, "记录不存在")
+    return rec
 
 
 # ===========================================================================

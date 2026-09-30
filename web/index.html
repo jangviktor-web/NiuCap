@@ -738,6 +738,28 @@ td .starbtn{font-size:16px}
 .mnote{font-size:12px;color:var(--tx3);line-height:1.7;margin-top:14px;
   padding-top:14px;border-top:1px dashed var(--line)}
 
+/* ---------- 历史选股 + 窗口胜率回测 ---------- */
+.btn.sm{height:30px;padding:0 12px;font-size:12px}
+.hisfilter{display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap}
+.histcard{border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-bottom:10px;background:var(--card)}
+.hc-top{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.hc-mod{font-size:11px;padding:2px 9px;border-radius:20px;color:#fff;font-weight:600}
+.hc-newbie{background:#3b82f6}.hc-strategy{background:#8b5cf6}.hc-screen{background:#0ea5e9}
+.hc-title{font-weight:600;color:var(--tx);font-size:14px}
+.hc-time{margin-left:auto;font-size:12px;color:var(--tx3)}
+.hc-bot{display:flex;align-items:center;justify-content:space-between;margin-top:9px}
+.hc-n{font-size:12px;color:var(--tx3)}
+.hc-actions{display:flex;gap:8px}
+.hist-empty{padding:28px;text-align:center;color:var(--tx3);font-size:13px;line-height:1.8}
+.sim-summary{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.sim-card{background:var(--bg2);border-radius:10px;padding:10px 6px;text-align:center}
+.sim-card .v{font-size:19px;font-weight:700;color:var(--tx)}
+.sim-card .l{font-size:11px;color:var(--tx3);margin-top:3px}
+.sim-up{color:var(--up)}.sim-down{color:var(--down)}
+.sim-tbl th,.sim-tbl td{padding:6px 8px;font-size:12px;text-align:right;white-space:nowrap}
+.sim-tbl th:first-child,.sim-tbl td:first-child{text-align:left}
+.sim-tbl th:nth-child(2),.sim-tbl td:nth-child(2){text-align:left}
+
 /* 列表条目 */
 .li{padding:9px 0;border-bottom:1px solid var(--line2);font-size:13px}
 .news-li{padding:9px 10px;border-bottom:1px solid var(--line2);font-size:13px;line-height:1.5}
@@ -867,6 +889,7 @@ td .starbtn{font-size:16px}
     <button data-tab="backtest">🧪 策略回测</button>
     <button data-tab="etf">🏦 ETF筛选</button>
     <button data-tab="screen">🎯 条件选股</button>
+    <button data-tab="history">📜 历史选股</button>
     <button data-tab="stock">📈 个股分析</button>
     <button data-tab="limitup">🔥 连板梯队</button>
     <button data-tab="theme">🎯 题材雷达</button>
@@ -1896,6 +1919,25 @@ td .starbtn{font-size:16px}
     </div>
   </div>
 
+  <!-- ================= 历史选股 ================= -->
+  <div class="tab" id="tab-history">
+    <div class="card">
+      <div class="card-h">
+        <h2>历史选股</h2>
+        <div class="meta" id="histMeta">每次在【小白选股】【策略选股】【条件选股】跑完，结果会自动存档到这里，过后可回看这批票的胜率</div>
+      </div>
+      <div class="card-b">
+        <div class="hisfilter" id="histFilter">
+          <button class="btn sm on" data-hf="">全部</button>
+          <button class="btn sm ghost" data-hf="newbie">小白</button>
+          <button class="btn sm ghost" data-hf="strategy">策略</button>
+          <button class="btn sm ghost" data-hf="screen">条件</button>
+        </div>
+        <div id="histList"><div class="load"><span class="spin"></span>加载中…</div></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ================= 关于 ================= -->
   <div class="tab" id="tab-about">
     <div class="card">
@@ -2067,6 +2109,8 @@ function switchTab(want){
   if(want === 'theme' && !thState.loaded) loadTheme();
   // 懒加载：首次进入「后台管理」时拉取
   if(want === 'admin') loadAdmin();
+  // 进入「历史选股」即拉取记录
+  if(want === 'history') loadScreenHistory();
 }
 document.querySelectorAll('.tabs button').forEach(function(b){
   b.onclick = function(){ switchTab(b.dataset.tab); };
@@ -8975,6 +9019,178 @@ document.addEventListener('click', function(ev){
     if((e.ctrlKey||e.metaKey)&&(e.key==='k'||e.key==='K')){ e.preventDefault(); toggleCmd(); }
   });
 })();
+</script>
+
+<!-- 胜率回测结果 -->
+<div class="modal" id="simModal">
+  <div class="mbox" style="max-width:680px">
+    <div class="mh"><b id="simModalTitle">窗口胜率回测</b><button class="mclose" onclick="closeModal('simModal')">✕</button></div>
+    <div class="mb" id="simModalBody"></div>
+  </div>
+</div>
+<!-- 批量加入自选：选分组 -->
+<div class="modal" id="folderModal">
+  <div class="mbox">
+    <div class="mh"><b>批量加入自选</b><button class="mclose" onclick="closeModal('folderModal')">✕</button></div>
+    <div class="mb" id="folderModalBody"></div>
+  </div>
+</div>
+
+<script>
+/* ================= 历史选股 + 窗口胜率回测 ================= */
+var MODULE_LABEL = {newbie:'小白选股', strategy:'策略选股', screen:'条件选股'};
+
+function fmtHistTime(ts){
+  var d = new Date(ts*1000), p = function(n){ return (n<10?'0':'')+n; };
+  return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
+}
+
+function loadScreenHistory(module){
+  var box = $('histList');
+  if(box) box.innerHTML = '<div class="load"><span class="spin"></span>加载中…</div>';
+  var url = '/api/screen/history' + (module ? ('?module='+encodeURIComponent(module)) : '');
+  fetch(url).then(function(r){ return r.json(); }).then(function(d){
+    var items = d.items || [];
+    if(!box) return;
+    if(!items.length){
+      box.innerHTML = '<div class="hist-empty">还没有选股记录。去【小白选股】【策略选股】【条件选股】跑一次，结果就会自动存档到这里。</div>';
+      return;
+    }
+    box.innerHTML = items.map(function(r){
+      return '<div class="histcard" data-hid="'+r.id+'">'+
+        '<div class="hc-top"><span class="hc-mod hc-'+r.module+'">'+MODULE_LABEL[r.module]+'</span>'+
+        '<span class="hc-title">'+attr(r.title||'')+'</span>'+
+        '<span class="hc-time">'+fmtHistTime(r.created_at)+'</span></div>'+
+        '<div class="hc-bot"><span class="hc-n">'+r.item_count+' 只</span>'+
+        '<span class="hc-actions"><button class="btn sm" data-act="win" data-hid="'+r.id+'">看胜率</button>'+
+        '<button class="btn sm ghost" data-act="batch" data-hid="'+r.id+'">批量加自选</button></span></div>'+
+        '</div>';
+    }).join('');
+  }).catch(function(){ if(box) box.innerHTML='<div class="hist-empty">加载失败，请重试</div>'; });
+}
+
+function bindHistList(){
+  var box = $('histList'); if(!box || box._hb) return; box._hb = true;
+  box.addEventListener('click', function(ev){
+    var btn = ev.target.closest('[data-act]'); if(!btn) return;
+    var hid = btn.getAttribute('data-hid');
+    if(btn.getAttribute('data-act')==='win') histShowWin(hid);
+    else if(btn.getAttribute('data-act')==='batch') histBatchWatch(hid);
+  });
+}
+
+function histShowWin(hid){
+  fetch('/api/screen/history/'+hid).then(function(r){ return r.json(); }).then(function(rec){
+    if(!rec || !rec.items || !rec.items.length){ wtToast('该记录没有个股'); return; }
+    showWinRate(rec.items, rec.title);
+  }).catch(function(){ wtToast('读取失败'); });
+}
+
+function showWinRate(items, title){
+  $('simModalTitle').textContent = '窗口胜率回测 · ' + (title||'');
+  $('simModalBody').innerHTML = '<div class="load"><span class="spin"></span>正在回测（拉取近 10 个交易日 09:30–09:50 分钟线）…</div>';
+  openModal('simModal');
+  var codes = (items||[]).map(function(i){ return {code:i.code, name:i.name}; });
+  fetch('/api/sim/window', {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({codes:codes, amount_per:10000, days:10})})
+   .then(function(r){ return r.json(); }).then(function(d){ renderSimModal(d, title); })
+   .catch(function(e){ $('simModalBody').innerHTML='<div class="hist-empty">回测失败：'+attr(e)+'</div>'; });
+}
+
+function simCard(v, l, sub, up){
+  var cls = up===true ? ' sim-up' : (up===false ? ' sim-down' : '');
+  return '<div class="sim-card"><div class="v'+cls+'">'+attr(v)+'</div><div class="l">'+attr(l)+(sub!=null?(' · '+sub):'')+'</div></div>';
+}
+
+function renderSimModal(d, title){
+  if(d.detail || d.error){ $('simModalBody').innerHTML='<div class="hist-empty">'+(d.detail||d.error)+'</div>'; return; }
+  var s = d.summary || {};
+  var pct = function(x){ return (x*100).toFixed(1)+'%'; };
+  var sumHtml = '<div class="sim-summary">'+
+    simCard(s.codes, '覆盖股票')+
+    simCard(s.samples, '样本(股·日)')+
+    simCard(pct(s.limit_up_rate), '涨停率', s.limit_up_cnt)+
+    simCard(pct(s.win_rate), '上涨率', s.up_cnt)+
+    simCard((s.avg_ret>=0?'+':'')+s.avg_ret+'%', '平均涨幅', null, s.avg_ret>=0)+
+    simCard((s.total_pnl>=0?'+':'')+s.total_pnl, '累计盈亏(每只1万)', null, s.total_pnl>=0)+
+    '</div>';
+  var rows = (d.items||[]).map(function(it){
+    var retCls = it.avg_ret>=0?'sim-up':'sim-down';
+    return '<tr><td>'+attr(it.code)+'</td><td>'+attr(it.name||'')+'</td><td>'+it.samples+'</td>'+
+      '<td>'+pct(it.limit_up_rate)+'</td><td>'+pct(it.win_rate)+'</td>'+
+      '<td class="'+retCls+'">'+(it.avg_ret>=0?'+':'')+it.avg_ret+'%</td>'+
+      '<td class="'+(it.best>=0?'sim-up':'sim-down')+'">'+(it.best>=0?'+':'')+it.best+'%</td>'+
+      '<td class="'+(it.worst>=0?'sim-up':'sim-down')+'">'+(it.worst>=0?'+':'')+it.worst+'%</td>'+
+      '<td class="'+(it.total_pnl>=0?'sim-up':'sim-down')+'">'+(it.total_pnl>=0?'+':'')+it.total_pnl+'</td></tr>';
+  }).join('');
+  var note = '<div class="mnote">统计口径：模拟在每天 09:30–09:50 窗口按成交量加权均价(VWAP)买入、当天收盘结算；'+
+    '涨停按前收×(1+涨停幅度)判断（主板10%/创业板20%/北交所30%，ST 5%）。纯历史统计，与虚拟盘资金无关。样本为最近 '+(d.days||10)+' 个交易日。</div>';
+  $('simModalBody').innerHTML = sumHtml +
+    '<div class="tblw" style="max-height:46vh;overflow:auto"><table class="tbl sim-tbl"><thead><tr>'+
+    '<th>代码</th><th>名称</th><th>样本</th><th>涨停率</th><th>胜率</th><th>均涨</th><th>最佳</th><th>最差</th><th>盈亏</th></tr></thead><tbody>'+
+    rows + '</tbody></table></div>' + note;
+}
+
+function histBatchWatch(hid){
+  fetch('/api/screen/history/'+hid).then(function(r){ return r.json(); }).then(function(rec){
+    if(!rec || !rec.items || !rec.items.length){ wtToast('该记录没有个股'); return; }
+    openFolderModal(rec.items, rec.title);
+  }).catch(function(){ wtToast('读取失败'); });
+}
+
+function openFolderModal(items, title){
+  fetch('/api/watch/folders').then(function(r){ return r.json(); }).then(function(d){
+    var folders = d.folders || [];
+    var opts = folders.map(function(f){ return '<option value="'+f.id+'">'+attr(f.name)+(f.is_default?'（默认）':'')+'</option>'; }).join('');
+    $('folderModalBody').innerHTML =
+      '<div class="fg"><label>加入分组</label><select class="sel in" id="fmFolder">'+
+      (opts || '<option value="">默认分组</option>')+'</select></div>'+
+      '<div class="fg"><label>或新建分组</label><input class="in" id="fmNew" placeholder="输入新分组名（留空则不新建）"></div>'+
+      '<div class="merr" id="fmErr"></div>'+
+      '<button class="btn msub" id="fmConfirm">确认加入 '+items.length+' 只</button>'+
+      '<div class="msw">按代码批量加入；已存在的会跳过</div>';
+    openModal('folderModal');
+    $('fmConfirm').onclick = function(){
+      var fid = $('fmFolder').value ? parseInt($('fmFolder').value,10) : null;
+      var nm = ($('fmNew').value||'').trim();
+      $('fmErr').textContent='';
+      function doAdd(fid){
+        fetch('/api/watch/items/batch', {method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({codes:items.map(function(i){ return {code:i.code, name:i.name}; }), folder_id:fid, note:title||''})})
+         .then(function(r){ return r.json(); }).then(function(j){
+            closeModal('folderModal');
+            wtToast('已加入自选 '+(j.added||0)+' 只'+( (j.failed&&j.failed.length)?('，失败 '+(j.failed.length)+' 只'):'' ));
+            items.forEach(function(i){ wtState.cachedCodes[i.code]=true; });
+         }).catch(function(e){ $('fmErr').textContent='加入失败：'+attr(e); });
+      }
+      if(nm){
+        fetch('/api/watch/folders', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name:nm})})
+         .then(function(r){ return r.json(); }).then(function(j){ doAdd(j.folder?j.folder.id:null); })
+         .catch(function(e){ $('fmErr').textContent='建分组失败：'+attr(e); });
+      } else { doAdd(fid); }
+    };
+  }).catch(function(){ wtToast('读取分组失败'); });
+}
+
+function openModal(id){ var m=$(id); if(m) m.classList.add('on'); }
+function closeModal(id){ var m=$(id); if(m) m.classList.remove('on'); }
+['simModal','folderModal'].forEach(function(id){
+  var m=$(id); if(m) m.addEventListener('click', function(e){ if(e.target===m) closeModal(id); });
+});
+document.addEventListener('keydown', function(e){
+  if(e.key==='Escape'){ closeModal('simModal'); closeModal('folderModal'); }
+});
+(function(){
+  var f=$('histFilter'); if(f && !f._b){ f._b=true;
+    f.addEventListener('click', function(ev){
+      var b=ev.target.closest('[data-hf]'); if(!b) return;
+      f.querySelectorAll('button').forEach(function(x){ x.classList.remove('on'); });
+      b.classList.add('on');
+      loadScreenHistory(b.getAttribute('data-hf'));
+    });
+  }
+})();
+bindHistList();
 </script>
 </body>
 </html>

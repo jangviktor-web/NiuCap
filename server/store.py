@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import contextvars
+import json
 import os
 import re
 import threading
@@ -549,6 +550,20 @@ CREATE TABLE IF NOT EXISTS bar_sync (
     status      TEXT NOT NULL DEFAULT 'ok',
     err         TEXT NOT NULL DEFAULT ''
 );
+
+-- 选股历史：小白/策略/条件每次执行后自动存档，便于过后回看胜率（纯统计，与虚拟盘隔离）
+-- user_id 不挂外键：匿名用户统一存 0，单机自用不分用户；预留列便于以后按用户隔离
+CREATE TABLE IF NOT EXISTS screen_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL DEFAULT 0,
+    module      TEXT    NOT NULL,          -- newbie | strategy | screen
+    title       TEXT    NOT NULL DEFAULT '',
+    params_json TEXT    NOT NULL DEFAULT '{}',
+    items_json  TEXT    NOT NULL DEFAULT '[]',
+    item_count  INTEGER NOT NULL DEFAULT 0,
+    created_at  REAL    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_screen_hist_user ON screen_history(user_id, created_at DESC);
 """
 
 # MySQL / TiDB 版：自增改 AUTO_INCREMENT，索引列一律 VARCHAR
@@ -716,6 +731,19 @@ CREATE TABLE IF NOT EXISTS bar_sync (
     status      VARCHAR(16) NOT NULL DEFAULT 'ok',
     err         VARCHAR(512) NOT NULL DEFAULT ''
 );
+
+-- 选股历史（见 SQLite 版注释；user_id 不挂外键，匿名统一 0）
+CREATE TABLE IF NOT EXISTS screen_history (
+    id          BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id     BIGINT  NOT NULL DEFAULT 0,
+    module      VARCHAR(16) NOT NULL,
+    title       VARCHAR(255) NOT NULL DEFAULT '',
+    params_json TEXT    NOT NULL DEFAULT '{}',
+    items_json  TEXT    NOT NULL DEFAULT '[]',
+    item_count  BIGINT  NOT NULL DEFAULT 0,
+    created_at  DOUBLE NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_screen_hist_user ON screen_history(user_id, created_at DESC);
 """
 
 
@@ -734,6 +762,66 @@ def _begin(c) -> None:
     """
     if not IS_MYSQL:
         c.execute("BEGIN IMMEDIATE")
+
+
+# ===========================================================================
+# 选股历史（小白 / 策略 / 条件 每次执行后自动存档；纯统计，与虚拟盘隔离）
+# ===========================================================================
+
+def save_screen_history(module: str, title: str, params: Dict[str, Any],
+                        items: List[Dict[str, Any]], user_id: int = 0) -> int:
+    """存档一次选股结果。返回新记录 id。items 每项至少含 code。"""
+    store_initialize = initialize
+    store_initialize()
+    c = _conn()
+    c.execute(
+        "INSERT INTO screen_history(user_id, module, title, params_json, "
+        "items_json, item_count, created_at) VALUES(?,?,?,?,?,?,?)",
+        (user_id, module, title or "",
+         json.dumps(params or {}, ensure_ascii=False),
+         json.dumps(items or [], ensure_ascii=False),
+         len(items or []), time.time()),
+    )
+    c.commit()
+    return _new_row_id(c)
+
+
+def list_screen_history(module: Optional[str] = None,
+                        limit: int = 200) -> List[Dict[str, Any]]:
+    """列出选股历史（按时间倒序）。module 可过滤 newbie/strategy/screen。"""
+    initialize()
+    c = _conn()
+    if module:
+        rows = c.execute(
+            "SELECT id, module, title, item_count, created_at FROM screen_history "
+            "WHERE module=? ORDER BY created_at DESC LIMIT ?",
+            (module, limit)).fetchall()
+    else:
+        rows = c.execute(
+            "SELECT id, module, title, item_count, created_at FROM screen_history "
+            "ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_screen_history(hid: int) -> Optional[Dict[str, Any]]:
+    """取单条历史（含 params / items 解析）。不存在返回 None。"""
+    initialize()
+    c = _conn()
+    r = c.execute(
+        "SELECT id, user_id, module, title, params_json, items_json, "
+        "item_count, created_at FROM screen_history WHERE id=?", (hid,)).fetchone()
+    if not r:
+        return None
+    d = dict(r)
+    try:
+        d["params"] = json.loads(d.pop("params_json") or "{}")
+    except Exception:
+        d["params"] = {}
+    try:
+        d["items"] = json.loads(d.pop("items_json") or "[]")
+    except Exception:
+        d["items"] = []
+    return d
 
 
 def initialize() -> Dict[str, Any]:
