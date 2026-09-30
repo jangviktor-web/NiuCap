@@ -443,11 +443,111 @@ def modules_status() -> Dict[str, Any]:
         add("bars_sync", "日线同步守门", "#38/#85",
             "ready" if r["c"] else "idle",
             f"{r['c'] or 0} 只标的已登记，失败 {r['f'] or 0} 只"
-            + (f"，最近 {str(r['m'])[:19]}" if r["m"] else ""))
+            + (f"，最近 {_fmt_ts(r['m'])}" if r["m"] else ""))
     except Exception as e:
         add("bars_sync", "日线同步守门", "#38/#85", "unknown", f"{type(e).__name__}: {e}")
 
+    # #103/#104/#105 的新探测单独封装：整体兜底，坏掉也不牵连上面这批
+    try:
+        items.extend(_new_modules_status())
+    except Exception as e:
+        items.append({"key": "new_modules", "name": "新模块探测",
+                      "task": "#103/#104/#105", "state": "unknown",
+                      "detail": f"{type(e).__name__}: {e}"})
+
     return {"items": items, "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+
+
+def _new_modules_status() -> List[Dict[str, Any]]:
+    """近几轮新增模块的纳管（#103 交易时段守卫 / #104 交易日历 / #105 选股历史）。
+
+    单独成一个函数：旧模块的探测逻辑一行都不动，新增的挂在这里。
+    """
+    items: List[Dict[str, Any]] = []
+
+    def add(key, name, task, state, detail, extra=None):
+        d = {"key": key, "name": name, "task": task, "state": state, "detail": detail}
+        if extra:
+            d.update(extra)
+        items.append(d)
+
+    # --- #103 虚拟盘交易时段守卫 ---
+    try:
+        import datasource as ds
+        st = ds.market_state()
+        # 口径与 app._require_tradable 一致：连续竞价 + 集合竞价才允许买卖
+        tradable = st.get("state") in ("trading", "auction")
+        # 状态恒为 active：守卫一直在工作，"空闲"会被误读成没生效
+        add("trade_guard", "虚拟盘交易时段守卫", "#103", "active",
+            f"{st.get('label') or st.get('state')} → "
+            + ("允许买卖" if tradable else "已拦截买卖"),
+            {"market_state": st.get("state"), "tradable": tradable})
+    except Exception as e:
+        add("trade_guard", "虚拟盘交易时段守卫", "#103", "unknown",
+            f"{type(e).__name__}: {e}")
+
+    # --- #104 本地交易日历（节假日 / 补班） ---
+    try:
+        import holidays as hl
+        today = datetime.now().strftime("%Y-%m-%d")
+        hol, mk = hl.HOLIDAYS or set(), hl.MAKEUP_WORKDAYS or set()
+        ys = sorted({d[:4] for d in hol})
+        future = sorted(d for d in hol if d >= today)
+        add("calendar", "本地交易日历", "#104",
+            "ready" if hol else "idle",
+            f"休市 {len(hol)} 天 / 补班 {len(mk)} 天（覆盖 {'、'.join(ys) or '—'} 年）"
+            + (f"，下一个休市日 {future[0]}" if future
+               else "，⚠ 表中已无未来休市日，需补充新年度"),
+            {"years": ys, "future_holidays": len(future)})
+    except Exception as e:
+        add("calendar", "本地交易日历", "#104", "unknown", f"{type(e).__name__}: {e}")
+
+    # --- #105 选股历史（三选股页自动存档） ---
+    try:
+        import store as _s
+        st = _s.count_screen_history()
+        row = _s._conn().execute(
+            "SELECT COUNT(*) c, MAX(created_at) m FROM screen_history "
+            "WHERE created_at > ?", (time.time() - 86400,)).fetchone()
+        _label = {"newbie": "小白选股", "strategy": "策略选股", "screen": "条件选股"}
+        mods = "、".join(f"{_label.get(k, k)} {v}"
+                        for k, v in (st.get("by_module") or {}).items())
+        add("screen_history", "选股历史存档", "#105",
+            "ready" if st.get("total") else "idle",
+            f"累计 {st['total']} 条（{mods or '—'}），近 24 小时 {row['c'] or 0} 条"
+            + (f"，最新 {_fmt_ts(row['m'])}" if row["m"] else "")
+            + (f"，未归属 {st['orphan']} 条" if st.get("orphan") else ""),
+            {"total": st.get("total"), "orphan": st.get("orphan"),
+             "by_module": st.get("by_module")})
+    except Exception as e:
+        add("screen_history", "选股历史存档", "#105", "unknown",
+            f"{type(e).__name__}: {e}")
+
+    # --- #105 自选股分组 ---
+    try:
+        import store as _s
+        f = _s._conn().execute("SELECT COUNT(*) c FROM folders").fetchone()["c"]
+        it = _s._conn().execute("SELECT COUNT(*) c FROM watch_items").fetchone()["c"]
+        add("watch_folder", "自选股分组", "#105",
+            "ready" if f else "idle",
+            f"全站 {f} 个分组 · {it} 条自选（支持批量加入自选）")
+    except Exception as e:
+        add("watch_folder", "自选股分组", "#105", "unknown", f"{type(e).__name__}: {e}")
+
+    # --- #105 窗口胜率回测所依赖的分钟数据源 ---
+    try:
+        import datasource as ds
+        s = ds.intraday_source_status() or {}
+        add("intraday", "分钟数据源（回测依赖）", "#105",
+            "ready" if s.get("eltdx") else "idle",
+            f"主源 {s.get('primary') or '—'}"
+            + (f" · eltdx {s.get('version')}" if s.get("version") else "")
+            + (f" · {s.get('note')}" if s.get("note") else ""))
+    except Exception as e:
+        add("intraday", "分钟数据源（回测依赖）", "#105", "unknown",
+            f"{type(e).__name__}: {e}")
+
+    return items
 
 
 # ===========================================================================

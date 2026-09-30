@@ -3566,7 +3566,10 @@ var ADMIN_TABS = [
   {key:'database', name:'数据库', emo:'🛠️',
    desc:'数据库体积画像：主库 / WAL / SHM 分别多大、页统计与可回收空间、磁盘余量；各表行数与占用（含索引 TOP5）。WAL 可一键落盘（默认不阻塞，也可截断收回文件）——曾出现 228MB 僵死，靠这个面板一眼看出来。'},
   {key:'modules', name:'模块状态', emo:'🧩',
-   desc:'新模块纳管：#95 市场情绪周期（缓存到哪天、当前阶段）、#88 双源快讯（条数与源错误）、#96 监控中心（规则数 / 告警数 / 未读 / 推送渠道）、日线同步守门。只做本地探测，不联网。'},
+   desc:'新模块纳管：#95 市场情绪周期（缓存到哪天、当前阶段）、#88 双源快讯（条数与源错误）、#96 监控中心（规则数 / 告警数 / 未读 / 推送渠道）、' +
+        '<b>#103 交易时段守卫</b>（当前是否允许买卖）、<b>#104 本地交易日历</b>（覆盖年份、休市与补班天数、下一个休市日、缺年度会告警）、' +
+        '<b>#105 选股历史存档</b>（累计数 / 分模块分布 / 近 24 小时 / 未归属条数）、自选股分组（分组与条目数）、' +
+        '<b>分钟数据源</b>（回测依赖，主源与 eltdx 版本）与日线同步守门。只做本地探测，不联网。'},
   {key:'services', name:'缓存管理', emo:'🧹',
    desc:'统一查看并清理四类缓存：策略体检（内存单槽）、情绪周期（内存 + 磁盘 JSON）、快讯流（30 秒 TTL）、全市场行情快照（只读）。每项标注位置、体量与清理后的代价。'},
   {key:'evalcache', name:'体检缓存', emo:'🎯',
@@ -4497,9 +4500,11 @@ function admModules(el){
             '<th class="ctr">任务</th><th class="ctr">状态</th><th>详情</th>' +
             '</tr></thead><tbody>';
     items.forEach(function(m){
-      var cls = m.state === 'ready' ? 'up' : (m.state === 'unknown' ? '' : '');
+      var cls = (m.state === 'ready' || m.state === 'active') ? 'up'
+              : (m.state === 'unknown' ? '' : '');
       var txt = m.state === 'ready' ? '● 就绪'
-              : (m.state === 'unknown' ? '? 未知' : '○ 空闲');
+              : (m.state === 'active' ? '● 生效'
+              : (m.state === 'unknown' ? '? 未知' : '○ 空闲'));
       var extra = '';
       if(m.webhook){
         extra = '<div style="margin-top:3px;color:var(--tx3)">推送：' +

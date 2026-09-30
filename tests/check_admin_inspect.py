@@ -180,6 +180,13 @@ rec("用户列表带 screen_cnt",
     st == 200 and _a_row is not None and _a_row.get("screen_cnt", 0) >= 2,
     f"status={st} screen_cnt={(_a_row or {}).get('screen_cnt')}")
 
+# ---------------------------------------------------------------- 6 模块状态纳管
+st, d = req("GET", "/api/admin/modules", cookie=ADM_TOK)
+_tasks = set((x.get("task") or "") for x in d.get("items", []))
+rec("模块状态含 #103/#104/#105",
+    st == 200 and {"#103", "#104", "#105"} <= _tasks,
+    f"status={st} tasks={sorted(_tasks)}")
+
 # ---------------------------------------------------------------- 清理
 try:
     c = store._conn()
