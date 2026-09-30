@@ -104,6 +104,23 @@ def main():
     ok = rec("历史·无效id=404", stx == 404, f"st={stx}")
     ok_all &= ok
 
+    # ---- 4. 入选后表现端点 ----
+    # 取一条真实记录（若有），否则用刚建的单元测试记录
+    st_l, jl = req("GET", "/api/screen/history")
+    rec_id = (jl.get("items") or [{}])[0].get("id")
+    if rec_id:
+        st_p, jp = req("GET", f"/api/screen/history/{rec_id}/performance")
+        ok = rec("表现·端点200", st_p == 200, f"st={st_p}")
+        ok_all &= ok
+        sm = (jp or {}).get("summary", {})
+        ok = rec("表现·汇总结构",
+                 all(k in sm for k in ("valid", "up_cnt", "win_rate", "avg_chg")),
+                 f"valid={sm.get('valid')} win={sm.get('win_rate')}")
+        ok_all &= ok
+        # 今天(休市)存的记录 base==cur → chg 全 0；不在此断言非零
+    else:
+        rec("表现·无记录可测(跳过)", True)
+
     # ---- 3. 三选股端点自动存档路径 ----
     st_s, js = req("GET", "/api/screener?pe_max=20&limit=5")
     ok = rec("选股·screener 200", st_s == 200, f"st={st_s}")

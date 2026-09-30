@@ -9152,6 +9152,13 @@ document.addEventListener('click', function(ev){
     <div class="mb" id="simModalBody"></div>
   </div>
 </div>
+<!-- 入选后表现 -->
+<div class="modal" id="perfModal">
+  <div class="mbox" style="max-width:680px">
+    <div class="mh"><b id="perfModalTitle">入选后表现</b><button class="mclose" onclick="closeModal('perfModal')">✕</button></div>
+    <div class="mb" id="perfModalBody"></div>
+  </div>
+</div>
 <!-- 批量加入自选：选分组 -->
 <div class="modal" id="folderModal">
   <div class="mbox">
@@ -9232,7 +9239,8 @@ function loadScreenHistory(module){
         '<span class="hc-title">'+attr(r.title||'')+'</span>'+
         '<span class="hc-time">'+fmtHistTime(r.created_at)+'</span></div>'+
         '<div class="hc-bot"><span class="hc-n">'+r.item_count+' 只</span>'+
-        '<span class="hc-actions"><button class="btn sm" data-act="win" data-hid="'+r.id+'">看胜率</button>'+
+        '<span class="hc-actions"><button class="btn sm" data-act="perf" data-hid="'+r.id+'">看表现</button>'+
+        '<button class="btn sm ghost" data-act="win" data-hid="'+r.id+'">看胜率</button>'+
         '<button class="btn sm ghost" data-act="batch" data-hid="'+r.id+'">批量加自选</button></span></div>'+
         '</div>';
     }).join('');
@@ -9245,6 +9253,7 @@ function bindHistList(){
     var btn = ev.target.closest('[data-act]'); if(!btn) return;
     var hid = btn.getAttribute('data-hid');
     if(btn.getAttribute('data-act')==='win') histShowWin(hid);
+    else if(btn.getAttribute('data-act')==='perf') histShowPerf(hid);
     else if(btn.getAttribute('data-act')==='batch') histBatchWatch(hid);
   });
 }
@@ -9254,6 +9263,46 @@ function histShowWin(hid){
     if(!rec || !rec.items || !rec.items.length){ wtToast('该记录没有个股'); return; }
     showWinRate(rec.items, rec.title);
   }).catch(function(){ wtToast('读取失败'); });
+}
+
+function histShowPerf(hid){
+  $('perfModalTitle').textContent = '入选后表现';
+  $('perfModalBody').innerHTML = '<div class="load"><span class="spin"></span>正在计算入选后涨跌幅…</div>';
+  openModal('perfModal');
+  fetch('/api/screen/history/'+hid+'/performance').then(function(r){ return r.json(); }).then(function(d){
+    renderPerfModal(d);
+  }).catch(function(e){
+    $('perfModalBody').innerHTML = '<div class="hist-empty">计算失败：' + attr(e) + '</div>';
+  });
+}
+
+function renderPerfModal(d){
+  if(d.detail || d.error){ $('perfModalBody').innerHTML = '<div class="hist-empty">' + (d.detail||d.error) + '</div>'; return; }
+  var s = d.summary || {};
+  var pct = function(x){ return (x>=0?'+':'') + x + '%'; };
+  var sumHtml = '<div class="sim-summary">' +
+    simCard(pct(s.avg_chg), '平均涨跌幅', null, s.avg_chg>=0) +
+    simCard((s.win_rate*100).toFixed(1)+'%', '上涨胜率', s.up_cnt+'/'+s.valid) +
+    simCard(pct(s.best), '最佳', null, s.best>=0) +
+    simCard(pct(s.worst), '最差', null, s.worst>=0) +
+    simCard((s.total_pnl>=0?'+':'')+s.total_pnl, '累计盈亏(每只1万)', null, s.total_pnl>=0) +
+    '</div>';
+  var rows = (d.items||[]).map(function(it){
+    if(it.chg == null){
+      return '<tr><td>'+attr(it.code)+'</td><td>'+attr(it.name||'')+'</td><td colspan="4" style="color:var(--tx3)">无行情/无基准价</td></tr>';
+    }
+    var cls = it.up ? 'sim-up' : 'sim-down';
+    return '<tr><td>'+attr(it.code)+'</td><td>'+attr(it.name||'')+'</td>'+
+      '<td>'+it.base+'</td><td>'+it.cur+'</td>'+
+      '<td class="'+cls+'">'+pct(it.chg)+'</td>'+
+      '<td class="'+(it.pnl>=0?'sim-up':'sim-down')+'">'+(it.pnl>=0?'+':'')+it.pnl+'</td></tr>';
+  }).join('');
+  var note = '<div class="mnote">基准为入选时价格（缺失时取入选日收盘），对比最新价（实时；休市时为最近收盘）。'+
+    '即「从加入历史选股那天持有至今」的表现。入选日：'+(d.baseline_date||'-')+'。</div>';
+  $('perfModalBody').innerHTML = sumHtml +
+    '<div class="tblw" style="max-height:46vh;overflow:auto"><table class="tbl sim-tbl"><thead><tr>'+
+    '<th>代码</th><th>名称</th><th>入选价</th><th>最新价</th><th>涨跌幅</th><th>盈亏</th></tr></thead><tbody>'+
+    rows + '</tbody></table></div>' + note;
 }
 
 function showWinRate(items, title){
@@ -9344,11 +9393,11 @@ function openFolderModal(items, title){
 
 function openModal(id){ var m=$(id); if(m) m.classList.add('on'); }
 function closeModal(id){ var m=$(id); if(m) m.classList.remove('on'); }
-['simModal','folderModal'].forEach(function(id){
+['simModal','folderModal','perfModal'].forEach(function(id){
   var m=$(id); if(m) m.addEventListener('click', function(e){ if(e.target===m) closeModal(id); });
 });
 document.addEventListener('keydown', function(e){
-  if(e.key==='Escape'){ closeModal('simModal'); closeModal('folderModal'); }
+  if(e.key==='Escape'){ closeModal('simModal'); closeModal('folderModal'); closeModal('perfModal'); }
 });
 (function(){
   var f=$('histFilter'); if(f && !f._b){ f._b=true;

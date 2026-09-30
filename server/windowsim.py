@@ -181,3 +181,89 @@ if __name__ == "__main__":
               "涨停率=%.0f%%" % (it["limit_up_rate"] * 100),
               "胜率=%.0f%%" % (it["win_rate"] * 100),
               "均涨=%.2f%%" % it["avg_ret"])
+
+
+def since_added_perf(items: List[Dict[str, Any]], baseline_date: str,
+                     amount_per: float = 10000.0) -> Dict[str, Any]:
+    """入选后表现：以入选价（或入选日收盘兜底）为基准，对比最新价，统计涨跌幅/胜率。
+
+    用于「历史选股」里回看某次选股从加入那天起到现在涨了还是跌了。
+    与 window_winrate 的区别：这里是「持有至今」的实盘式回看，不模拟盘中成交。
+    """
+    codes = [i.get("code") for i in items if i.get("code")]
+    if not codes:
+        return {"baseline_date": baseline_date, "amount_per": amount_per,
+                "items": [], "summary": _empty_perf_summary()}
+
+    # 最新价（实时；休市时为最近收盘）
+    try:
+        quotes = ds.quote_tencent(codes) or {}
+    except Exception:
+        quotes = {}
+
+    # 兜底基准：入选价缺失时，取入选日及之前最近一根日线收盘
+    missing = [it for it in items if not (it.get("price") and float(it.get("price") or 0) > 0)]
+    daily_close: Dict[str, float] = {}
+    if missing:
+        try:
+            for it in missing:
+                c = it.get("code")
+                if c in daily_close:
+                    continue
+                kl = ds.get_kline(c, "1d", 260) or []
+                best = None
+                for b in kl:
+                    d = (b.get("date") or "")[:10]
+                    if d <= baseline_date:
+                        best = b
+                    elif d > baseline_date:
+                        break
+                if best:
+                    daily_close[c] = float(best.get("close") or 0)
+        except Exception:
+            daily_close = {}
+
+    out = []
+    for it in items:
+        code = it.get("code")
+        name = it.get("name", "")
+        base = it.get("price")
+        if not (base and float(base or 0) > 0):
+            base = daily_close.get(code)
+        q = quotes.get(code) or {}
+        cur = q.get("price") or q.get("close")
+        if base and cur and float(base) > 0:
+            b = float(base)
+            c = float(cur)
+            chg = (c - b) / b * 100.0
+            out.append({"code": code, "name": name, "base": round(b, 2),
+                        "cur": round(c, 2), "chg": round(chg, 2),
+                        "up": chg > 0, "pnl": round(amount_per * chg / 100.0, 2)})
+        else:
+            out.append({"code": code, "name": name, "base": (round(float(base), 2) if base else None),
+                        "cur": (round(float(cur), 2) if cur else None),
+                        "chg": None, "up": None, "pnl": None})
+
+    valid = [r for r in out if r["chg"] is not None]
+    chgs = [r["chg"] for r in valid]
+    up_cnt = sum(1 for r in valid if r["up"])
+    return {
+        "baseline_date": baseline_date,
+        "amount_per": amount_per,
+        "items": out,
+        "summary": {
+            "total": len(out),
+            "valid": len(valid),
+            "up_cnt": up_cnt,
+            "win_rate": round(up_cnt / len(valid), 4) if valid else 0,
+            "avg_chg": round(sum(chgs) / len(chgs), 2) if chgs else 0,
+            "best": round(max(chgs), 2) if chgs else 0,
+            "worst": round(min(chgs), 2) if chgs else 0,
+            "total_pnl": round(amount_per * sum(chgs) / 100.0, 2) if chgs else 0,
+        },
+    }
+
+
+def _empty_perf_summary() -> Dict[str, Any]:
+    return {"total": 0, "valid": 0, "up_cnt": 0, "win_rate": 0,
+            "avg_chg": 0, "best": 0, "worst": 0, "total_pnl": 0}

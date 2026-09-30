@@ -2097,6 +2097,20 @@ def api_screen_history_detail(hid: int):
     return rec
 
 
+@app.get("/api/screen/history/{hid}/performance")
+def api_screen_history_performance(hid: int, amount_per: float = 10000.0):
+    """入选后表现：以入选价(或入选日收盘)为基准，对比最新价，统计涨跌幅/胜率。"""
+    store.initialize()
+    rec = store.get_screen_history(hid)
+    if not rec:
+        raise HTTPException(404, "记录不存在")
+    bd = datetime.fromtimestamp(rec["created_at"]).strftime("%Y-%m-%d")
+    try:
+        return wsim.since_added_perf(rec["items"], bd, amount_per=float(amount_per))
+    except Exception as e:
+        raise HTTPException(502, f"表现计算失败：{e}")
+
+
 # ===========================================================================
 # 自选股与分组（SQLite 持久化）
 #
