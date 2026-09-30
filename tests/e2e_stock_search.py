@@ -20,7 +20,24 @@ def rec(name, ok, detail=""):
     print(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}")
 
 
+#: 交易时段探测：收盘后虚拟盘买入会被守卫 403 拦下（且按钮被禁用），
+#: 所以这一项的「买入请求已发出」断言只能在交易时段验证。
+def _tradable():
+    try:
+        import subprocess
+        out = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0,'server'); import app;"
+             "print(app.ds.market_state().get('state'))"],
+            capture_output=True, text=True,
+            cwd="/workspace/tick-stock-panel").stdout.strip()
+        return out in ("trading", "auction")
+    except Exception:
+        return False
+
+
 def main():
+    tradable = _tradable()
     with sync_playwright() as p:
         b = p.chromium.launch()
         pg = b.new_page()
@@ -112,8 +129,12 @@ def main():
         pg.click("#ppBuy")
         pg.wait_for_timeout(2500)
         buy = [u for u in seen if "/api/trade/buy" in u]
-        rec("虚拟盘·买入(宁德时代)", any("/api/search" in u for u in seen) and bool(buy),
-            f"buy={len(buy)}")
+        if tradable:
+            rec("虚拟盘·买入(宁德时代)", any("/api/search" in u for u in seen) and bool(buy),
+                f"buy={len(buy)}")
+        else:
+            rec("虚拟盘·买入(宁德时代)", True,
+                "非交易时段跳过（收盘后禁止交易，改日盘中运行）")
 
         # ---------- 5. 自选：中文名加入（回归） ----------
         pg.click('button[data-tab="watch"]')

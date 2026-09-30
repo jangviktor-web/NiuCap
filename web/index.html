@@ -8516,6 +8516,9 @@ function doBuy(){
   var price = ($('ppBuyPrice').value || '').trim();
   if(!q){ wtToast('请填写股票代码或名称'); return; }
   if(!qty || qty <= 0){ wtToast('请填写买入数量'); return; }
+  if(!paperTradable()){
+    wtToast('当前' + paperSessionLine() + '，虚拟盘仅在交易时段可买卖'); return;
+  }
   resolveStock(q).then(function(it){
     if(!it) { wtToast('没找到「' + q + '」'); return; }
     var body = { code: it.code, qty: qty, name: it.name };
@@ -8536,6 +8539,9 @@ function doBuy(){
 }
 
 function doSell(code, name, qty, priceStr){
+  if(!paperTradable()){
+    wtToast('当前' + paperSessionLine() + '，虚拟盘仅在交易时段可买卖'); return;
+  }
   var body = { code: code, qty: qty };
   if(priceStr) body.price = parseFloat(priceStr);
   fetch('/api/trade/sell', {
@@ -8822,6 +8828,28 @@ document.addEventListener('click', function(ev){
     var toOpen=(24*60-M)+555;
     return {cls:'mc-closed', line:'已收盘 · 明日 09:15 集合竞价'};
   }
+  // 虚拟盘可交易判断：连续竞价(mc-open) + 集合竞价(mc-call)；午休/收盘/周末均不可。
+  // 仅作前端即时拦截（省一次无效请求），真正硬约束在后端 market_state 守卫。
+  function paperTradable(){
+    var s = (typeof mktSession==='function') ? mktSession(new Date()) : {cls:'mc-closed'};
+    return s.cls==='mc-open' || s.cls==='mc-call';
+  }
+  function paperSessionLine(){
+    var s = (typeof mktSession==='function') ? mktSession(new Date()) : {cls:'mc-closed'};
+    return s.line || '非交易时段';
+  }
+  // 非交易时段禁用买入按钮与持仓里的「卖出」按钮，避免误导用户点下去才报错。
+  function updatePaperTradeLock(){
+    var on = paperTradable();
+    var buyBtn = document.getElementById('ppBuy');
+    if(buyBtn) buyBtn.disabled = !on;
+    document.querySelectorAll('[data-ppsell]').forEach(function(el){ el.disabled = !on; });
+    var note = document.getElementById('ppBuyNote');
+    if(note){
+      note.textContent = on ? '' : '⌛ 当前' + paperSessionLine() + '，虚拟盘已暂停交易（仅交易时段可买卖）';
+      note.style.color = on ? '' : 'var(--tx3)';
+    }
+  }
   var clockEl=document.getElementById('mktClock');
   function renderMktClock(){
     if(!clockEl) return;
@@ -8829,6 +8857,7 @@ document.addEventListener('click', function(ev){
     clockEl.className='mktclock '+s.cls;
     clockEl.textContent=(s.cls==='mc-open'?'● ':'○ ')+s.line;
     clockEl.title='沪深交易时段（北京时间，忽略法定节假日）';
+    updatePaperTradeLock();
   }
   renderMktClock();
   setInterval(renderMktClock,1000);

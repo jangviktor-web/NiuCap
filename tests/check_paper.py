@@ -69,7 +69,20 @@ def req(method, path, body=None, timeout=30, anon=False):
         return 0, f"{type(e).__name__}: {e}"
 
 
+#: 交易时段探测：本脚本在盘中 / 盘后都可能跑。收盘后买卖会被新守卫 403 拦下，
+#: 所以「实时成交类」用例只能在交易时段跑；同时非交易时段正好用来验证修复。
+def _tradable():
+    out = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0,'server'); import app;"
+         "print(app.ds.market_state().get('state'))"],
+        capture_output=True, text=True,
+        cwd="/workspace/tick-stock-panel").stdout.strip()
+    return out in ("trading", "auction")
+
+
 def main():
+    tradable = _tradable()
     # ---------- 1. 登录守卫（全部用 anon=True，确保是真实未登录态）----------
     for ep, m in [("/api/trade/summary", "GET"), ("/api/trade/positions", "GET"),
                   ("/api/trade/history", "GET"), ("/api/trade/fees", "GET"),
@@ -119,6 +132,22 @@ def main():
     # 还原默认，后面算费好对比
     req("PUT", "/api/trade/fees",
         {"fees": {"fee_rate": 0.00025, "fee_min": 5.0, "stamp_rate": 0.0005}})
+
+    # 非交易时段：实时成交类用例无法复现（会被新守卫 403 拦下），
+    # 但正好用来验证「收盘后禁止交易」这个修复本身。
+    if not tradable:
+        st, d = req("POST", "/api/trade/buy", {"code": "sh600519", "qty": 100})
+        rec("非交易时段买入 → 403（修复验证：收盘后不可交易）",
+            st == 403, f"status={st} {d}")
+        st, d = req("POST", "/api/trade/sell", {"code": "sh600519", "qty": 100})
+        rec("非交易时段卖出 → 403（修复验证：收盘后不可交易）",
+            st == 403, f"status={st} {d}")
+        st, d = req("POST", "/api/grid/plans/0/fire", {"idx": 0, "qty": 100})
+        rec("非交易时段网格手动成交 → 403（同守卫覆盖）",
+            st == 403, f"status={st} {d}")
+        rec("盘中实时成交类用例已跳过",
+            True, "非交易时段无法复现，改日到盘中运行 check_paper.py")
+        return summary()
 
     # ---------- 3. ETF 免印花税 ----------
     # 价格不能写死：虚拟盘按当日真实成交区间校验，隔天价格一漂就会

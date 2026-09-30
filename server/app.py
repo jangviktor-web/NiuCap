@@ -1419,6 +1419,7 @@ def api_grid_plan_fire(request: Request, gid: int, payload: Dict[str, Any] = Bod
     """
     store.initialize()
     _require_login(request)
+    _require_tradable()
     idx = int(payload.get("idx"))
     plans = {p["id"]: p for p in store.list_grids()}
     p = plans.get(gid)
@@ -3187,6 +3188,32 @@ def _require_login(request: Request) -> Dict[str, Any]:
     return u
 
 
+def _require_tradable() -> None:
+    """虚拟盘交易时段守卫：非交易时段禁止买卖。
+
+    根因：腾讯行情接口收盘后照样返回收盘价，_quote_map 取到的 price 其实是
+    当日收盘价（或上一交易日收盘价）。前端不拦、或直接打接口，都能按这个静态
+    价完成虚拟成交，违背「盘中实时成交」的语义，复盘也对不上真实行情。
+
+    口径：可交易 = 连续竞价(trading) + 集合竞价(auction)；其余（午休 / 盘前 /
+    已收盘 / 周末 / 休市）一律拦截。market_state() 是纯本地时区的确定性计算
+    （不联网、不会抛异常），所以异常方向取「保守拦截」也不会误伤盘中的正常交易。
+
+    放在 API 层、三处交易入口（买入 / 卖出 / 网格手动成交）共用，保证一致；
+    不动 store 层，避免误伤 selfcheck() 这类诊断用途。
+    """
+    try:
+        st = ds.market_state()
+    except Exception:
+        # market_state 不联网，基本不会走到这里；走到也宁可不交易，不重开 bug
+        raise HTTPException(403, "行情时段探测异常，暂不允许交易，请稍后重试")
+    s = st.get("state")
+    if s in ("trading", "auction"):
+        return
+    label = st.get("label") or "非交易时段"
+    raise HTTPException(403, f"当前{label}，虚拟盘暂停交易（仅交易时段可买卖）")
+
+
 def _day_range(code: str) -> Optional[Dict[str, Any]]:
     """取该标的当前可成交的价格区间（low ~ high）。
 
@@ -3468,6 +3495,7 @@ def api_trade_buy(request: Request, payload: Dict[str, Any] = Body(...)):
     """模拟买入。price 省略时按当前实时价成交。"""
     store.initialize()
     _require_login(request)
+    _require_tradable()
     code = (payload.get("code") or "").strip()
     if not code:
         raise HTTPException(400, "请填写股票代码")
@@ -3509,6 +3537,7 @@ def api_trade_sell(request: Request, payload: Dict[str, Any] = Body(...)):
     """模拟卖出。price 省略时按当前实时价成交。"""
     store.initialize()
     _require_login(request)
+    _require_tradable()
     code = (payload.get("code") or "").strip()
     if not code:
         raise HTTPException(400, "请填写股票代码")
