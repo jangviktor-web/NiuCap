@@ -760,6 +760,16 @@ td .starbtn{font-size:16px}
 .sim-tbl th:first-child,.sim-tbl td:first-child{text-align:left}
 .sim-tbl th:nth-child(2),.sim-tbl td:nth-child(2){text-align:left}
 
+/* ---------- 三选股结果页·批量操作栏 ---------- */
+.batchbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px;
+  padding:9px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg2)}
+.batchbar .selall{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--tx2);cursor:pointer;user-select:none}
+.batchbar .selall input{margin:0;cursor:pointer}
+.batchbar .bcount{font-size:12px;color:var(--tx3)}
+.batchbar .spacer{flex:1}
+.rowchk,.batchbar input{cursor:pointer}
+.nbchk{flex:0 0 auto;display:flex;align-items:center;padding-right:6px}
+
 /* 列表条目 */
 .li{padding:9px 0;border-bottom:1px solid var(--line2);font-size:13px}
 .news-li{padding:9px 10px;border-bottom:1px solid var(--line2);font-size:13px;line-height:1.5}
@@ -1021,6 +1031,13 @@ td .starbtn{font-size:16px}
             </label>
             <button class="btn" id="nbRefresh">↻ 重新扫描</button>
           </div>
+        </div>
+        <div class="batchbar" id="newbieBatch" style="display:none">
+          <label class="selall"><input type="checkbox" data-barsel="newbie"> 全选</label>
+          <span class="bcount" data-barcount>已全部 0 只</span>
+          <span class="spacer"></span>
+          <button class="btn sm" data-barwin="newbie">看胜率</button>
+          <button class="btn sm ghost" data-barbatch="newbie">加自选</button>
         </div>
         <div id="nbBody"></div>
       </div>
@@ -1297,6 +1314,13 @@ td .starbtn{font-size:16px}
       </div>
       <div class="lagtip" id="stratLagTip" style="display:none"></div>
       <div class="card-b np">
+        <div class="batchbar" id="strategyBatch" style="display:none">
+          <label class="selall"><input type="checkbox" data-barsel="strategy"> 全选</label>
+          <span class="bcount" data-barcount>已全部 0 只</span>
+          <span class="spacer"></span>
+          <button class="btn sm" data-barwin="strategy">看胜率</button>
+          <button class="btn sm ghost" data-barbatch="strategy">加自选</button>
+        </div>
         <div class="tblw"><div id="stratBody"></div></div>
       </div>
     </div>
@@ -1696,6 +1720,13 @@ td .starbtn{font-size:16px}
         <div class="meta" id="screenCount">—</div>
       </div>
       <div class="card-b np">
+        <div class="batchbar" id="screenBatch" style="display:none">
+          <label class="selall"><input type="checkbox" data-barsel="screen"> 全选</label>
+          <span class="bcount" data-barcount>已全部 0 只</span>
+          <span class="spacer"></span>
+          <button class="btn sm" data-barwin="screen">看胜率</button>
+          <button class="btn sm ghost" data-barbatch="screen">加自选</button>
+        </div>
         <div class="tblw"><div id="screenBody">
           <div class="empty">设置条件后点击「执行选股」</div>
         </div></div>
@@ -2405,6 +2436,7 @@ function runScreen(){
   };
   api('/api/screener?' + qs(p)).then(function(d){
     state.screenRows = d.items;
+    batchSel.screen = new Set();
     state.screenPage = 1;
     $('screenerMeta').innerHTML = '<span class="ktag ktag-eod">盘后</span> 股票池 ' + d.universe + ' 只 · 时点 ' + (d.updated || '—');
     $('screenCount').textContent = '命中 ' + d.total + ' 只';
@@ -2414,6 +2446,8 @@ function runScreen(){
 function renderScreen(){
   var el = $('screenBody');
   var rows = state.screenRows;
+  batchMap.screen = {};
+  (rows||[]).forEach(function(r){ batchMap.screen[r.code] = {code:r.code, name:r.name||''}; });
   if(!rows.length){ die(el, '没有符合条件的股票，试试放宽筛选条件'); return; }
   var size = state.screenSize;
   var maxPage = Math.max(1, Math.ceil(rows.length / size));
@@ -2421,10 +2455,11 @@ function renderScreen(){
   var start = (state.screenPage - 1) * size;
   var page = rows.slice(start, start + size);
 
-  var h = '<table><thead><tr><th class="ctr" style="width:44px">#</th><th class="ctr" style="width:38px">自选</th><th class="l">股票</th>' +
+  var h = '<table><thead><tr><th class="ctr" style="width:34px"><input type="checkbox" class="selallrow" data-mod="screen"></th><th class="ctr" style="width:44px">#</th><th class="ctr" style="width:38px">自选</th><th class="l">股票</th>' +
     '<th>最新价</th><th>涨跌幅</th><th>PE</th><th>PB</th><th>总市值</th><th>成交额</th><th>换手率</th></tr></thead><tbody>';
   page.forEach(function(r, i){
     h += '<tr data-code="' + r.code + '">' +
+      '<td class="ctr"><input type="checkbox" class="rowchk" data-batchcode="' + attr(r.code) + '"' + (batchSel.screen.has(r.code) ? ' checked' : '') + '></td>' +
       '<td class="ctr" style="color:var(--tx3)">' + (start + i + 1) + '</td>' +
       '<td class="ctr">' + starHtml(r.code, r.name) + '</td>' +
       '<td class="l"><div class="nmcell"><b>' + esc(r.name) + ' ' + marketTag(r.code) + '</b>' +
@@ -2445,6 +2480,32 @@ function renderScreen(){
     '</div>';
   el.innerHTML = h;
   bindRows(el);
+  var scb = $('screenBatch'); if(scb) scb.style.display = 'flex';
+  var srows = el.querySelectorAll('tbody tr[data-code]');
+  var ssa = el.querySelector('.selallrow');
+  function sSyncAll(){
+    var all = srows.length > 0 && Array.prototype.every.call(srows, function(r){ return r.querySelector('.rowchk').checked; });
+    if(ssa) ssa.checked = all;
+  }
+  if(ssa) ssa.onclick = function(){
+    srows.forEach(function(tr){
+      var cb = tr.querySelector('.rowchk'); cb.checked = ssa.checked;
+      var code = tr.getAttribute('data-code');
+      if(ssa.checked) batchSel.screen.add(code); else batchSel.screen.delete(code);
+    });
+    fillBatchCount('screen');
+  };
+  srows.forEach(function(tr){
+    var cb = tr.querySelector('.rowchk');
+    cb.onclick = function(e){
+      e.stopPropagation();
+      var code = tr.getAttribute('data-code');
+      if(cb.checked) batchSel.screen.add(code); else batchSel.screen.delete(code);
+      sSyncAll();
+      fillBatchCount('screen');
+    };
+  });
+  fillBatchCount('screen');
   var pv = $('pg_prev'), nx = $('pg_next');
   if(pv) pv.onclick = function(){ state.screenPage--; renderScreen(); };
   if(nx) nx.onclick = function(){ state.screenPage++; renderScreen(); };
@@ -5381,6 +5442,53 @@ function updateStratPicked(){
   if(el) el.textContent = '已选 ' + stratState.picked.length + ' 个策略';
 }
 
+// 策略结果渲染后注入复选框列（不改共享的 rankTable：用 DOM 插入 th/td）
+function injectStrategyChecks(items){
+  batchSel.strategy = new Set();
+  batchMap.strategy = {};
+  (items||[]).forEach(function(it){ batchMap.strategy[it.code] = {code:it.code, name:it.name||''}; });
+  var body = $('stratBody'); if(!body) return;
+  var rows = body.querySelectorAll('tbody tr[data-code]');
+  var hr = body.querySelector('thead tr');
+  if(hr){
+    var th = document.createElement('th');
+    th.className = 'ctr'; th.style.width = '34px';
+    th.innerHTML = '<input type="checkbox" class="selallrow" data-mod="strategy">';
+    hr.insertBefore(th, hr.firstChild);
+  }
+  rows.forEach(function(tr){
+    var td = document.createElement('td');
+    td.className = 'ctr';
+    td.innerHTML = '<input type="checkbox" class="rowchk" data-batchcode="' + attr(tr.getAttribute('data-code')) + '">';
+    tr.insertBefore(td, tr.firstChild);
+  });
+  var sa = body.querySelector('.selallrow');
+  function syncAll(){
+    var all = rows.length > 0 && Array.prototype.every.call(rows, function(r){ return r.querySelector('.rowchk').checked; });
+    if(sa) sa.checked = all;
+  }
+  if(sa) sa.onclick = function(){
+    rows.forEach(function(tr){
+      var cb = tr.querySelector('.rowchk'); cb.checked = sa.checked;
+      var code = tr.getAttribute('data-code');
+      if(sa.checked) batchSel.strategy.add(code); else batchSel.strategy.delete(code);
+    });
+    fillBatchCount('strategy');
+  };
+  rows.forEach(function(tr){
+    var cb = tr.querySelector('.rowchk');
+    cb.onclick = function(e){
+      e.stopPropagation();
+      var code = tr.getAttribute('data-code');
+      if(cb.checked) batchSel.strategy.add(code); else batchSel.strategy.delete(code);
+      syncAll();
+      fillBatchCount('strategy');
+    };
+  });
+  var sb = $('strategyBatch'); if(sb) sb.style.display = 'flex';
+  fillBatchCount('strategy');
+}
+
 function runStrategyScan(){
   if(!stratState.picked.length){
     alert('请先选择至少一个策略');
@@ -5410,9 +5518,10 @@ function runStrategyScan(){
       if(parts.length){ tip.innerHTML = parts.map(esc).join('<br>'); tip.style.display = ''; }
       else { tip.style.display = 'none'; }
     }
-    if(!d.items || !d.items.length){ body.innerHTML = '<div class="empty">无符合条件的股票</div>'; return; }
+    if(!d.items || !d.items.length){ body.innerHTML = '<div class="empty">无符合条件的股票</div>'; var sbx=$('strategyBatch'); if(sbx) sbx.style.display='none'; return; }
     body.innerHTML = rankTable(d.items, true);
     bindRows(body);
+    injectStrategyChecks(d.items);
   }).catch(function(e){ die(body, '选股失败：' + e.message); });
 }
 
@@ -7932,6 +8041,9 @@ function renderNewbieResult(d){
 function _renderNewbieResult(d){
   var p = d.preset || {};
   var items = d.items || [];
+  batchSel.newbie = new Set();
+  batchMap.newbie = {};
+  items.forEach(function(it){ batchMap.newbie[it.code] = {code:it.code, name:it.name||''}; });
   var parts = [];
   if(d.universe) parts.push('全市场 ' + d.universe + ' 只');
   if(d.matched) parts.push('符合条件 ' + d.matched + ' 只');
@@ -7944,6 +8056,7 @@ function _renderNewbieResult(d){
   if(!items.length){
     h += '<div class="nbempty">暂时没有选到合适的股票。<br>可以换一个方案，或过一会儿再点「重新扫描」。</div>';
     $('nbBody').innerHTML = h;
+    var nb0 = $('newbieBatch'); if(nb0) nb0.style.display = 'none';
     return;
   }
 
@@ -7951,8 +8064,9 @@ function _renderNewbieResult(d){
   items.forEach(function(it){
     var up = it.change_pct >= 0;
     var col = nbScoreColor(it.score);
-    h += '<div class="nbrow">';
+    h += '<div class="nbrow" data-nbcode="' + attr(it.code) + '">';
     h += '<div class="nbrow-t">';
+    h += '<div class="nbchk"><input type="checkbox" class="rowchk" data-batchcode="' + attr(it.code) + '"></div>';
     h += '<div class="lf">';
     h += '<div><span class="nm" data-nbgo="' + attr(it.code) + '">' + esc(it.name) + '</span>';
     h += '<span class="cd">' + esc(it.code) + '</span></div>';
@@ -7991,6 +8105,16 @@ function _renderNewbieResult(d){
     el.onclick = function(){ goStock(el.dataset.nbgo); };
   });
   bindStars($('nbBody'));
+  var nb = $('newbieBatch'); if(nb) nb.style.display = 'flex';
+  Array.prototype.forEach.call($('nbBody').querySelectorAll('.rowchk'), function(cb){
+    cb.onclick = function(e){
+      e.stopPropagation();
+      var c = cb.getAttribute('data-batchcode');
+      if(cb.checked) batchSel.newbie.add(c); else batchSel.newbie.delete(c);
+      fillBatchCount('newbie');
+    };
+  });
+  fillBatchCount('newbie');
 }
 
 // 跳到个股分析页。
@@ -9040,6 +9164,52 @@ document.addEventListener('click', function(ev){
 /* ================= 历史选股 + 窗口胜率回测 ================= */
 var MODULE_LABEL = {newbie:'小白选股', strategy:'策略选股', screen:'条件选股'};
 
+/* 三选股结果页·批量选中态：batchSel[module] = Set(code)；batchMap[module] = code->{code,name} */
+var batchSel = { newbie:new Set(), strategy:new Set(), screen:new Set() };
+var batchMap = { newbie:{}, strategy:{}, screen:{} };
+
+function batchCollect(module){
+  var map = batchMap[module] || {};
+  var sel = batchSel[module] || new Set();
+  var codes = Array.from(sel);
+  if(!codes.length) codes = Object.keys(map);   // 未勾选 → 默认操作全部当前结果
+  return codes.map(function(c){ return map[c] || {code:c}; })
+              .filter(function(it){ return it && it.code; });
+}
+
+function fillBatchCount(module){
+  var bar = $(module+'Batch'); if(!bar) return;
+  var map = batchMap[module] || {};
+  var sel = batchSel[module] || new Set();
+  var c = bar.querySelector('[data-barcount]');
+  if(c) c.textContent = sel.size ? ('已选 '+sel.size+' 只') : ('已全部 '+Object.keys(map).length+' 只');
+  var sa = bar.querySelector('[data-barsel]');
+  if(sa) sa.checked = (sel.size > 0 && sel.size === Object.keys(map).length);
+}
+
+function bindBatchBar(id, module){
+  var bar = $(id); if(!bar || bar._bb) return; bar._bb = true;
+  var sa = bar.querySelector('[data-barsel]');
+  if(sa) sa.onclick = function(){
+    if(sa.checked){ Object.keys(batchMap[module]).forEach(function(c){ batchSel[module].add(c); }); }
+    else { batchSel[module].clear(); }
+    document.querySelectorAll('[data-batchcode]').forEach(function(cb){ cb.checked = sa.checked; });
+    fillBatchCount(module);
+  };
+  var winBtn = bar.querySelector('[data-barwin]');
+  if(winBtn) winBtn.onclick = function(){
+    var items = batchCollect(module);
+    if(!items.length){ wtToast('当前没有可操作的股票'); return; }
+    showWinRate(items, '批量·'+MODULE_LABEL[module]);
+  };
+  var addBtn = bar.querySelector('[data-barbatch]');
+  if(addBtn) addBtn.onclick = function(){
+    var items = batchCollect(module);
+    if(!items.length){ wtToast('当前没有可操作的股票'); return; }
+    openFolderModal(items, '批量·'+MODULE_LABEL[module]);
+  };
+}
+
 function fmtHistTime(ts){
   var d = new Date(ts*1000), p = function(n){ return (n<10?'0':'')+n; };
   return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate())+' '+p(d.getHours())+':'+p(d.getMinutes());
@@ -9191,6 +9361,9 @@ document.addEventListener('keydown', function(e){
   }
 })();
 bindHistList();
+bindBatchBar('newbieBatch', 'newbie');
+bindBatchBar('strategyBatch', 'strategy');
+bindBatchBar('screenBatch', 'screen');
 </script>
 </body>
 </html>
