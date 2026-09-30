@@ -57,7 +57,7 @@ nav{background:var(--card);border-bottom:1px solid var(--line)}
 .navinner{max-width:1280px;margin:0 auto;padding:0 16px;display:flex;align-items:center;gap:12px}
 /* ponytail: tabs 在 navinner 内 flex:1 + min-width:0 才能收缩并内部滚动；
    之前 scrollbar 被彻底隐藏，鼠标用户无法滑到被切掉的标签 → 改用细滚动条 */
-.tabs{flex:1 1 auto;min-width:0;display:flex;gap:2px;overflow-x:auto;
+.tabs{flex:1 1 auto;min-width:0;display:none;gap:2px;overflow-x:auto;
   scrollbar-width:thin;scrollbar-color:var(--line) transparent}
 .tabs::-webkit-scrollbar{height:6px}
 .tabs::-webkit-scrollbar-thumb{background:var(--line);border-radius:3px}
@@ -67,8 +67,8 @@ nav{background:var(--card);border-bottom:1px solid var(--line)}
 .tabs button:hover{color:var(--tx)}
 .tabs button.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
 
-/* 手机端汉堡按钮（桌面隐藏，仅 ≤640px 显示） */
-.nav-toggle{display:none;align-items:center;gap:5px;background:var(--accent-bg);color:var(--accent);
+/* 汉堡按钮：桌面与手机都显示，点开分组抽屉导航（替代原横排滚动标签） */
+.nav-toggle{display:inline-flex;align-items:center;gap:5px;background:var(--accent-bg);color:var(--accent);
   border:1px solid var(--line);border-radius:8px;padding:7px 11px;font-size:13px;font-weight:600;
   cursor:pointer;font-family:inherit;flex-shrink:0;line-height:1}
 .nav-toggle .bars{font-size:15px;line-height:1}
@@ -90,6 +90,11 @@ nav{background:var(--card);border-bottom:1px solid var(--line)}
   padding:15px 12px;border-radius:10px;font-size:15px;color:var(--tx);cursor:pointer;font-family:inherit;
   border-bottom:1px solid var(--line2)}
 .nd-item:active{background:var(--accent-bg)}
+/* 抽屉内分组小标题（浅灰小字，组间间距略大） */
+.nd-group-h{display:flex;align-items:center;gap:6px;margin:14px 4px 4px;
+  font-size:11.5px;font-weight:700;color:var(--tx3);letter-spacing:.5px}
+.nd-group-h:first-child{margin-top:6px}
+.nd-group-h .gl{font-size:14px}
 .nd-item.on{background:var(--accent-bg);color:var(--accent);font-weight:650}
 .nd-item .nd-ico{font-size:17px;min-width:20px;text-align:center}
 
@@ -886,28 +891,28 @@ td .starbtn{font-size:16px}
   <div class="navinner">
   <button class="nav-toggle" id="navToggle" aria-label="菜单" aria-expanded="false"><span class="bars">☰</span>菜单</button>
   <div class="tabs">
-    <button class="on" data-tab="rank">📊 市场榜单</button>
+    <button class="on" data-tab="rank" data-group="watch">📊 市场榜单</button>
     <!-- ponytail: 原「市场热点」「异动监控」两个页签已合并进「市场榜单」工具栏；
          按钮保留但隐藏，避免外部/内联跳转（data-tab="hot" 等）静默失效
          → skipped: 全项目 JSON/CSS 选择器改写, add when 确认无外部深链依赖。 -->
     <button data-tab="hot" style="display:none">🔥 市场热点</button>
     <button data-tab="moves" style="display:none">🚨 异动监控</button>
-    <button data-tab="newbie">🌟 小白选股</button>
-    <button data-tab="watch">⭐ 我的自选</button>
-    <button data-tab="paper">💰 虚拟盘</button>
-    <button data-tab="strategy">🔍 策略选股</button>
-    <button data-tab="backtest">🧪 策略回测</button>
-    <button data-tab="etf">🏦 ETF筛选</button>
-    <button data-tab="screen">🎯 条件选股</button>
-    <button data-tab="history">📜 历史选股</button>
-    <button data-tab="stock">📈 个股分析</button>
-    <button data-tab="limitup">🔥 连板梯队</button>
-    <button data-tab="theme">🎯 题材雷达</button>
-    <button data-tab="compare">⚖️ 多股对比</button>
-    <button data-tab="news">📰 快讯</button>
-    <button data-tab="alerts">🔔 监控中心<span class="adot" id="alertDot" style="display:none"></span></button>
-    <button data-tab="about">ℹ️ 关于</button>
-    <button data-tab="admin" id="tabBtnAdmin" style="display:none">⚙️ 后台管理</button>
+    <button data-tab="newbie" data-group="pick">🌟 小白选股</button>
+    <button data-tab="watch" data-group="mine">⭐ 我的自选</button>
+    <button data-tab="paper" data-group="mine">💰 虚拟盘</button>
+    <button data-tab="strategy" data-group="pick">🔍 策略选股</button>
+    <button data-tab="backtest" data-group="analysis">🧪 策略回测</button>
+    <button data-tab="etf" data-group="pick">🏦 ETF筛选</button>
+    <button data-tab="screen" data-group="pick">🎯 条件选股</button>
+    <button data-tab="history" data-group="pick">📜 历史选股</button>
+    <button data-tab="stock" data-group="analysis">📈 个股分析</button>
+    <button data-tab="limitup" data-group="watch">🔥 连板梯队</button>
+    <button data-tab="theme" data-group="watch">🎯 题材雷达</button>
+    <button data-tab="compare" data-group="analysis">⚖️ 多股对比</button>
+    <button data-tab="news" data-group="watch">📰 快讯</button>
+    <button data-tab="alerts" data-group="mine">🔔 监控中心<span class="adot" id="alertDot" style="display:none"></span></button>
+    <button data-tab="about" data-group="mine">ℹ️ 关于</button>
+    <button data-tab="admin" id="tabBtnAdmin" style="display:none" data-group="mine">⚙️ 后台管理</button>
   </div>
   <div class="navright">
     <span class="mktclock" id="mktClock" title="沪深交易时段（忽略法定节假日）">—</span>
@@ -2152,17 +2157,25 @@ function setupNavDrawer(){
   var drawer = $('navDrawer'), list = $('navList'), toggle = $('navToggle'),
       mask = $('navMask'), close = $('navClose');
   if(!drawer || !list || !toggle) return;
-  // 只列可见模块（跳过 hot/moves 及未登录的 admin）。
-  // 用内联 style.display 判断：手机端 .tabs 整体 display:none 会让 offsetParent 全为 null，
-  // 不能据此过滤，否则抽屉列表变空。
-  var items = [];
-  document.querySelectorAll('.tabs button[data-tab]').forEach(function(b){
-    if(b.style.display === 'none') return;
-    items.push({tab:b.dataset.tab, html:b.innerHTML});
+  // 按功能分组渲染（浅灰小标题），跳过 display:none 的隐藏项（hot/moves/未登录 admin）。
+  var NAV_GROUPS = [
+    {label:'📊 看盘', items:['rank','theme','limitup','news']},
+    {label:'🔍 选股', items:['newbie','strategy','screen','etf','history']},
+    {label:'📈 分析', items:['stock','compare','backtest']},
+    {label:'⭐ 我的', items:['watch','paper','alerts','admin','about']},
+  ];
+  var html = '';
+  NAV_GROUPS.forEach(function(g){
+    var its = [];
+    g.items.forEach(function(tab){
+      var b = document.querySelector('.tabs button[data-tab="' + tab + '"]');
+      if(!b || b.style.display === 'none') return;
+      its.push('<button class="nd-item" data-tab="' + tab + '">' + b.innerHTML + '</button>');
+    });
+    if(!its.length) return;
+    html += '<div class="nd-group-h"><span class="gl">' + g.label + '</span></div>' + its.join('');
   });
-  list.innerHTML = items.map(function(it){
-    return '<button class="nd-item" data-tab="' + it.tab + '">' + it.html + '</button>';
-  }).join('');
+  list.innerHTML = html;
   list.querySelectorAll('.nd-item').forEach(function(el){
     el.onclick = function(){ switchTab(el.dataset.tab); closeNavDrawer(); };
   });
