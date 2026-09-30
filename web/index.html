@@ -763,6 +763,10 @@ td .starbtn{font-size:16px}
 .sim-up{color:var(--up)}.sim-down{color:var(--down)}
 .sim-tbl th,.sim-tbl td{padding:6px 8px;font-size:12px;text-align:right;white-space:nowrap}
 .sim-tbl th:first-child,.sim-tbl td:first-child{text-align:left}
+/* 后台管理·用户数据 / 新功能调试 */
+.admpre{margin:0;padding:10px 12px;background:var(--bg2);border-radius:8px;
+  font-size:11.5px;line-height:1.6;color:var(--tx2);max-height:320px;overflow:auto;
+  white-space:pre-wrap;word-break:break-all}
 .sim-tbl th:nth-child(2),.sim-tbl td:nth-child(2){text-align:left}
 
 /* ---------- 三选股结果页·批量操作栏 ---------- */
@@ -1995,6 +1999,8 @@ td .starbtn{font-size:16px}
         <div class="btnrow" id="admTabs">
           <button class="btn on" data-adm="overview">📊 系统概览</button>
           <button class="btn" data-adm="users">👥 用户管理</button>
+          <button class="btn" data-adm="userdata">👁️ 用户数据</button>
+          <button class="btn" data-adm="newfeat">🧪 新功能调试</button>
           <button class="btn" data-adm="config">🔧 运行参数</button>
           <button class="btn" data-adm="bars">🗄️ 数据落库</button>
           <button class="btn" data-adm="database">🛠️ 数据库</button>
@@ -3548,6 +3554,11 @@ var ADMIN_TABS = [
    desc:'数据库后端与目标、注册用户数、日线覆盖率与日期区间、进程运行时长；以及三大数据源（腾讯行情 / westock / 同花顺）与分钟数据源的实时可用性、行情缓存状态。'},
   {key:'users', name:'用户管理', emo:'👥',
    desc:'查看全部用户（自选数 / 持仓数 / 虚拟资金 / 管理员标记）；重置他人密码（改完踢下线其所有会话）；重置虚拟盘（清持仓流水、资金复位 100 万）；删除用户（级联清理自选 / 持仓 / 流水 / 会话）。守卫：不能删自己，也不能删最后一个用户。'},
+  {key:'userdata', name:'用户数据', emo:'👁️',
+   desc:'按账户查看某个用户的<b>自选股</b>（分组与条目，可关行情只查清单）、<b>历史选股记录</b>（可就地看胜率 / 看表现 / 批量加自选）、<b>虚拟盘</b>（资金 / 持仓 / 成交流水）。只读，不改任何数据；用户管理页每行「查看」按钮直接跳到这里。'},
+  {key:'newfeat', name:'新功能调试', emo:'🧪',
+   desc:'选股历史全量视图（跨账户、带模块分布与未归属统计，可按模块/用户筛选），一键把未归属记录认领到指定用户；' +
+        '另有<b>窗口胜率回测</b>调试（自定义代码 / 每只金额 / 回看天数，直接调 /api/sim/window）与<b>入选后表现</b>调试（按记录 ID 调 performance）。'},
   {key:'config', name:'运行参数', emo:'🔧',
    desc:'7 项可调，改完立即生效无需重启（连接池 / 批量取数 / 缓存时长 / 扫描取样根数 / 停牌占位等）；优先级为 管理页设置 &gt; 环境变量 &gt; 内置默认，每项标注来源并可一键还原；写入前过校验器，脏值永不落库。'},
   {key:'bars', name:'数据落库', emo:'🗄️',
@@ -3606,6 +3617,7 @@ function loadAdmin(force){
   loading(el, '加载中…');
   var fns = {
     overview: admOverview, users: admUsers, config: admConfig,
+    userdata: admUserData, newfeat: admNewFeat,
     bars: admBars, database: admDatabase, modules: admModules,
     services: admServices, evalcache: admEvalCache, backup: admBackup, logs: admLogs
   };
@@ -3662,7 +3674,8 @@ function admUsers(el){
             '</div></div><div class="card-b np">';
     h += '<div class="tblw"><table class="tbl"><thead><tr>' +
          '<th style="width:44px">ID</th><th>用户名</th><th>昵称</th><th class="r">虚拟资金</th>' +
-         '<th class="ctr">自选</th><th class="ctr">持仓</th><th>注册时间</th><th class="ctr">操作</th>' +
+         '<th class="ctr">自选</th><th class="ctr">持仓</th><th class="ctr">选股</th>' +
+         '<th>注册时间</th><th class="ctr">操作</th>' +
          '</tr></thead><tbody>';
     its.forEach(function(u){
       h += '<tr><td>' + u.id + '</td>' +
@@ -3672,8 +3685,10 @@ function admUsers(el){
            '<td class="r">' + fmtNum(u.cash) + '</td>' +
            '<td class="ctr">' + u.watch_cnt + '</td>' +
            '<td class="ctr">' + u.pos_cnt + '</td>' +
+           '<td class="ctr">' + (u.screen_cnt || 0) + '</td>' +
            '<td style="font-size:12px;color:var(--tx3)">' + ts2str(u.created_at) + '</td>' +
            '<td class="ctr" style="white-space:nowrap">' +
+           '<button class="btn" style="padding:2px 8px;font-size:11px" data-uv="' + u.id + '">查看</button> ' +
            '<button class="btn" style="padding:2px 8px;font-size:11px" data-uw="' + u.id + '">改密码</button> ' +
            '<button class="btn" style="padding:2px 8px;font-size:11px" data-ur="' + u.id + '">重置盘</button> ' +
            (u.is_admin ? '' : '<button class="btn" style="padding:2px 8px;font-size:11px" data-ud="' + u.id + '">删除</button>') +
@@ -3682,6 +3697,9 @@ function admUsers(el){
     h += '</tbody></table></div></div></div>';
     el.innerHTML = h;
 
+    el.querySelectorAll('[data-uv]').forEach(function(b){
+      b.onclick = function(){ admGotoUserData(b.dataset.uv); };
+    });
     el.querySelectorAll('[data-uw]').forEach(function(b){
       b.onclick = function(){
         var uid = b.dataset.uw;
@@ -3714,6 +3732,326 @@ function admUsers(el){
       };
     });
   }).catch(function(e){ die(el, '读取失败：' + e.message); });
+}
+
+/* ---------- 用户数据（只读：自选股 / 历史选股 / 虚拟盘） ---------- */
+var admUd = { uid: null, list: [] };
+
+function admGotoUserData(uid){
+  admUd.uid = parseInt(uid, 10) || null;
+  document.querySelectorAll('[data-adm]').forEach(function(x){ x.classList.remove('on'); });
+  var btn = document.querySelector('[data-adm="userdata"]');
+  if(btn) btn.classList.add('on');
+  admState.cur = 'userdata';
+  loadAdmin(true);
+}
+
+function admUserData(el){
+  admApi('/users').then(function(d){
+    admState.loaded.userdata = 1;
+    admUd.list = d.items || [];
+    if(admUd.uid === null && admUd.list.length) admUd.uid = admUd.list[0].id;
+    var opts = admUd.list.map(function(u){
+      return '<option value="' + u.id + '"' + (u.id === admUd.uid ? ' selected' : '') + '>' +
+             esc(u.username) + (u.display ? '（' + esc(u.display) + '）' : '') +
+             (u.is_admin ? ' ·管理员' : '') + '</option>';
+    }).join('');
+    el.innerHTML =
+      '<div class="card"><div class="card-h"><h2>👁️ 查看用户数据</h2>' +
+      '<div class="meta">只读诊断，不会改动任何用户数据</div></div><div class="card-b">' +
+      '<div class="btnrow" style="align-items:center;gap:8px;flex-wrap:wrap">' +
+      '<label style="font-size:12px;color:var(--tx2)">用户</label>' +
+      '<select class="sel in" id="admUdUser" style="width:auto;min-width:180px">' + opts + '</select>' +
+      '<label style="font-size:12px;color:var(--tx2);display:inline-flex;align-items:center;gap:4px">' +
+      '<input type="checkbox" id="admUdQuote" checked> 带行情</label>' +
+      '<button class="btn" id="admUdGo">刷新</button>' +
+      '<span style="font-size:12px;color:var(--tx3)">也可在【用户管理】每行点「查看」直达</span>' +
+      '</div></div></div>' +
+      '<div id="admUdWatch"></div><div id="admUdHist"></div><div id="admUdPaper"></div>';
+
+    $('admUdGo').onclick = function(){ admUd.uid = parseInt($('admUdUser').value, 10); admUdLoad(el); };
+    $('admUdUser').onchange = function(){ admUd.uid = parseInt($('admUdUser').value, 10); admUdLoad(el); };
+    admUdLoad(el);
+  }).catch(function(e){ die(el, '读取用户列表失败：' + e.message); });
+}
+
+function admUdLoad(el){
+  if(!admUd.uid){
+    if($('admUdWatch')) $('admUdWatch').innerHTML = '<div class="card"><div class="card-b">' +
+      '<div class="hist-empty">还没有可选用户</div></div></div>';
+    return;
+  }
+  var uid = admUd.uid, q = $('admUdQuote') ? ($('admUdQuote').checked ? 'true' : 'false') : 'true';
+  ['admUdWatch','admUdHist','admUdPaper'].forEach(function(id){
+    var b = $(id); if(b) b.innerHTML = '<div class="card"><div class="card-b"><div class="load">' +
+      '<span class="spin"></span>加载中…</div></div></div>';
+  });
+  Promise.all([
+    admApi('/users/' + uid + '/watch?with_quote=' + q).catch(function(e){ return {_err:e.message}; }),
+    admApi('/users/' + uid + '/screen_history?limit=100').catch(function(e){ return {_err:e.message}; }),
+    admApi('/users/' + uid + '/paper?trades=30').catch(function(e){ return {_err:e.message}; })
+  ]).then(function(rs){ admUdRenderWatch(rs[0]); admUdRenderHist(rs[1]); admUdRenderPaper(rs[2]); });
+}
+
+function admUdRenderWatch(d){
+  var box = $('admUdWatch'); if(!box) return;
+  if(d._err){ box.innerHTML = '<div class="card"><div class="card-h"><h2>⭐ 自选股</h2></div>' +
+      '<div class="card-b"><div class="hist-empty">' + esc(d._err) + '</div></div></div>'; return; }
+  var u = d.user || {};
+  var fol = (d.folders || []).map(function(f){
+    return '<span class="tag">' + esc(f.name) + ' · ' + f.cnt + ' 只' +
+           (f.is_default ? '（默认）' : '') + '</span>';
+  }).join(' ');
+  var rows = (d.items || []).map(function(it){
+    var chg = it.change_pct;
+    return '<tr><td>' + esc(it.code) + '</td><td>' + esc(it.name || '—') + '</td>' +
+           '<td>' + esc(it.folder_name || '—') + '</td>' +
+           '<td class="r">' + (it.price == null ? '—' : fmt(it.price)) + '</td>' +
+           '<td class="r ' + (chg == null ? '' : cls(chg)) + '">' +
+           (chg == null ? '—' : sign(chg)) + '</td>' +
+           '<td style="font-size:12px;color:var(--tx3)">' + esc(it.note || '') + '</td></tr>';
+  }).join('');
+  box.innerHTML = '<div class="card"><div class="card-h"><h2>⭐ 自选股</h2>' +
+    '<div class="meta">' + esc(u.username || '') + ' ｜ 共 ' + (d.count || 0) + ' 只 · ' +
+    (d.folders || []).length + ' 个分组</div></div><div class="card-b">' +
+    '<div style="margin-bottom:10px">' + (fol || '<span style="color:var(--tx3);font-size:12px">暂无分组</span>') + '</div>' +
+    (rows ? '<div class="tblw"><table class="tbl"><thead><tr><th>代码</th><th>名称</th><th>分组</th>' +
+      '<th class="r">现价</th><th class="r">涨跌幅</th><th>备注</th></tr></thead><tbody>' +
+      rows + '</tbody></table></div>'
+      : '<div class="hist-empty">该用户还没有自选股</div>') + '</div></div>';
+}
+
+function admUdRenderHist(d){
+  var box = $('admUdHist'); if(!box) return;
+  if(d._err){ box.innerHTML = '<div class="card"><div class="card-h"><h2>📜 历史选股</h2></div>' +
+      '<div class="card-b"><div class="hist-empty">' + esc(d._err) + '</div></div></div>'; return; }
+  var st = d.stat || {};
+  var mods = Object.keys(st.by_module || {}).map(function(k){
+    return '<span class="tag">' + (MODULE_LABEL[k] || k) + ' · ' + st.by_module[k] + '</span>';
+  }).join(' ');
+  var rows = (d.items || []).map(function(r){
+    return '<tr><td>' + r.id + '</td>' +
+      '<td><span class="tag z">' + (MODULE_LABEL[r.module] || r.module) + '</span></td>' +
+      '<td>' + esc(r.title || '—') + '</td>' +
+      '<td class="r">' + r.item_count + '</td>' +
+      '<td style="font-size:12px;color:var(--tx3)">' + fmtHistTime(r.created_at) + '</td>' +
+      '<td class="ctr" style="white-space:nowrap">' +
+      '<button class="btn sm" data-uhw="' + r.id + '">看胜率</button> ' +
+      '<button class="btn sm ghost" data-uhp="' + r.id + '">看表现</button> ' +
+      '<button class="btn sm ghost" data-uhb="' + r.id + '">批量加自选</button></td></tr>';
+  }).join('');
+  box.innerHTML = '<div class="card"><div class="card-h"><h2>📜 历史选股</h2>' +
+    '<div class="meta">共 ' + (st.total || 0) + ' 条</div></div><div class="card-b">' +
+    '<div style="margin-bottom:10px">' + (mods || '<span style="color:var(--tx3);font-size:12px">暂无记录</span>') + '</div>' +
+    (rows ? '<div class="tblw"><table class="tbl"><thead><tr><th style="width:50px">ID</th>' +
+      '<th style="width:90px">模块</th><th>标题</th><th class="r">只数</th><th>存档时间</th>' +
+      '<th class="ctr">操作</th></tr></thead><tbody>' + rows + '</tbody></table></div>'
+      : '<div class="hist-empty">该用户还没有选股记录</div>') + '</div></div>';
+  box.querySelectorAll('[data-uhw]').forEach(function(b){
+    b.onclick = function(){ histShowWin(b.dataset.uhw); };
+  });
+  box.querySelectorAll('[data-uhp]').forEach(function(b){
+    b.onclick = function(){ histShowPerf(b.dataset.uhp); };
+  });
+  box.querySelectorAll('[data-uhb]').forEach(function(b){
+    b.onclick = function(){ histBatchWatch(b.dataset.uhb); };
+  });
+}
+
+function admUdRenderPaper(d){
+  var box = $('admUdPaper'); if(!box) return;
+  if(d._err){ box.innerHTML = '<div class="card"><div class="card-h"><h2>💰 虚拟盘</h2></div>' +
+      '<div class="card-b"><div class="hist-empty">' + esc(d._err) + '</div></div></div>'; return; }
+  var s = d.summary || {};
+  function vb(lb, vl, sub){
+    return '<div class="vbox"><div class="lb">' + lb + '</div><div class="vl">' + vl + '</div>' +
+           '<div class="sub">' + (sub || '') + '</div></div>';
+  }
+  var h = '<div class="card"><div class="card-h"><h2>💰 虚拟盘</h2>' +
+          '<div class="meta">' + esc((d.user || {}).username || '') + ' ｜ 初始 ' +
+          fmtNum(s.initial_cash) + '</div></div><div class="card-b">' +
+          '<div class="verdict">' +
+          vb('可用资金', fmtNum(s.cash), '元') +
+          vb('持仓市值', fmtNum(s.market_value), s.position_count + ' 只') +
+          vb('总资产', fmtNum(s.total_asset), (s.total_pnl_pct >= 0 ? '+' : '') + fmt(s.total_pnl_pct) + '%') +
+          vb('浮动盈亏', (s.float_pnl >= 0 ? '+' : '') + fmtNum(s.float_pnl), '有报价部分') +
+          vb('累计盈亏', (s.total_pnl >= 0 ? '+' : '') + fmtNum(s.total_pnl), '含已实现') +
+          '</div>';
+  var pos = (d.positions || []).map(function(p){
+    return '<tr><td>' + esc(p.code) + '</td><td>' + esc(p.name || '—') + '</td>' +
+           '<td class="r">' + p.qty + '</td><td class="r">' + fmt(p.cost) + '</td>' +
+           '<td class="r">' + (p.price == null ? '—' : fmt(p.price)) + '</td>' +
+           '<td class="r ' + cls(p.pnl) + '">' + sign(p.pnl) + '</td>' +
+           '<td class="r ' + cls(p.pnl_pct) + '">' + (p.pnl_pct == null ? '—' : sign(p.pnl_pct)) + '</td></tr>';
+  }).join('');
+  h += pos ? '<div class="tblw" style="margin-top:12px"><table class="tbl"><thead><tr><th>代码</th>' +
+       '<th>名称</th><th class="r">持股</th><th class="r">成本</th><th class="r">现价</th>' +
+       '<th class="r">盈亏</th><th class="r">盈亏%</th></tr></thead><tbody>' + pos + '</tbody></table></div>'
+       : '<div class="hist-empty">无持仓</div>';
+  var tr = (d.trades || []).map(function(t){
+    return '<tr><td style="font-size:12px;color:var(--tx3)">' + ts2str(t.created_at) + '</td>' +
+           '<td>' + esc(t.code) + '</td><td>' + esc(t.name || '—') + '</td>' +
+           '<td><span class="tag ' + (t.side === 'buy' ? 'r' : 'g') + '">' +
+           (t.side === 'buy' ? '买入' : '卖出') + '</span></td>' +
+           '<td class="r">' + t.qty + '</td><td class="r">' + fmt(t.price) + '</td>' +
+           '<td class="r">' + fmt(t.amount) + '</td>' +
+           '<td class="r ' + cls(t.pnl) + '">' + (t.pnl == null ? '—' : sign(t.pnl)) + '</td></tr>';
+  }).join('');
+  h += '<div style="margin:14px 0 8px;font-size:13px;font-weight:600">最近成交（' +
+       (d.trades || []).length + ' 条）</div>';
+  h += tr ? '<div class="tblw"><table class="tbl"><thead><tr><th>时间</th><th>代码</th><th>名称</th>' +
+       '<th>方向</th><th class="r">数量</th><th class="r">价格</th><th class="r">金额</th>' +
+       '<th class="r">盈亏</th></tr></thead><tbody>' + tr + '</tbody></table></div>'
+       : '<div class="hist-empty">暂无成交流水</div>';
+  h += '</div></div>';
+  box.innerHTML = h;
+}
+
+/* ---------- 新功能调试（选股历史全量 / 回测 / 表现） ---------- */
+var admNf = { module: '', uid: '', users: {} };
+
+function admNewFeat(el){
+  Promise.all([admApi('/users'), admApi('/screen_history?limit=300')])
+    .then(function(rs){
+      admState.loaded.newfeat = 1;
+      admNf.users = {};
+      (rs[0].items || []).forEach(function(u){ admNf.users[u.id] = u.username; });
+      admNfRender(el, rs[1] || {});
+    })
+    .catch(function(e){ die(el, '读取失败：' + e.message); });
+}
+
+function admNfRender(el, d){
+  var st = d.stat || {};
+  var mods = Object.keys(st.by_module || {}).map(function(k){
+    return '<span class="tag">' + (MODULE_LABEL[k] || k) + ' · ' + st.by_module[k] + '</span>';
+  }).join(' ') || '<span style="color:var(--tx3);font-size:12px">暂无</span>';
+  var uopts = Object.keys(admNf.users).map(function(id){
+    return '<option value="' + id + '">' + esc(admNf.users[id]) + '</option>';
+  }).join('');
+  var h = '<div class="card"><div class="card-h"><h2>📜 选股历史（全量）</h2>' +
+    '<div class="meta">共 ' + (st.total || 0) + ' 条 ｜ 未归属 ' + (st.orphan || 0) + ' 条</div>' +
+    '</div><div class="card-b">' +
+    '<div style="margin-bottom:10px">' + mods + '</div>' +
+    '<div class="btnrow" style="align-items:center;gap:8px;flex-wrap:wrap">' +
+    '<label style="font-size:12px;color:var(--tx2)">模块</label>' +
+    '<select class="sel in" id="admNfMod" style="width:auto">' +
+    '<option value="">全部</option>' +
+    Object.keys(MODULE_LABEL).map(function(k){
+      return '<option value="' + k + '"' + (admNf.module === k ? ' selected' : '') + '>' +
+             MODULE_LABEL[k] + '</option>'; }).join('') + '</select>' +
+    '<label style="font-size:12px;color:var(--tx2)">用户</label>' +
+    '<select class="sel in" id="admNfUid" style="width:auto"><option value="">全部</option>' +
+    uopts + '</select>' +
+    '<button class="btn" id="admNfGo">筛选</button>' +
+    '<span style="flex:1"></span>' +
+    '<label style="font-size:12px;color:var(--tx2)">认领给</label>' +
+    '<select class="sel in" id="admNfClaim" style="width:auto">' + uopts + '</select>' +
+    '<button class="btn" id="admNfClaimBtn">认领未归属(' + (st.orphan || 0) + ')</button>' +
+    '</div></div></div>';
+  h += '<div class="card"><div class="card-b np"><div class="tblw"><table class="tbl"><thead><tr>' +
+    '<th style="width:50px">ID</th><th style="width:110px">归属</th><th style="width:90px">模块</th>' +
+    '<th>标题</th><th class="r">只数</th><th>存档时间</th><th class="ctr">操作</th>' +
+    '</tr></thead><tbody id="admNfRows"></tbody></table></div></div></div>';
+  h += '<div class="card"><div class="card-h"><h2>🧪 接口调试</h2>' +
+    '<div class="meta">直接调新功能的后端接口，便于排查</div></div><div class="card-b">' +
+    '<div class="fg"><label>窗口胜率回测 /api/sim/window</label>' +
+    '<input class="in" id="admNfCodes" placeholder="股票代码，逗号分隔，如 sh600519,sz000001">' +
+    '<div class="btnrow" style="margin-top:6px;gap:8px;align-items:center">' +
+    '<span style="font-size:12px;color:var(--tx2)">每只金额</span>' +
+    '<input class="in" id="admNfAmt" type="number" value="10000" style="width:100px">' +
+    '<span style="font-size:12px;color:var(--tx2)">回看天数</span>' +
+    '<input class="in" id="admNfDays" type="number" value="10" style="width:80px">' +
+    '<button class="btn" id="admNfRun">跑回测</button></div></div>' +
+    '<div class="fg" style="margin-top:12px"><label>入选后表现 /screen/history/{id}/performance</label>' +
+    '<div class="btnrow" style="gap:8px;align-items:center">' +
+    '<input class="in" id="admNfHid" type="number" placeholder="历史记录 ID" style="width:140px">' +
+    '<button class="btn" id="admNfPerf">看表现</button></div></div>' +
+    '<div style="margin-top:10px;font-size:12px;color:var(--tx3)">' +
+    '回测与表现结果都弹窗展示，口径与选股页完全一致（09:30–09:50 VWAP 买入 / 当天收盘结算；' +
+    '表现以入选价为基准对比最新价）。</div></div></div>';
+  el.innerHTML = h;
+  admNfFillRows(d.items || []);
+
+  $('admNfGo').onclick = function(){
+    admNf.module = $('admNfMod').value; admNf.uid = $('admNfUid').value;
+    var q = [];
+    if(admNf.module) q.push('module=' + encodeURIComponent(admNf.module));
+    if(admNf.uid) q.push('user_id=' + encodeURIComponent(admNf.uid));
+    admApi('/screen_history?limit=300' + (q.length ? '&' + q.join('&') : ''))
+      .then(function(dd){ admNfFillRows(dd.items || []); })
+      .catch(function(e){ wtToast('筛选失败：' + e.message); });
+  };
+  $('admNfClaimBtn').onclick = function(){
+    var uid = parseInt($('admNfClaim').value, 10);
+    if(!uid){ wtToast('先选一个用户'); return; }
+    admApi('/screen_history/claim', {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({user_id: uid})})
+      .then(function(r){ wtToast('已认领 ' + r.moved + ' 条'); loadAdmin(true); })
+      .catch(function(e){ wtToast('认领失败：' + e.message); });
+  };
+  $('admNfRun').onclick = function(){
+    var raw = ($('admNfCodes').value || '').trim();
+    if(!raw){ wtToast('先填股票代码'); return; }
+    var items = raw.split(/[,，\s]+/).filter(Boolean).map(function(c){ return {code:c.trim()}; });
+    showWinRate(items, '调试·' + items.length + ' 只', {
+      amount_per: parseFloat($('admNfAmt').value) || 10000,
+      days: parseInt($('admNfDays').value, 10) || 10
+    });
+  };
+  $('admNfPerf').onclick = function(){
+    var hid = parseInt($('admNfHid').value, 10);
+    if(!hid){ wtToast('先填历史记录 ID'); return; }
+    histShowPerf(hid);
+  };
+}
+
+function admNfFillRows(items){
+  var box = $('admNfRows'); if(!box) return;
+  box.innerHTML = items.length ? items.map(function(r){
+    var own = admNf.users[r.user_id] || (r.user_id === 0 ? '未归属' : ('#' + r.user_id));
+    return '<tr><td>' + r.id + '</td><td>' + esc(own) + '</td>' +
+      '<td><span class="tag z">' + (MODULE_LABEL[r.module] || r.module) + '</span></td>' +
+      '<td>' + esc(r.title || '—') + '</td>' +
+      '<td class="r">' + r.item_count + '</td>' +
+      '<td style="font-size:12px;color:var(--tx3)">' + fmtHistTime(r.created_at) + '</td>' +
+      '<td class="ctr" style="white-space:nowrap">' +
+      '<button class="btn sm" data-nfw="' + r.id + '">看胜率</button> ' +
+      '<button class="btn sm ghost" data-nfp="' + r.id + '">看表现</button> ' +
+      '<button class="btn sm ghost" data-nfb="' + r.id + '">加自选</button> ' +
+      '<button class="btn sm ghost" data-nfd="' + r.id + '">明细</button></td></tr>' +
+      '<tr id="admNfD' + r.id + '" style="display:none"><td colspan="7" style="background:var(--bg2)">' +
+      '<pre class="admpre">(加载中…)</pre></td></tr>';
+  }).join('') : '<tr><td colspan="7"><div class="hist-empty">没有记录</div></td></tr>';
+
+  box.querySelectorAll('[data-nfw]').forEach(function(b){
+    b.onclick = function(){ histShowWin(b.dataset.nfw); };
+  });
+  box.querySelectorAll('[data-nfp]').forEach(function(b){
+    b.onclick = function(){ histShowPerf(b.dataset.nfp); };
+  });
+  box.querySelectorAll('[data-nfb]').forEach(function(b){
+    b.onclick = function(){ histBatchWatch(b.dataset.nfb); };
+  });
+  box.querySelectorAll('[data-nfd]').forEach(function(b){
+    b.onclick = function(){
+      var hid = b.dataset.nfd, row = $('admNfD' + hid);
+      if(!row) return;
+      if(row.style.display === 'none'){
+        row.style.display = '';
+        var pre = row.querySelector('pre'); if(pre) pre.textContent = '加载中…';
+        fetch('/api/screen/history/' + hid).then(function(r){ return r.json(); })
+          .then(function(rec){
+            if(rec && rec.detail) throw new Error(rec.detail);
+            var p = row.querySelector('pre'); if(!p) return;
+            p.textContent = JSON.stringify({id: rec.id, user_id: rec.user_id, module: rec.module,
+              title: rec.title, params: rec.params, items: rec.items}, null, 2);
+          }).catch(function(e){
+            var p = row.querySelector('pre'); if(p) p.textContent = '加载失败：' + e.message;
+          });
+      } else { row.style.display = 'none'; }
+    };
+  });
 }
 
 /* ---------- 运行参数 ---------- */
@@ -9318,14 +9656,18 @@ function renderPerfModal(d){
     rows + '</tbody></table></div>' + note;
 }
 
-function showWinRate(items, title){
+function showWinRate(items, title, opt){
+  opt = opt || {};
+  var amount = parseFloat(opt.amount_per) || 10000;
+  var days = parseInt(opt.days, 10) || 10;
   $('simModalTitle').textContent = '窗口胜率回测 · ' + (title||'');
-  $('simModalBody').innerHTML = '<div class="load"><span class="spin"></span>正在回测（拉取近 10 个交易日 09:30–09:50 分钟线）…</div>';
+  $('simModalBody').innerHTML = '<div class="load"><span class="spin"></span>正在回测（拉取近 ' +
+    days + ' 个交易日 09:30–09:50 分钟线）…</div>';
   openModal('simModal');
   var codes = (items||[]).map(function(i){ return {code:i.code, name:i.name}; });
   fetch('/api/sim/window', {method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({codes:codes, amount_per:10000, days:10})})
-   .then(function(r){ return r.json(); }).then(function(d){ renderSimModal(d, title); })
+    body: JSON.stringify({codes:codes, amount_per:amount, days:days})})
+   .then(function(r){ return r.json(); }).then(function(d){ renderSimModal(d, title, days); })
    .catch(function(e){ $('simModalBody').innerHTML='<div class="hist-empty">回测失败：'+attr(e)+'</div>'; });
 }
 
@@ -9334,7 +9676,8 @@ function simCard(v, l, sub, up){
   return '<div class="sim-card"><div class="v'+cls+'">'+attr(v)+'</div><div class="l">'+attr(l)+(sub!=null?(' · '+sub):'')+'</div></div>';
 }
 
-function renderSimModal(d, title){
+function renderSimModal(d, title, days){
+  days = days || d.days || 10;
   if(d.detail || d.error){ $('simModalBody').innerHTML='<div class="hist-empty">'+(d.detail||d.error)+'</div>'; return; }
   var s = d.summary || {};
   var pct = function(x){ return (x*100).toFixed(1)+'%'; };
@@ -9356,7 +9699,7 @@ function renderSimModal(d, title){
       '<td class="'+(it.total_pnl>=0?'sim-up':'sim-down')+'">'+(it.total_pnl>=0?'+':'')+it.total_pnl+'</td></tr>';
   }).join('');
   var note = '<div class="mnote">统计口径：模拟在每天 09:30–09:50 窗口按成交量加权均价(VWAP)买入、当天收盘结算；'+
-    '涨停按前收×(1+涨停幅度)判断（主板10%/创业板20%/北交所30%，ST 5%）。纯历史统计，与虚拟盘资金无关。样本为最近 '+(d.days||10)+' 个交易日。</div>';
+    '涨停按前收×(1+涨停幅度)判断（主板10%/创业板20%/北交所30%，ST 5%）。纯历史统计，与虚拟盘资金无关。样本为最近 '+days+' 个交易日。</div>';
   $('simModalBody').innerHTML = sumHtml +
     '<div class="tblw" style="max-height:46vh;overflow:auto"><table class="tbl sim-tbl"><thead><tr>'+
     '<th>代码</th><th>名称</th><th>样本</th><th>涨停率</th><th>胜率</th><th>均涨</th><th>最佳</th><th>最差</th><th>盈亏</th></tr></thead><tbody>'+

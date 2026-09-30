@@ -769,15 +769,21 @@ def _begin(c) -> None:
 # ===========================================================================
 
 def save_screen_history(module: str, title: str, params: Dict[str, Any],
-                        items: List[Dict[str, Any]], user_id: int = 0) -> int:
-    """存档一次选股结果。返回新记录 id。items 每项至少含 code。"""
+                        items: List[Dict[str, Any]],
+                        user_id: Optional[int] = None) -> int:
+    """存档一次选股结果。返回新记录 id。items 每项至少含 code。
+
+    user_id 为 None 时取当前请求用户（未登录回落到默认本地账号），
+    与自选股/虚拟盘保持同一套归属规则。
+    """
     store_initialize = initialize
     store_initialize()
+    uid = current_user_id() if user_id is None else int(user_id)
     c = _conn()
     c.execute(
         "INSERT INTO screen_history(user_id, module, title, params_json, "
         "items_json, item_count, created_at) VALUES(?,?,?,?,?,?,?)",
-        (user_id, module, title or "",
+        (uid, module, title or "",
          json.dumps(params or {}, ensure_ascii=False),
          json.dumps(items or [], ensure_ascii=False),
          len(items or []), time.time()),
@@ -787,20 +793,66 @@ def save_screen_history(module: str, title: str, params: Dict[str, Any],
 
 
 def list_screen_history(module: Optional[str] = None,
-                        limit: int = 200) -> List[Dict[str, Any]]:
-    """列出选股历史（按时间倒序）。module 可过滤 newbie/strategy/screen。"""
+                        limit: int = 200,
+                        user_id: Optional[int] = None,
+                        ) -> List[Dict[str, Any]]:
+    """列出选股历史（按时间倒序）。module 可过滤 newbie/strategy/screen。
+
+    user_id 为 None 时不做归属过滤（管理员看全量）；否则严格按 user_id 隔离，
+    匿名存档的 user_id 为 0。
+    """
     initialize()
     c = _conn()
+    where, args = [], []
+    if user_id is not None:
+        where.append("user_id=?")
+        args.append(int(user_id))
     if module:
+        where.append("module=?")
+        args.append(module)
+    sql = ("SELECT id, user_id, module, title, item_count, created_at "
+           "FROM screen_history ")
+    if where:
+        sql += "WHERE " + " AND ".join(where) + " "
+    sql += "ORDER BY created_at DESC LIMIT ?"
+    args.append(int(limit))
+    return [dict(r) for r in c.execute(sql, args).fetchall()]
+
+
+def count_screen_history(user_id: Optional[int] = None) -> Dict[str, Any]:
+    """选股历史统计：总数 / 按模块分布 / 未归属(user_id=0)条数。管理员概览用。"""
+    initialize()
+    c = _conn()
+    if user_id is None:
         rows = c.execute(
-            "SELECT id, module, title, item_count, created_at FROM screen_history "
-            "WHERE module=? ORDER BY created_at DESC LIMIT ?",
-            (module, limit)).fetchall()
+            "SELECT module, COUNT(*) AS n FROM screen_history GROUP BY module"
+        ).fetchall()
+        orphan = c.execute(
+            "SELECT COUNT(*) AS n FROM screen_history WHERE user_id=0"
+        ).fetchone()["n"]
     else:
         rows = c.execute(
-            "SELECT id, module, title, item_count, created_at FROM screen_history "
-            "ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
-    return [dict(r) for r in rows]
+            "SELECT module, COUNT(*) AS n FROM screen_history WHERE user_id=? "
+            "GROUP BY module", (int(user_id),)).fetchall()
+        orphan = 0
+    by_module = {r["module"]: int(r["n"]) for r in rows}
+    return {"total": sum(by_module.values()), "by_module": by_module,
+            "orphan": int(orphan)}
+
+
+def reassign_screen_history(to_user_id: int,
+                            from_user_id: int = 0) -> int:
+    """把某批历史记录改挂到指定用户名下（默认搬 user_id=0 的孤儿记录）。
+
+    用于老数据迁移：隔离改造前存档的记录 user_id 全是 0，登录后看不见，
+    管理员可一键认领到自己/目标用户账户。返回迁移条数。
+    """
+    initialize()
+    c = _conn()
+    cur = c.execute("UPDATE screen_history SET user_id=? WHERE user_id=?",
+                    (int(to_user_id), int(from_user_id)))
+    c.commit()
+    return int(cur.rowcount)
 
 
 def get_screen_history(hid: int) -> Optional[Dict[str, Any]]:
@@ -851,6 +903,21 @@ def initialize() -> Dict[str, Any]:
         uid = _ensure_default_user(c)
         _ensure_default_folder(c, uid)
         c.commit()
+
+        # 数据迁移（只跑一次，靠 meta 记标记）：选股历史改为「按账户归属」
+        # 之前，所有记录 user_id 都是 0。这里统一挂到默认本地账号，避免升级
+        # 后旧记录凭空消失（管理员后续可用 reassign_screen_history 改挂他人）。
+        try:
+            r = c.execute("SELECT v FROM meta WHERE k='screen_hist_owner'").fetchone()
+            if r is None:
+                c.execute("UPDATE screen_history SET user_id=? WHERE user_id=0",
+                          (uid,))
+                c.execute("INSERT INTO meta(k,v) VALUES('screen_hist_owner',?)",
+                          (str(uid),))
+                c.commit()
+        except Exception as e:                       # 迁移失败不影响启动
+            print(f"[store] screen_history 归属迁移跳过: {e}")
+
         _initialized = True
 
         # 进程内缓存默认 uid：避免每个请求都回源查一次云端（省 ~190ms）

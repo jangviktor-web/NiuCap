@@ -2079,30 +2079,45 @@ def api_sim_window(payload: Dict[str, Any]):
         raise HTTPException(502, f"回测计算失败：{e}")
 
 
+def _history_owner_ok(rec: Dict[str, Any], request: Request) -> bool:
+    """历史记录归属校验：本人或管理员可看，否则不可越权。"""
+    if not rec:
+        return False
+    if _is_admin(_current_user(request)):
+        return True
+    return int(rec.get("user_id") or 0) == int(store.current_user_id())
+
+
 @app.get("/api/screen/history")
-def api_screen_history(module: Optional[str] = None,
+def api_screen_history(request: Request,
+                       module: Optional[str] = None,
                        limit: int = Query(200, ge=1, le=1000)):
-    """选股历史列表（按时间倒序）。module 可过滤 newbie/strategy/screen。"""
+    """我的选股历史列表（按账户隔离，按时间倒序）。
+    module 可过滤 newbie/strategy/screen；管理员看他人请用
+    /api/admin/users/{uid}/screen_history。
+    """
     store.initialize()
-    return {"items": store.list_screen_history(module=module, limit=limit)}
+    items = store.list_screen_history(module=module, limit=limit,
+                                      user_id=store.current_user_id())
+    return {"items": items, "user_id": store.current_user_id()}
 
 
 @app.get("/api/screen/history/{hid}")
-def api_screen_history_detail(hid: int):
-    """选股历史明细（含当时存档的个股列表）。"""
+def api_screen_history_detail(hid: int, request: Request):
+    """选股历史明细（含当时存档的个股列表）。非本人且非管理员 → 404。"""
     store.initialize()
     rec = store.get_screen_history(hid)
-    if not rec:
+    if not _history_owner_ok(rec, request):
         raise HTTPException(404, "记录不存在")
     return rec
 
 
 @app.get("/api/screen/history/{hid}/performance")
-def api_screen_history_performance(hid: int, amount_per: float = 10000.0):
+def api_screen_history_performance(hid: int, request: Request,
+                                   amount_per: float = 10000.0):
     """入选后表现：以入选价(或入选日收盘)为基准，对比最新价，统计涨跌幅/胜率。"""
-    store.initialize()
     rec = store.get_screen_history(hid)
-    if not rec:
+    if not _history_owner_ok(rec, request):
         raise HTTPException(404, "记录不存在")
     bd = datetime.fromtimestamp(rec["created_at"]).strftime("%Y-%m-%d")
     try:
@@ -2866,6 +2881,10 @@ def api_admin_users(request: Request):
     out = []
     for u in _store.list_users():
         u["is_admin"] = (u.get("username") or "").lower() in admins
+        try:
+            u["screen_cnt"] = _store.count_screen_history(u["id"]).get("total", 0)
+        except Exception:
+            u["screen_cnt"] = 0
         out.append(u)
     return {"items": out, "total": len(out), "admins_configured": bool(admins)}
 
@@ -2914,6 +2933,124 @@ def api_admin_delete_user(uid: int, request: Request):
     if not ok:
         raise HTTPException(404, "用户不存在")
     return {"ok": True}
+
+
+# ------------------------------------------------- 查看用户数据（只读诊断）
+
+@app.get("/api/admin/users/{uid}/watch")
+def api_admin_user_watch(uid: int, request: Request,
+                         with_quote: bool = Query(True)):
+    """管理员查看某用户的自选股分组与条目（只读）。
+
+    with_quote=false 时只返回清单，不请求行情 —— 列表很长或行情源不稳时用。
+    """
+    _require_admin(request)
+    _store = store
+    _store.initialize()
+    user = _store.get_user(uid)
+    if not user:
+        raise HTTPException(404, "用户不存在")
+    try:
+        folders = _store.list_folders(uid)
+        items = _store.list_items(user_id=uid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    if with_quote and items:
+        qm = _quote_map([it["code"] for it in items])
+        for it in items:
+            q = qm.get(it["code"]) or {}
+            it["price"] = q.get("price")
+            it["change_pct"] = q.get("change_pct")
+
+    by_folder: Dict[str, Any] = {}
+    for it in items:
+        by_folder.setdefault(it.get("folder_name") or "未分组", []).append(it)
+    return {"user": user, "folders": folders, "items": items,
+            "count": len(items), "grouped": by_folder}
+
+
+@app.get("/api/admin/users/{uid}/screen_history")
+def api_admin_user_screen_history(uid: int, request: Request,
+                                  module: Optional[str] = None,
+                                  limit: int = Query(100, ge=1, le=1000)):
+    """管理员查看某用户的历史选股记录（只读）。"""
+    _require_admin(request)
+    store.initialize()
+    user = store.get_user(uid)
+    if not user:
+        raise HTTPException(404, "用户不存在")
+    items = store.list_screen_history(module=module, limit=limit, user_id=uid)
+    stat = store.count_screen_history(uid)
+    return {"user": user, "items": items, "stat": stat}
+
+
+@app.get("/api/admin/users/{uid}/paper")
+def api_admin_user_paper(uid: int, request: Request,
+                         trades: int = Query(30, ge=0, le=500)):
+    """管理员查看某用户的虚拟盘：资金 / 持仓 / 成交流水（只读）。"""
+    _require_admin(request)
+    store.initialize()
+    user = store.get_user(uid)
+    if not user:
+        raise HTTPException(404, "用户不存在")
+    s = store.portfolio_summary(uid)
+    pos = _pos_with_quote(store.list_positions(uid))
+    mv = sum(p["market_value"] or 0 for p in pos)
+    quoted = [p for p in pos if p["market_value"] is not None]
+    total = round(s["cash"] + mv, 2)
+    return {
+        "user": user,
+        "summary": {
+            "cash": s["cash"],
+            "market_value": round(mv, 2),
+            "cost_total": s["cost_total"],
+            "total_asset": total,
+            "float_pnl": round(sum(p["pnl"] for p in quoted), 2),
+            "position_count": s["position_count"],
+            "unquoted": len(pos) - len(quoted),
+            "initial_cash": store._INITIAL_CASH,
+            "total_pnl": round(total - store._INITIAL_CASH, 2),
+            "total_pnl_pct": round((total - store._INITIAL_CASH)
+                                   / store._INITIAL_CASH * 100, 2),
+        },
+        "positions": pos,
+        "trades": store.list_trades(uid, limit=trades) if trades else [],
+    }
+
+
+# ------------------------------------------------- 选股历史（全量 + 调试）
+
+@app.get("/api/admin/screen_history")
+def api_admin_screen_history(request: Request,
+                             module: Optional[str] = None,
+                             user_id: Optional[int] = None,
+                             limit: int = Query(100, ge=1, le=1000)):
+    """全量选股历史（跨账户，调试用）。带模块分布与未归属条数统计。"""
+    _require_admin(request)
+    store.initialize()
+    items = store.list_screen_history(module=module, limit=limit,
+                                      user_id=user_id)
+    return {"items": items, "stat": store.count_screen_history(),
+            "total": len(items)}
+
+
+@app.post("/api/admin/screen_history/claim")
+def api_admin_screen_history_claim(request: Request,
+                                   payload: Dict[str, Any] = Body(...)):
+    """把未归属（user_id=0）的选股历史记录认领到指定用户。
+
+    老版本存档一律写 user_id=0，改成按账户隔离后这些记录谁都看不见；
+    启动时已自动挂到默认本地账号，需要换人的话用这里搬。
+    """
+    _require_admin(request)
+    store.initialize()
+    uid = int(payload.get("user_id") or 0)
+    if not uid or not store.get_user(uid):
+        raise HTTPException(404, "用户不存在")
+    moved = store.reassign_screen_history(
+        uid, int(payload.get("from_user_id") or 0))
+    return {"ok": True, "moved": moved, "user_id": uid}
 
 
 # ---------------------------------------------------------------- 运行参数
