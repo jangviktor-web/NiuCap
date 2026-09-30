@@ -8803,12 +8803,35 @@ document.addEventListener('click', function(ev){
   /* ---------- 交易时段时钟（A股，忽略法定节假日） ---------- */
   function bjParts(now){
     var p = {};
-    new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',weekday:'short',hour:'2-digit',minute:'2-digit',hour12:false})
+    new Intl.DateTimeFormat('zh-CN',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit',weekday:'short',hour:'2-digit',minute:'2-digit',hour12:false})
       .formatToParts(now).forEach(function(x){ p[x.type]=x.value; });
     var wd = {'周一':1,'周二':2,'周三':3,'周四':4,'周五':5,'周六':6,'周日':7}[p.weekday] || 1;
     var h = parseInt(p.hour,10), m = parseInt(p.minute,10);
-    return { wd: wd, min: h*60+m };
+    var ymd = p.year + '-' + p.month + '-' + p.day;
+    return { wd: wd, min: h*60+m, ymd: ymd };
   }
+  // 本地 A 股节假日表（休市日 + 调休补班日），与 server/holidays.py 同步。
+  // 只列「非周末的法定休市日」；周末由 wd 判断覆盖。数据口径/免责同后端文件。
+  // 2026 准确（国办明电〔2025〕7号）；2027 为预测值，待官方公告核实后更新。
+  var PAPER_HOLIDAYS = {
+    '2026-01-01':1,'2026-01-02':1,
+    '2026-02-16':1,'2026-02-17':1,'2026-02-18':1,'2026-02-19':1,'2026-02-20':1,'2026-02-23':1,
+    '2026-04-06':1,
+    '2026-05-01':1,'2026-05-04':1,'2026-05-05':1,
+    '2026-06-19':1,
+    '2026-09-25':1,
+    '2026-10-01':1,'2026-10-02':1,'2026-10-05':1,'2026-10-06':1,'2026-10-07':1,
+    '2027-01-01':1,
+    '2027-02-05':1,'2027-02-08':1,'2027-02-09':1,'2027-02-10':1,'2027-02-11':1,
+    '2027-04-05':1,
+    '2027-05-03':1,'2027-05-04':1,'2027-05-05':1,
+    '2027-06-07':1,'2027-06-08':1,'2027-06-09':1,
+    '2027-09-15':1,'2027-09-16':1,'2027-09-17':1,
+    '2027-10-01':1,'2027-10-04':1,'2027-10-05':1,'2027-10-06':1,'2027-10-07':1
+  };
+  var PAPER_MAKEUP = {
+    '2026-01-04':1,'2026-02-14':1,'2026-02-28':1,'2026-05-09':1,'2026-09-20':1,'2026-10-10':1
+  };
   function fmtSpan(mins){
     if(mins<=0) return '0m';
     var h=Math.floor(mins/60), m=mins%60;
@@ -8816,8 +8839,11 @@ document.addEventListener('click', function(ev){
   }
   function mktSession(now){
     var t = bjParts(now);
-    if(t.wd<1 || t.wd>5){           // 周末
-      return {cls:'mc-closed', line:'休市 · 下交易日 09:15'};
+    if(PAPER_HOLIDAYS[t.ymd]){       // 工作日法定休市日
+      return {cls:'mc-closed', line:'休市 · 节假日'};
+    }
+    if((t.wd<1 || t.wd>5) && !PAPER_MAKEUP[t.ymd]){  // 周末（非补班）
+      return {cls:'mc-closed', line:'休市 · 周末'};
     }
     var M=t.min;
     if(M>=555 && M<570)  return {cls:'mc-call',  line:'集合竞价 · 09:30 开盘'};

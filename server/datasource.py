@@ -10,6 +10,9 @@ import threading
 import requests
 from typing import Optional
 
+# 本地 A 股节假日表（休市日 + 调休补班日），见文件内说明
+import holidays as _hl
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/122.0 Safari/537.36")
 
@@ -883,15 +886,21 @@ def market_state(now=None):
                 'closed'(已收盘) / 'holiday'(休市)
         label : 中文文案，前端直接用
 
-    注意它**不查交易日历**：节假日会被判成 'closed'。调用方若拿到分钟线
-    的最新日期不是今天，应把 state 视为 'holiday'——这个判断放在显式
-    有数据的地方做（见 app.py 的分时接口），因为只有那里知道数据日期。
+    会查本地交易日历（holidays.py）：工作日里的法定休市日会被判成 'holiday'
+    并禁止交易，周末中的调休补班日则照常按交易时段判断。这样虚拟盘不会在
+    节假日按上一交易日收盘价"成交"（见 #103/#104）。
     """
     t = now or time.localtime()
     hm = (t.tm_hour, t.tm_min)
     wd = t.tm_wday                     # 0=周一 ... 6=周日
+    ymd = "%04d-%02d-%02d" % (t.tm_year, t.tm_mon, t.tm_mday)
 
-    if wd >= 5:
+    # ponytail: 本地节假日表优先于周末判断——工作日法定休市日必须拦住，
+    # 否则会被误判成交易中、可按上一交易日收盘价成交。
+    if _hl.is_market_holiday(ymd):
+        return {"state": "holiday", "label": "休市（节假日）",
+                "is_trading": False, "is_closed_today": True}
+    if wd >= 5 and not _hl.is_makeup_trading_day(ymd):
         return {"state": "holiday", "label": "周末休市",
                 "is_trading": False, "is_closed_today": True}
 
