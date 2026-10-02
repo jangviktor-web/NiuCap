@@ -507,6 +507,8 @@ A：本面板仅供量化学习与研究，不构成任何投资建议；虚拟�
 
 **用得上就点个 ⭐，有问题开 Issue～**
 
+[![RepoStars](https://repostars.dev/api/embed?repo=jangviktor-web%2FNiuCap&theme=grape)](https://repostars.dev/?repos=jangviktor-web%2FNiuCap&theme=grape)
+
 *仅供量化学习与研究，不构成投资建议。*
 
 </div>
