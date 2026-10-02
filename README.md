@@ -8,6 +8,7 @@
 
 <br>
 
+[![Gitee 仓库](https://img.shields.io/badge/Gitee-jangviktor%2Fniucap-C71D23.svg)](https://gitee.com/jangviktor/niucap)
 ![GitHub Stars](https://img.shields.io/github/stars/jangviktor-web/niucap?style=social)
 ![GitHub last commit](https://img.shields.io/github/last-commit/jangviktor-web/niucap)
 ![Repo size](https://img.shields.io/github/repo-size/jangviktor-web/niucap)
@@ -258,7 +259,10 @@ T+1、手续费、印花税、滑点全模拟；支持止损止盈与金字塔�
 ### 方式 A：Python 本机（推荐给开发者）
 
 ```bash
-git clone https://github.com/jangviktor-web/niucap.git
+# Gitee（主仓库，国内更快）
+git clone https://gitee.com/jangviktor/niucap.git
+# 或 GitHub（双端同步；仓库名 NiuCap，指定目录名保持一致）
+git clone https://github.com/jangviktor-web/NiuCap.git niucap
 cd niucap
 python -m venv .venv && source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
@@ -432,7 +436,7 @@ requirements.txt 运行时依赖（轻量，无需 akshare/mootdx）
 
 欢迎 Issue、PR 与建议！本项目以 **MIT** 开源，适合量化爱好者共同打磨。
 
-- **报告 Bug / 提需求**：开 [Issue](https://github.com/jangviktor-web/niucap/issues)，请尽量附上复现步骤、浏览器/系统、报错截图或日志（`server.log`）。
+- **报告 Bug / 提需求**：开 [Issue（Gitee）](https://gitee.com/jangviktor/niucap/issues) 或 [GitHub Issue](https://github.com/jangviktor-web/NiuCap/issues)，请尽量附上复现步骤、浏览器/系统、报错截图或日志（`server.log`）。
 - **提交代码**：
   1. `fork` 本仓库并基于 `master` 切出特性分支（`feat/xxx` / `fix/xxx`）。
   2. 保持提交小而聚焦，提交信息建议带前缀：`feat(#号)` / `fix(#号)` / `docs` / `test` / `chore`。
