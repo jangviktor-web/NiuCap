@@ -515,8 +515,13 @@ tbody tr:hover{background:#f7f9fc}
   background:var(--card);transition:.15s;position:relative;overflow:hidden}
 .nbcard:hover{transform:translateY(-2px);box-shadow:0 6px 18px rgba(20,26,40,.10);border-color:var(--accent)}
 .nbcard.on{border-color:var(--accent);background:var(--accent-bg);box-shadow:0 4px 14px rgba(31,95,214,.14)}
-.nbcard .ic{font-size:26px;line-height:1;font-family:"Apple Color Emoji","Segoe UI Emoji",
-  "Noto Color Emoji","Segoe UI Symbol",sans-serif}
+/* 方案图标：内联 SVG，不依赖 emoji 字体（各平台字形缺失会显示成方框） */
+.nbcard .ic{line-height:0;color:var(--accent)}
+.nbcard .ic svg{width:26px;height:26px;display:block}
+.nbcard.on .ic{color:var(--accent)}
+/* 结果标题里的小图标 */
+#nbResTitle{display:inline-flex;align-items:center;gap:7px}
+#nbResTitle svg{width:18px;height:18px;flex:none;color:var(--accent)}
 .nbcard .nm{font-size:15.5px;font-weight:700;margin:8px 0 3px;color:var(--tx)}
 .nbcard .tl{font-size:12.5px;color:var(--tx2);line-height:1.5;min-height:34px}
 .nbcard .ds{font-size:11.5px;color:var(--tx3);line-height:1.5;margin-top:8px;
@@ -8337,12 +8342,36 @@ function loadNewbiePresets(){
   });
 }
 
+/* 方案图标用内联 SVG（不依赖 emoji 字体，避免各平台字形缺失显示成方框/怪符号） */
+var NB_ICON = {
+  // 稳健白马：盾牌 + 对勾
+  steady:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '+
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+
+    '<path d="M12 2.8l7.4 3.1v5.2c0 4.3-3 8.1-7.4 9.9-4.4-1.8-7.4-5.6-7.4-9.9V5.9L12 2.8z"/>'+
+    '<path d="M8.7 11.9l2.3 2.3 4.4-4.6"/></svg>',
+  // 超跌反弹：先跌后升的 V 型折线
+  rebound:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '+
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+
+    '<path d="M2.8 6.2l4.6 8.4 3.4-4.9 10.4-5.6"/>'+
+    '<path d="M13.6 5.6h5.8v5.8"/></svg>',
+  // 成长活跃：上升折线 + 右上角箭头
+  growth:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '+
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+
+    '<path d="M3 17.5l4.8-5.2 3.4 3.2L20.4 5.4"/>'+
+    '<path d="M14.7 5.4h5.7v5.7"/></svg>',
+  // 打板热点：火焰（外焰 + 内焰）
+  hot:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" '+
+    'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+
+    '<path d="M12 2.6c3.9 3.9 5.9 6.4 5.9 9.5a5.9 5.9 0 1 1-11.8 0c0-3.1 2-5.6 5.9-9.5z"/>'+
+    '<path d="M12 12.2c1.6 1.5 2.4 2.6 2.4 3.7a2.4 2.4 0 1 1-4.8 0c0-1.1.8-2.2 2.4-3.7z"/></svg>'
+};
+
 function renderNewbiePicks(){
   var h = '';
   nbState.presets.forEach(function(p){
     var rc = nbRiskColor(p.risk);
     h += '<div class="nbcard' + (nbState.cur === p.key ? ' on' : '') + '" data-nbpick="' + p.key + '">';
-    h += '<div class="ic">' + p.icon + '</div>';
+    h += '<div class="ic">' + (NB_ICON[p.key] || '') + '</div>';
     h += '<div class="nm">' + esc(p.name) + '</div>';
     h += '<div class="tl">' + esc(p.tagline) + '</div>';
     h += '<div class="ds">' + esc(p.desc) + '</div>';
@@ -8365,7 +8394,8 @@ function runNewbie(key, force){
   nbState.presets.forEach(function(x){ if(x.key === key) p = x; });
 
   $('nbResultHead').style.display = 'flex';
-  $('nbResTitle').textContent = p ? (p.icon + ' ' + p.name) : '选股结果';
+  $('nbResTitle').textContent = p ? p.name : '选股结果';
+  $('nbResTitle').insertAdjacentHTML('afterbegin', (p && NB_ICON[p.key]) || '');
   $('nbResCount').textContent = '';
   $('nbBody').innerHTML = '<div class="nbempty"><span class="spin"></span> 正在扫描全市场，请稍候…</div>';
 

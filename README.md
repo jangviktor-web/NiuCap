@@ -4,7 +4,7 @@
 
 **本地自托管的 A 股量化「选股 + 择时 + 复盘」一体化面板**
 
-*25+ 选股策略 · 实时行情 · 连板梯队 · 题材雷达 · 龙虎榜后验 · 双源快讯 · 词典情绪 · 策略回测 · 虚拟盘 · **选股历史存档与胜率复盘** · 命令面板*
+*25+ 选股策略 · 实时行情 · 连板梯队 · 题材雷达 · 龙虎榜后验 · 双源快讯 · 策略回测 · 虚拟盘 · 选股复盘闭环 · 命令面板*
 
 <br>
 
@@ -14,38 +14,100 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.11+-blue.svg)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.110+-green.svg)](https://fastapi.tiangolo.com/)
-[![No API Key](https://img.shields.io/badge/API%20Key-不需要-success.svg)](#-快速开始)
-[![Self-hosted](https://img.shields.io/badge/部署-本机%20%7C%20云端%20%7C%20Docker-orange.svg)](#-快速开始)
-[![Mobile](https://img.shields.io/badge/移动端-响应式-9cf.svg)](#-快速开始)
-
-**一条命令起，数据完全在自己手里** · [在线示例](https://ab1dde4ffb5e275c5.app.workbuddy.host/)
-
-![市场榜单](docs/screenshots/01-dashboard.webp)
+[![No API Key](https://img.shields.io/badge/API%20Key-不需要-success.svg)](#-5-分钟跑起来)
+[![Self-hosted](https://img.shields.io/badge/部署-本机-%7C-云端-%7C-Docker-orange.svg)](#-5-分钟跑起来)
+[![Mobile](https://img.shields.io/badge/移动端-响应式-9cf.svg)](#-5-分钟跑起来)
 
 </div>
 
+<br>
+
+<div align="center">
+
+<table><tr>
+<td align="center" width="33%">
+<b>🚀 5 分钟跑起来</b><br>
+<sub>本机 Python / Docker 任选</sub><br><br>
+<a href="#-5-分钟跑起来"><b>看步骤 →</b></a>
+</td>
+<td align="center" width="33%">
+<b>☁️ 不想运维？云平台一键发布</b><br>
+<sub>零服务器，出分享链接</sub><br><br>
+<a href="#-部署教程一键发布到-workbuddy-云平台"><b>看教程 →</b></a>
+</td>
+<td align="center" width="33%">
+<b>🎯 先看它能干什么</b><br>
+<sub>10 张实机截图 + 功能说明</sub><br><br>
+<a href="#-页面预览"><b>看预览 →</b></a>
+</td>
+</tr></table>
+
+</div>
+
+<br>
+
+![市场榜单](docs/screenshots/01-dashboard.webp)
+
+<div align="center">
+
 > 仓库名 `niucap`（牛 = capture 牛股，A 股梗）；产品中文名「牛来选股面板」。两者指同一个项目。
 >
-> **A self-hosted A-share quant dashboard** — stock screening, limit-up ladder, sector radar, backtesting & paper trading. **No API key. 100% local.**
+> **A self-hosted A-share quant dashboard** — screening, limit-up ladder, sector radar, backtesting & paper trading. **No API key. 100% local.**
+
+</div>
+
+---
+
+## 🎯 为什么用它
+
+<div class="fgrid">
+
+<div class="fcard">
+<h4>🔑 零 API Key，一条命令起</h4>
+<p>行情全部走腾讯 / 新浪 / 同花顺 / 东财公开接口，情绪分析是本地词典引擎。不注册、不付费、不限流，克隆下来跑起来就能用。</p>
+</div>
+
+<div class="fcard">
+<h4>⚡ 秒级全市场扫描</h4>
+<p>25+ 内置策略 + 六类分组（趋势形态 / 量价涨停 / 反转波动 / 形态相似度 / 经典指标 / 分钟级），并集交集自由组合，全市场扫描稳定在秒级。</p>
+</div>
+
+<div class="fcard">
+<h4>🔒 数据在自己手里</h4>
+<p>SQLite 本地库或云端 MySQL 协议库自适应，日线数据落盘自己掌控。不是把隐私交出去的网页版。</p>
+</div>
+
+<div class="fcard">
+<h4>🧠 选完还能复盘</h4>
+<p>每次选股自动存档，事后可回看<b>窗口胜率</b>（模拟 09:30–09:50 买入当日收盘结算）、<b>入选后表现</b>、批量沉淀自选——不靠记性判断策略好坏。</p>
+</div>
+
+</div>
 
 ---
 
 ## 📑 目录
 
+<details open>
+<summary><b>展开 / 收起目录</b></summary>
+
+- [🎯 为什么用它](#-为什么用它)
 - [✨ 功能总览](#-功能总览)
 - [🖼 页面预览](#-页面预览)
 - [🧪 选股复盘闭环（#103~#105 新增）](#-选股复盘闭环103105-新增)
-- [🚀 快速开始](#-快速开始)
+- [🚀 5 分钟跑起来](#-5-分钟跑起来)
 - [💡 快速上手示例](#-快速上手示例)
 - [🧱 技术栈](#-技术栈)
 - [📘 部署教程：一键发布到 WorkBuddy 云平台](#-部署教程一键发布到-workbuddy-云平台)
-- [⚠️ 首次部署必读：数据初始化](#️-首次部署必读数据初始化)
-- [⚙️ 配置（.env，可选）](#️-配置env可选)
+- [⚠️ 首次部署必读：数据初始化](#-首次部署必读数据初始化)
+- [⚙️ 配置（.env，可选）](#-配置env可选)
 - [📁 目录结构](#-目录结构)
 - [🤝 贡献方式](#-贡献方式)
-- [🗺️ 路线图](#️-路线图)
+- [🗺️ 路线图](#-路线图)
 - [❓ 常见问题](#-常见问题)
 - [📜 许可证](#-许可证)
+
+</details>
 
 ---
 
@@ -79,7 +141,7 @@
 
 ### 🌟 小白选股 —— 不填任何条件，选一个「最像你的想法」
 
-四套方案对应四种投资风格，点一下即出结果。每只票都有友好度评分与逐条理由，配市值档位、估值档位标签，可一键跳个股详情。
+四套方案对应四种投资风格（盾牌=稳健 / 反弹折线=超跌 / 上升=成长 / 火焰=打板），点一下即出结果。每只票都有友好度评分与逐条理由，配市值档位、估值档位标签，可一键跳个股详情。
 
 ![小白选股](docs/screenshots/02-newbie.webp)
 
@@ -95,18 +157,19 @@ PE / PB / 市值 / 涨跌幅 / 换手率 / 成交额自由组合，内置「低�
 
 ![条件选股](docs/screenshots/04-screen.webp)
 
+<div class="pair">
+
+![连板梯队](docs/screenshots/09-limitup.webp)
+
+![题材雷达](docs/screenshots/10-theme.webp)
+
+</div>
+
 ### 📈 个股分析 —— K 线 + 60+ 项指标 + 资金筹码基本面
 
 K 线（日/周/月，1~60 分钟）叠加均线与四种通道；技术面结论卡片直接给「偏多 / 偏空」；往下还有资金流向、筹码分布、基本面、机构研报与公司公告。
 
 ![个股分析](docs/screenshots/08-stock.webp)
-
-### 🔥 连板梯队 + 题材雷达 —— 超短情绪一眼看透（#100 新增）
-
-连板天数按交易日历精确对齐，梯队分组 + 情绪周期徽标；题材雷达四维评分融合去重，当日主线一目了然。标题栏标注数据时效（盘中实时 / 收盘数据）。
-
-![连板梯队](docs/screenshots/09-limitup.webp)
-![题材雷达](docs/screenshots/10-theme.webp)
 
 ### 🧪 策略回测 —— 真实约束下的成绩单
 
@@ -190,7 +253,7 @@ T+1、手续费、印花税、滑点全模拟；支持止损止盈与金字塔�
 
 ---
 
-## 🚀 快速开始
+## 🚀 5 分钟跑起来
 
 ### 方式 A：Python 本机（推荐给开发者）
 
@@ -313,7 +376,7 @@ curl "http://localhost:8899/api/theme?limit=40"
 ### 云平台注意事项
 
 - **数据临时**：云实例存储通常是临时的，重启 / 重新发布会清空本地 SQLite，需重新同步一次（后台管理 → 运行参数 → 开始同步）。
-- 想要**数据常驻、多人共享**，用上方「首次部署必读」的云端 MySQL 协议库方案（填 `TICK_DB_HOST` 等，重启不丢数据）。
+- 想要**数据常驻、多人共享**，用下方「首次部署必读」的云端 MySQL 协议库方案（填 `TICK_DB_HOST` 等，重启不丢数据）。
 - 无需任何 API Key，行情来自腾讯 / 新浪 / 同花顺 / 东财公开接口。
 
 ---
@@ -352,10 +415,11 @@ server/         FastAPI 后端：选股引擎 / 行情 / 龙虎榜 / 快讯 / �
   sentiment.py    词典情绪（正/负词 + 否定反转 + 程度乘数 + 转折）
   limitup.py      连板梯队 + 6 阶段情绪周期（#100）
   theme_radar.py  题材雷达：四维评分 + 融合去重（#100）
-  westock.py      资金面 / 筹码 / 基本面 / 研报公告扩展数据源
+  windowsim.py    窗口胜率回测 / 入选后表现（#105）
+  holidays.py     本地 A 股节假日表（#104）
   store.py        数据访问层（SQLite / MySQL 协议库自适应）
 web/            前端单页（原生 HTML/JS + ECharts，无构建步骤）
-scripts/        数据同步、健康检查、发布等运维脚本
+  index.html      全站单文件应用
 docs/           部署指南与各功能说明（中文）+ screenshots/ 页面截图
 tests/          自检与端到端测试（Playwright 双视口）
 deploy.sh       一键启动 / 隧道 / 停止
@@ -381,13 +445,13 @@ requirements.txt 运行时依赖（轻量，无需 akshare/mootdx）
 
 ## 🗺️ 路线图
 
+- [x] 选股复盘闭环：历史存档 + 胜率回测 + 入选后表现 + 批量加自选（#105）
+- [x] 导航按「看盘/选股/分析/我的」四组分组（#106）
+- [x] 虚拟盘收盘后禁止交易（#103）
+- [x] 本地 A 股节假日表（#104）
 - [x] 连板梯队 + 情绪周期 + 题材雷达（#100）
 - [x] 移动端响应式导航（汉堡抽屉）+ 命令面板 + 交易时钟（#99）
 - [x] 前端设计令牌根因修复与无障碍（#101）
-- [x] 虚拟盘收盘后禁止交易（#103）
-- [x] 本地 A 股节假日表（#104）
-- [x] 选股历史存档 + 窗口胜率回测 + 入选后表现 + 批量加自选分组（#105）
-- [x] 导航按「看盘/选股/分析/我的」四组分组（#106）
 - [ ] 形态识别 / 形态相似度可视化增强（#37 / #43）
 - [ ] 自选股成本线可视化（#90）
 - [ ] 个股页 hover 弹图（#92）
@@ -399,7 +463,7 @@ requirements.txt 运行时依赖（轻量，无需 akshare/mootdx）
 ## ❓ 常见问题
 
 **Q：页面能打开，但榜单 / 选股是空的？**
-A：空库还没灌数据。看上面「[首次部署必读：数据初始化](#️-首次部署必读数据初始化)」，进后台管理点一次「开始同步」即可。
+A：空库还没灌数据。看上面「[首次部署必读：数据初始化](#-首次部署必读数据初始化)」，进后台管理点一次「开始同步」即可。
 
 **Q：需要 API Key 吗？收费吗？**
 A：不需要，完全免费。行情来自腾讯 / 新浪 / 同花顺 / 东财公开接口，情绪分析为本地词典引擎。
@@ -409,6 +473,9 @@ A：盘中行情缓存约 3 分钟自动刷新；日线支持每日定时自动�
 
 **Q：能多人同时用吗？**
 A：能。配云端 MySQL 协议库（如 TiDB Cloud）后数据常驻，把部署链接或局域网地址分享给朋友即可。
+
+**Q：休市 / 节假日打开，选股结果显示全 0 或涨跌为 0 正常吗？**
+A：正常。当地没有新行情可比，入选价≈最新价，涨跌幅即 0。节假日表会让顶栏显示「休市 · 节假日」。
 
 **Q：能用于实盘吗？**
 A：本面板仅供量化学习与研究，不构成任何投资建议；虚拟盘可模拟交易，实盘决策风险自负。
@@ -429,3 +496,23 @@ A：本面板仅供量化学习与研究，不构成任何投资建议；虚拟�
 `stock-analysis` · `trading-dashboard` · `stock-dashboard` · `backtesting` · `technical-analysis` ·
 `real-time-data` · `sentiment-analysis` · `paper-trading` · `limit-up` · `selfhosted` ·
 `python` · `fastapi` · `pandas` · `numpy` · `echarts`
+
+---
+
+<div align="center">
+
+**用得上就点个 ⭐，有问题开 Issue～**
+
+*仅供量化学习与研究，不构成投资建议。*
+
+</div>
+
+<style>
+.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:16px 0}
+.fcard{background:#f6f8fa;border:1px solid #d0d7de;border-radius:10px;padding:14px 16px;text-align:left}
+.fcard h4{margin:0 0 6px;font-size:14.5px;color:#1f2328}
+.fcard p{margin:0;font-size:12.8px;line-height:1.65;color:#57606a}
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+.pair img{width:100%;border-radius:8px;border:1px solid #d0d7de}
+@media(max-width:820px){.pair{grid-template-columns:1fr}}
+</style>
