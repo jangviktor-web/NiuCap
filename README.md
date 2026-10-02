@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="docs/logo.webp" width="180" alt="牛来选股面板 Logo" />
+
 # 🐂 牛来选股面板 · Niucap
 
 **本地自托管的 A 股量化「选股 + 择时 + 复盘」一体化面板**
