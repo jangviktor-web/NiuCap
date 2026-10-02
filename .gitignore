@@ -23,3 +23,6 @@ __pycache__/
 .run/
 cloudflared
 cloudflared.tgz
+
+# codegraph 代码索引（由 codegraph init 生成，纯本地缓存）
+.codegraph/

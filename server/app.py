@@ -1266,8 +1266,14 @@ def api_strategy_scan(
         items.append(it)
 
     _, upd = MARKET.get()
+    # 标题存中文（与策略选股页一致）：并集/交集 + 各策略中文名，
+    # 多策略用「、」分隔；老记录（英文 key）由前端 prettifyHistTitle 兜底翻译。
+    MODE_NAME = {"union": "并集", "intersect": "交集"}
+    title = "策略·{}·{}".format(
+        MODE_NAME.get(mode, mode),
+        "、".join(name_map.get(k, k) for k in key_list))
     _save_screen_history(
-        "strategy", f"策略·{mode}·{','.join(key_list)}",
+        "strategy", title,
         {"keys": key_list, "mode": mode, "pool": pool, "market": market,
          "exclude_st": exclude_st, "tune": override}, items)
     return {

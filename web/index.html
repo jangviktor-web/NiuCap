@@ -3835,7 +3835,7 @@ function admUdRenderHist(d){
   var rows = (d.items || []).map(function(r){
     return '<tr><td>' + r.id + '</td>' +
       '<td><span class="tag z">' + (MODULE_LABEL[r.module] || r.module) + '</span></td>' +
-      '<td>' + esc(r.title || '—') + '</td>' +
+      '<td>' + esc(prettifyHistTitle(r.title) || '—') + '</td>' +
       '<td class="r">' + r.item_count + '</td>' +
       '<td style="font-size:12px;color:var(--tx3)">' + fmtHistTime(r.created_at) + '</td>' +
       '<td class="ctr" style="white-space:nowrap">' +
@@ -4015,7 +4015,7 @@ function admNfFillRows(items){
     var own = admNf.users[r.user_id] || (r.user_id === 0 ? '未归属' : ('#' + r.user_id));
     return '<tr><td>' + r.id + '</td><td>' + esc(own) + '</td>' +
       '<td><span class="tag z">' + (MODULE_LABEL[r.module] || r.module) + '</span></td>' +
-      '<td>' + esc(r.title || '—') + '</td>' +
+      '<td>' + esc(prettifyHistTitle(r.title) || '—') + '</td>' +
       '<td class="r">' + r.item_count + '</td>' +
       '<td style="font-size:12px;color:var(--tx3)">' + fmtHistTime(r.created_at) + '</td>' +
       '<td class="ctr" style="white-space:nowrap">' +
@@ -9527,6 +9527,35 @@ document.addEventListener('click', function(ev){
 /* ================= 历史选股 + 窗口胜率回测 ================= */
 var MODULE_LABEL = {newbie:'小白选股', strategy:'策略选股', screen:'条件选股'};
 
+/* 策略 key → 中文名（与策略选股页 STRATEGY_DEFS.name 一致）；并集/交集。
+   用于把历史选股里「策略·union·gap_up」这类英文标题翻成中文显示。 */
+var STRAT_NAME = {
+  breakout_20h:'突破新高', ma_bull:'均线多头', platform_break:'平台突破',
+  gap_up:'跳空强势', limit_up:'涨停封板', near_limit:'接近涨停',
+  limit_momentum:'涨停动量', strong_turnover:'高换手强势', volume_surge:'放量突破',
+  vol_price_up:'量价齐升', oversold_rebound:'超跌反弹', reversal_hammer:'长下影反击',
+  pullback_ma20:'回踩企稳', low_vol_leader:'低波动龙头', small_cap_active:'小市值活跃',
+  pattern_score:'形态评分', supertrend_long:'超级趋势翻多', atr_breakout:'ATR突破',
+  connors_rsi_dip:'康纳丝超卖', td9_buy:'TD九转抄底', mfi_oversold:'资金流超卖',
+  cmf_breakout:'资金流入突破', boll_squeeze:'布林挤压', id_vol_surge:'盘中放量',
+  id_break_up:'分时突破', id_up_strong:'盘中强势', id_pullback_day:'日内回踩',
+  id_vol_price_up:'分时价涨量增', id_range_break:'横盘异动'
+};
+var MODE_NAME = {union:'并集', intersect:'交集'};
+function prettifyHistTitle(t){
+  if(!t) return t;
+  // 策略存档格式：策略·{mode}·{keys（逗号分隔）}
+  var parts = t.split('·');
+  if(parts.length >= 3 && parts[0] === '策略'){
+    var mode = MODE_NAME[parts[1]] || parts[1];
+    var keys = parts.slice(2).join('·').split(',')
+      .map(function(k){ k = (k||'').trim(); return STRAT_NAME[k] || k; })
+      .filter(function(k){ return k; });
+    return '策略·' + mode + '·' + keys.join('、');
+  }
+  return t;   // 条件/小白等非策略标题原样返回
+}
+
 /* 三选股结果页·批量选中态：batchSel[module] = Set(code)；batchMap[module] = code->{code,name} */
 var batchSel = { newbie:new Set(), strategy:new Set(), screen:new Set() };
 var batchMap = { newbie:{}, strategy:{}, screen:{} };
@@ -9592,7 +9621,7 @@ function loadScreenHistory(module){
     box.innerHTML = items.map(function(r){
       return '<div class="histcard" data-hid="'+r.id+'">'+
         '<div class="hc-top"><span class="hc-mod hc-'+r.module+'">'+MODULE_LABEL[r.module]+'</span>'+
-        '<span class="hc-title">'+attr(r.title||'')+'</span>'+
+        '<span class="hc-title">'+attr(prettifyHistTitle(r.title)||'')+'</span>'+
         '<span class="hc-time">'+fmtHistTime(r.created_at)+'</span></div>'+
         '<div class="hc-bot"><span class="hc-n">'+r.item_count+' 只</span>'+
         '<span class="hc-actions"><button class="btn sm" data-act="perf" data-hid="'+r.id+'">看表现</button>'+
@@ -9617,7 +9646,7 @@ function bindHistList(){
 function histShowWin(hid){
   fetch('/api/screen/history/'+hid).then(function(r){ return r.json(); }).then(function(rec){
     if(!rec || !rec.items || !rec.items.length){ wtToast('该记录没有个股'); return; }
-    showWinRate(rec.items, rec.title);
+    showWinRate(rec.items, prettifyHistTitle(rec.title));
   }).catch(function(){ wtToast('读取失败'); });
 }
 
