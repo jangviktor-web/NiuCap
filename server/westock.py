@@ -459,7 +459,7 @@ def notices(code: str, limit: int = 10) -> List[Dict[str, Any]]:
 
 
 def market_overview() -> Dict[str, Any]:
-    """A 股市场总览：12 维评分 + 总评。"""
+    """A 股市场总览：13 维评分 + 总评。"""
     out = _query(["market-overview"], "mktov", "realtime")
     if not out:
         return {}

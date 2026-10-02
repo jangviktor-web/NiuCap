@@ -2543,7 +2543,7 @@ def api_alerts_check():
 
 @app.get("/api/market_overview")
 def api_market_overview():
-    """市场温度：12 维评分 + 涨跌分布 + 板块与龙虎榜摘要。"""
+    """市场温度：13 维评分 + 涨跌分布 + 板块与龙虎榜摘要。"""
     ov = wst.market_overview()
     # 数据日期落后一天时，明确说明「是上游的日期，不是取数失败」
     if ov.get("stale"):
