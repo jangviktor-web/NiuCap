@@ -10,6 +10,12 @@
 
 <br>
 
+<a href="https://ab1dde4ffb5e275c5.app.workbuddy.host/" target="_blank"><img src="https://img.shields.io/badge/%E2%9A%A1%20%E5%9C%A8%E7%BA%BF%E4%BD%93%E9%AA%8C-%E6%89%93%E5%BC%80%E6%BC%94%E7%A4%BA%E7%AB%99-FF6B35?style=for-the-badge&labelColor=2D2D2D" alt="在线体验 · 打开演示站"></a>
+
+<sub>免安装 · 打开即用 · 演示环境数据仅供预览</sub>
+
+<br>
+
 [![Gitee 仓库](https://img.shields.io/badge/Gitee-jangviktor%2Fniucap-C71D23.svg)](https://gitee.com/jangviktor/niucap)
 ![GitHub Stars](https://img.shields.io/github/stars/jangviktor-web/niucap?style=social)
 ![GitHub last commit](https://img.shields.io/github/last-commit/jangviktor-web/niucap)
@@ -28,17 +34,22 @@
 <div align="center">
 
 <table><tr>
-<td align="center" width="33%">
+<td align="center" width="25%">
+<b>⚡ 在线体验</b><br>
+<sub>免安装，打开就用</sub><br><br>
+<a href="https://ab1dde4ffb5e275c5.app.workbuddy.host/" target="_blank"><b>立即体验 →</b></a>
+</td>
+<td align="center" width="25%">
 <b>🚀 5 分钟跑起来</b><br>
 <sub>本机 Python / Docker 任选</sub><br><br>
 <a href="#-5-分钟跑起来"><b>看步骤 →</b></a>
 </td>
-<td align="center" width="33%">
+<td align="center" width="25%">
 <b>☁️ 不想运维？云平台一键发布</b><br>
 <sub>零服务器，出分享链接</sub><br><br>
 <a href="#-部署教程一键发布到-workbuddy-云平台"><b>看教程 →</b></a>
 </td>
-<td align="center" width="33%">
+<td align="center" width="25%">
 <b>🎯 先看它能干什么</b><br>
 <sub>16 张实机截图 + 功能说明</sub><br><br>
 <a href="#-页面预览"><b>看预览 →</b></a>
@@ -257,6 +268,8 @@ T+1、手续费、印花税、滑点全模拟；支持止损止盈与金字塔�
 ---
 
 ## 🚀 5 分钟跑起来
+
+> 💡 不想动手装？先玩 [**在线体验版**](https://ab1dde4ffb5e275c5.app.workbuddy.host/)，效果满意再回来自建。
 
 ### 方式 A：Python 本机（推荐给开发者）
 
