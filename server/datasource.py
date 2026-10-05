@@ -887,8 +887,12 @@ def market_state(now=None):
         label : 中文文案，前端直接用
 
     会查本地交易日历（holidays.py）：工作日里的法定休市日会被判成 'holiday'
-    并禁止交易，周末中的调休补班日则照常按交易时段判断。这样虚拟盘不会在
-    节假日按上一交易日收盘价"成交"（见 #103/#104）。
+    并禁止交易。这样虚拟盘不会在节假日按上一交易日收盘价"成交"（见 #103/#104）。
+
+    ⚠ 周末一律休市，不看调休补班表：国务院的「周末补班」是工作日上班安排，
+      **证券交易所周末不开市**。早期实现把补班日当交易日，导致 2026 年有
+      5 个周日/周六（01-04、02-14、02-28、05-09、09-20）被判成可交易 ——
+      由同花顺权威交易日历对账发现（见 maintain.calendar_audit）。
     """
     t = now or time.localtime()
     hm = (t.tm_hour, t.tm_min)
@@ -900,7 +904,8 @@ def market_state(now=None):
     if _hl.is_market_holiday(ymd):
         return {"state": "holiday", "label": "休市（节假日）",
                 "is_trading": False, "is_closed_today": True}
-    if wd >= 5 and not _hl.is_makeup_trading_day(ymd):
+    # 周末一律休市：A 股不存在「周末补班交易日」（详见本函数 docstring）
+    if wd >= 5:
         return {"state": "holiday", "label": "周末休市",
                 "is_trading": False, "is_closed_today": True}
 

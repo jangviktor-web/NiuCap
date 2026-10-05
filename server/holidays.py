@@ -88,5 +88,11 @@ def is_market_holiday(ymd: str) -> bool:
 
 
 def is_makeup_trading_day(ymd: str) -> bool:
-    """ymd 形如 'YYYY-MM-DD'，返回当天是否周末中的调休补班交易日。"""
+    """ymd 形如 'YYYY-MM-DD'，返回当天是否为国务院调休补班日。
+
+    ⚠ 本表**不参与 A 股交易判定**：调休补班是「工作日上班」安排，
+    证券交易所周末不开市。datasource.market_state() 对周末一律判休市，
+    不再查这张表（经同花顺权威交易日历对账确认，见 maintain.calendar_audit）。
+    保留数据仅作调休参考与后台展示。
+    """
     return ymd in MAKEUP_WORKDAYS

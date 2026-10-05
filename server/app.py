@@ -2612,6 +2612,74 @@ def api_hotspot():
     }
 
 
+@app.get("/api/auction")
+def api_auction(stage: str = Query("final", description="live=实时 / final=终态")):
+    """集合竞价（同花顺）：短线风向标基准 + 自选股竞价快照。
+
+    为什么必须带 trade_date：上游竞价接口**不返回数据所属交易日**，而休市日
+    会静默回吐上一交易日的终态（实测 2026-10-06 取到的是 09-30 数据）。不标
+    日期用户会以为是实时。这里用交易日历序列校准：今天在序列里就用今天，
+    否则回落到序列最后一个交易日。
+
+    降级策略（任一环节不可用都不 500）：
+      - 无 Key / 接口异常 → available=False，前端整卡隐藏
+      - 休市日 → benchmark 自动回落到最近交易日；取不到就 items=[]
+    """
+    if stage not in ("live", "final"):
+        stage = "final"
+
+    today = datetime.now().strftime("%Y-%m-%d")
+    td = htk.trading_days()
+    is_today = today in td["days"]
+    # 数据归属交易日：今天开市用今天，否则用序列里最后一个交易日
+    trade_date = today if is_today else (td["last"] or today)
+
+    # 短线风向标：先取当日，休市为空时回落到最近交易日
+    bench = htk.auction_benchmark()
+    if bench["total"] == 0 and trade_date != today:
+        bench = htk.auction_benchmark(trade_date)
+
+    # 自选股竞价快照（上游单次上限 100，超出截断）
+    watch: Dict[str, Any] = {"ok": False, "total": 0, "items": []}
+    try:
+        store.initialize()
+        items = store.list_items()
+        codes = [it.get("code") for it in (items or []) if it.get("code")]
+        if codes:
+            watch = htk.auction_snapshot(codes[:100], stage)
+            # 补自选股备注名（上游只给标准简称）
+            alias = {str(it.get("code")): it.get("alias") or it.get("name")
+                     for it in items}
+            for r in watch["items"]:
+                if not r.get("name") and alias.get(r["code"]):
+                    r["name"] = alias[r["code"]]
+    except Exception:
+        watch = {"ok": False, "total": 0, "items": []}
+
+    return {
+        "available": htk.API_AVAILABLE,
+        "trade_date": trade_date,
+        "is_today": is_today,
+        "phase": watch.get("phase", stage),
+        "status": watch.get("status", ""),
+        "benchmark": bench,
+        "watch": watch,
+        "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+@app.get("/api/valuation")
+def api_valuation(code: str = Query(..., description="股票代码，如 sh600519")):
+    """个股估值五口径（同花顺）：PE_TTM / PE_MRQ / PB_MRQ / PS_TTM / PCF_TTM。
+
+    ⚠ 实测：ETF 与指数无估值数据，且**混入会整批失败**（code≠0）。
+    所以只服务个股，取不到时返回 valuation=None，前端该行不渲染即可。
+    """
+    rows = htk.valuation([code])
+    return {"valuation": rows[0] if rows else None,
+            "available": htk.API_AVAILABLE}
+
+
 # ===========================================================================
 # 策略意图解析 + 通达信公式编译
 # ===========================================================================

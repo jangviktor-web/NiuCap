@@ -129,6 +129,163 @@ def _i(v: Any, default: int = 0) -> int:
     return int(_f(v, default))
 
 
+# ---------------------------------------------------------------- 集合竞价
+#
+# 契约来源：skills/hithink-finance/references/api/a-share/auction.md
+# 实测（2026-10-06）：休市日仍返回数据，且是**上一交易日的竞价终态**，
+#   不是空列表 —— 所以调用方必须看 status/date 判新鲜度，不能只看有没有数据。
+
+
+def _auction_row(r: Dict[str, Any]) -> Dict[str, Any]:
+    """竞价明细字段映射（保留 auction_ 前缀，避免与实时价混淆）。"""
+    return {
+        "code": r.get("thscode") or "",
+        "ticker": r.get("ticker", ""),
+        "name": (r.get("name") or "").strip(),
+        "auction_price": _f(r.get("auction_price")),
+        "auction_pct": _f(r.get("auction_pct")),
+        "auction_volume": _f(r.get("auction_volume")),
+        "auction_amount": _f(r.get("auction_amount")),
+        "auction_unmatched": _f(r.get("auction_unmatched")),
+        "auction_turnover_pct": _f(r.get("auction_turnover_pct")),
+        "auction_yesterday_ratio_pct": _f(r.get("auction_yesterday_ratio_pct")),
+        "auction_volume_ratio": _f(r.get("auction_volume_ratio")),
+        "pre_close": _f(r.get("pre_close_price")),
+        "open": _f(r.get("open_price")),
+        "last": _f(r.get("last_price")),
+        "float_cap": _f(r.get("float_market_cap")),
+    }
+
+
+def auction_snapshot(codes: List[str], stage: str = "final") -> Dict[str, Any]:
+    """A 股集合竞价快照。
+
+    codes : 我方格式（sh600519 / 600519.SH 都吃），单次最多 100 只，超出截断。
+    stage : live(实时) / final(终态)。
+
+    返回 {ok, phase, status, total, items}；不可用时 ok=False、items=[]。
+    """
+    ths = [to_thscode(c) for c in (codes or []) if str(c).strip()]
+    ths = [t for t in ths if t][:100]          # 上游硬上限 100
+    if not ths:
+        return {"ok": False, "phase": stage, "status": "empty",
+                "total": 0, "items": []}
+    data = _cached("/api/a-share/auction/snapshot",
+                   {"thscodes": ",".join(ths), "stage": stage}, "realtime")
+    if not data:
+        return {"ok": False, "phase": stage, "status": "unavailable",
+                "total": 0, "items": []}
+    return {
+        "ok": True,
+        "phase": (data.get("auction_phase") or stage),
+        "status": (data.get("data_status") or ""),
+        "total": _i(data.get("total")),
+        "items": [_auction_row(r) for r in (data.get("item") or [])],
+    }
+
+
+def auction_benchmark(date: Optional[str] = None) -> Dict[str, Any]:
+    """短线风向标竞价基准（当日全市场竞价涨跌幅 + 标签）。
+
+    date : yyyy-MM-dd，省略取服务端当日；显式传非交易日**不回退**（返回空）。
+
+    ⚠ 实测与契约文档不一致：文档示例 tags 是 ["高开","放量"]，
+      实测返回的是行业/概念标签（如 ["住宅开发","租售同权"]）。
+      前端文案按"概念归因"理解，不要按技术形态渲染。
+
+    返回 {ok, date, total, items}；休市/无数据时 ok=True 但 items=[]。
+    """
+    params = {"date": date} if date else None
+    data = _cached("/api/a-share/auction/short-term-benchmark",
+                   params, "realtime")
+    if not data:
+        return {"ok": False, "date": date or "", "total": 0, "items": []}
+    items = []
+    for r in (data.get("item") or []):
+        tags = r.get("tags") or []
+        items.append({
+            "code": r.get("thscode") or "",
+            "ticker": r.get("ticker", ""),
+            "name": (r.get("name") or "").strip(),
+            "auction_pct": _f(r.get("auction_pct")),
+            "tags": [str(t).strip() for t in tags if str(t).strip()],
+        })
+    return {
+        "ok": True,
+        "date": (data.get("date") or date or "").strip(),
+        "total": len(items),
+        "items": items,
+    }
+
+
+# ---------------------------------------------------------------- 交易日历
+#
+# 契约：GET /api/a-share/calendar/trading-days —— 无入参，固定窗口
+#       [今日-1年, 今日]，实测 241 条。
+# ⚠ 末端是「最后一个交易日」而非自然日今天（今天休市时今天不在序列里），
+#   所以它只能校准历史，**不能预测未来交易日**。
+
+
+def trading_days() -> Dict[str, Any]:
+    """A 股近一年权威交易日序列。
+
+    返回 {ok, first, last, count, days}，days 为 'YYYY-MM-DD' 升序列表
+    （上游给的是 yyyyMMdd，这里统一转成与本地 holidays 一致的带横线格式）。
+    """
+    data = _cached("/api/a-share/calendar/trading-days", None, "daily")
+    if not data:
+        return {"ok": False, "first": "", "last": "", "count": 0, "days": []}
+    days = []
+    for r in (data.get("item") or []):
+        s = str(r.get("date") or "").strip()
+        if len(s) == 8 and s.isdigit():
+            days.append(f"{s[:4]}-{s[4:6]}-{s[6:]}")   # 20260930 → 2026-09-30
+    days.sort()
+    return {
+        "ok": bool(days),
+        "first": days[0] if days else "",
+        "last": days[-1] if days else "",
+        "count": len(days),
+        "days": days,
+    }
+
+
+# ---------------------------------------------------------------- 估值快照
+#
+# 契约：GET /api/a-share/valuations/snapshot
+# ⚠ 实测（2026-10-06）：**混入 ETF 或指数会整批失败**（code≠0 返回 None），
+#   单独传 ETF 同样失败。所以只用于个股，批量前必须过滤非个股代码。
+
+
+def valuation(thscodes: List[str]) -> List[Dict[str, Any]]:
+    """估值快照五口径：PE_TTM / PE_MRQ / PB_MRQ / PS_TTM / PCF_TTM。
+
+    thscodes : 单个或多个（我方格式或 thscode 都吃）。
+    失败（含混入 ETF/指数）返回 []，调用方应优雅降级而不是报错。
+    """
+    ths = [to_thscode(c) for c in (thscodes or []) if str(c).strip()]
+    ths = [t for t in ths if t][:50]
+    if not ths:
+        return []
+    data = _cached("/api/a-share/valuations/snapshot",
+                   {"thscodes": ",".join(ths)}, "daily")
+    if not data:
+        return []
+    out = []
+    for r in (data.get("item") or []):
+        out.append({
+            "code": r.get("thscode") or "",
+            "ticker": r.get("ticker", ""),
+            "name": (r.get("name") or "").strip(),
+            "pe_ttm": _f(r.get("pe_ttm")),
+            "pe_mrq": _f(r.get("pe_mrq")),
+            "pb_mrq": _f(r.get("pb_mrq")),
+            "ps_ttm": _f(r.get("ps_ttm")),
+            "pcf_ttm": _f(r.get("pcf_ttm")),
+        })
+    return out
+
+
 # ---------------------------------------------------------------- 人气热榜
 
 

@@ -968,6 +968,17 @@ td .starbtn{font-size:16px}
       </div>
     </div>
 
+    <!-- 盘前竞价（同花顺）—— 无 Key / 无数据时整卡隐藏，不占位 -->
+    <div class="card" id="auctionCard" style="display:none">
+      <div class="card-h">
+        <h2>⏰ 盘前竞价</h2>
+        <div class="meta" id="aucMeta">加载中…</div>
+      </div>
+      <div class="card-b np">
+        <div id="aucBody"><div class="load"><span class="spin"></span>加载竞价…</div></div>
+      </div>
+    </div>
+
     <!-- 统一工具栏：必须放在三张卡片之外，否则切到热点/异动时下拉会被一起隐藏，回不去 -->
     <div class="card" id="rankBarCard">
       <div class="card-b">
@@ -2628,10 +2639,14 @@ function loadStock(code){
   var p2 = api('/api/keylevels?code=' + encodeURIComponent(code)).catch(function(){ return null; });
   var p3 = api('/api/indicators_full?code=' + encodeURIComponent(code) + '&period=' + state.stockPeriod)
     .catch(function(){ return null; });
-  Promise.all([p1, p2, p3]).then(function(res){
+  // 估值五口径（同花顺）：ETF/指数取不到 → 返回 null，下方整行不渲染
+  var p4 = api('/api/valuation?code=' + encodeURIComponent(code))
+    .catch(function(){ return null; });
+  Promise.all([p1, p2, p3, p4]).then(function(res){
     var d = res[0];
     if(res[1]) d._keylevels = res[1];
     if(res[2]) d._full = res[2];
+    if(res[3] && res[3].valuation) d._valuation = res[3].valuation;
     renderStock(d);
     loadStockExtra(code);
   }).catch(function(e){ die(el, '个股数据加载失败：' + e.message); });
@@ -2658,6 +2673,23 @@ function renderStock(d){
     '<button class="btn pri" id="gotoBtBtn" onclick="gotoStockBacktest(state.stockCode)">🧪 用本股回测 →</button>' +
     '<span style="font-size:12px;color:var(--tx2)">一键直达策略回测页，并自动跑一次默认策略</span>' +
     '</div>';
+
+  // 估值五口径（同花顺）：PE_TTM / PE_MRQ / PB_MRQ / PS_TTM / PCF_TTM
+  // 为什么分开列：TTM 与 MRQ 口径能差 9%（茅台实测 19.32 vs 17.67），
+  // 混成一个"PE"会让估值判断失真。ETF/指数无估值 → val 为 null，不渲染。
+  var val = d._valuation;
+  if(val && (val.pe_ttm || val.pe_mrq)){
+    h += '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;' +
+         'margin:10px 0 0;padding:9px 12px;border-radius:8px;background:var(--bg2,#f7f8fa);' +
+         'font-size:13px">' +
+      '<span style="color:var(--tx2)">PE(TTM) <b style="color:var(--tx)">' + fmt(val.pe_ttm) + '</b></span>' +
+      '<span style="color:var(--tx2)">PE(MRQ) <b style="color:var(--tx)">' + fmt(val.pe_mrq) + '</b></span>' +
+      '<span style="color:var(--tx2)">PB(MRQ) <b style="color:var(--tx)">' + fmt(val.pb_mrq) + '</b></span>' +
+      '<span style="color:var(--tx2)">PS(TTM) <b style="color:var(--tx)">' + fmt(val.ps_ttm) + '</b></span>' +
+      '<span style="color:var(--tx2)">PCF(TTM) <b style="color:var(--tx)">' + fmt(val.pcf_ttm) + '</b></span>' +
+      '<span style="color:var(--tx3);font-size:11px">同花顺估值五口径</span>' +
+      '</div>';
+  }
   // 分钟视角已并入下方 K 线卡片的周期按钮组，不再需要单独的跳转入口
   h += '<div style="display:flex;align-items:center;gap:8px;margin:10px 0 4px">' +
     '<span class="ktag ktag-live">实时</span>' +
@@ -6533,6 +6565,8 @@ function renderMarketPhase(){
    市场热点（同花顺特色数据 + westock 榜单）
    ========================================================================= */
 var hotState = { loaded: false, cur: 'hotrank', data: null };
+// 盘前竞价状态：必须在初始化调用块之前声明（var 赋值不提升，晚声明会 undefined）
+var aucState = { loaded: false };
 
 function loadHot(force){
   var body = $('hotBody'), meta = $('hotMeta');
@@ -7779,6 +7813,7 @@ api('/api/tdx_capabilities').then(function(d){
 
 loadIndex();
 loadRank();
+loadAuction();   // 盘前竞价（同花顺）；无 Key 时自行隐藏整卡
 loadAbout();
 loadStrategyList();
 loadPatternDims();
@@ -7789,6 +7824,84 @@ loadMarketTemp();
    市场宽度（方案4）· 市场健康档案
    每日涨跌家数 / 站上MA20比例 / 新高新低 / 涨跌停，历史序列 + 极值分位。
    ========================================================================= */
+/* ---------- 盘前竞价（同花顺） ----------
+   上游在休市日会**静默回吐上一交易日的竞价终态**（不是空），所以必须把
+   trade_date 摆到最显眼处，不能只写"更新于 xx:xx"——否则用户以为在看实时。
+   无 Key / 接口异常时整卡隐藏，不留空壳占位。 */
+function hideAuction(){
+  var c = $('auctionCard');
+  if(c) c.style.display = 'none';
+}
+
+function loadAuction(force){
+  if(aucState.loaded && !force) return;
+  aucState.loaded = true;
+  api('/api/auction').then(function(d){
+    if(!d || !d.available){ hideAuction(); return; }
+    renderAuction(d);
+  }).catch(function(){ hideAuction(); });
+}
+
+function renderAuction(d){
+  var card = $('auctionCard'), body = $('aucBody'), meta = $('aucMeta');
+  if(!card || !body) return;
+  var b = d.benchmark || {}, w = d.watch || {};
+  var wb = w.items || [], bb = b.items || [];
+
+  if(!wb.length && !bb.length){
+    // 有 Key 却没数据：给空态而不是隐藏，避免卡片在有/无之间反复闪
+    card.style.display = '';
+    meta.textContent = '无竞价数据';
+    body.innerHTML = '<div class="empty">' +
+      (d.is_today ? '今日暂无竞价数据（可能未到竞价时段）'
+                  : '最近交易日 ' + esc(d.trade_date || '—') + ' 无竞价数据') + '</div>';
+    return;
+  }
+
+  card.style.display = '';
+  meta.innerHTML = d.is_today
+    ? '<span class="ktag ktag-live">今日</span> ' + esc(d.trade_date)
+    : '<span class="ktag">休市</span> 展示 ' + esc(d.trade_date || '—') + ' 竞价终态';
+
+  var h = '';
+  if(wb.length){
+    h += '<div style="padding:8px 12px 0;font-size:12px;color:var(--tx2)">我的自选 · 集合竞价</div>';
+    h += '<div class="tblw"><table class="tbl"><thead><tr>' +
+         '<th class="l">股票</th><th class="r">竞价涨幅</th><th class="r">量比</th>' +
+         '<th class="r">占昨量</th><th class="r">未匹配</th></tr></thead><tbody>';
+    wb.forEach(function(x){
+      h += '<tr data-code="' + attr(x.code) + '">' +
+        '<td class="l"><b>' + esc(x.name || x.ticker) + '</b> ' + marketTag(normCode(x.code)) +
+        ' <span style="color:var(--tx3);font-size:12px">' + esc(x.ticker) + '</span></td>' +
+        '<td class="r ' + cls(x.auction_pct) + '"><b>' + sign(x.auction_pct) + '%</b></td>' +
+        '<td class="r">' + fmt(x.auction_volume_ratio) + '</td>' +
+        '<td class="r">' + fmt(x.auction_yesterday_ratio_pct) + '%</td>' +
+        '<td class="r">' + fmt(x.auction_unmatched) + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+  }
+  if(bb.length){
+    h += '<div style="padding:10px 12px 0;font-size:12px;color:var(--tx2)">' +
+         '短线风向标 · 竞价基准（上游按竞价表现筛选，标签为所属概念）</div>';
+    h += '<div class="tblw"><table class="tbl"><thead><tr>' +
+         '<th class="l">股票</th><th class="r">竞价涨幅</th><th class="l">概念</th>' +
+         '</tr></thead><tbody>';
+    bb.forEach(function(x){
+      var tg = (x.tags || []).map(function(t){
+        return '<span class="ktag">' + esc(t) + '</span>';
+      }).join(' ');
+      h += '<tr data-code="' + attr(x.code) + '">' +
+        '<td class="l"><b>' + esc(x.name || x.ticker) + '</b> ' + marketTag(normCode(x.code)) +
+        ' <span style="color:var(--tx3);font-size:12px">' + esc(x.ticker) + '</span></td>' +
+        '<td class="r ' + cls(x.auction_pct) + '"><b>' + sign(x.auction_pct) + '%</b></td>' +
+        '<td class="l">' + (tg || '<span style="color:var(--tx3)">—</span>') + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+  }
+  body.innerHTML = h;
+  bindRows(body);
+}
+
 function loadBreadth(){
   var body = $('breadthBody'), meta = $('breadthMeta');
   if(!body) return;

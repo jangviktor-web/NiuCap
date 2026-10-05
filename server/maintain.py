@@ -23,7 +23,7 @@ import re
 import shutil
 import sqlite3
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 logger = __import__("logging").getLogger(__name__)
@@ -371,7 +371,87 @@ def backup_restore(name: str) -> Dict[str, Any]:
 # ③ 新模块纳管（#88 快讯 / #95 情绪周期 / #96 监控中心）
 #
 # 只做本地状态探测，一个都不联网——后台页面不该因为某个源超时而打不开。
+#
+# 唯一例外是 calendar_audit()：它要拉同花顺权威交易日历做对账。为了不破坏
+# 上面这条铁律，它被「6 小时缓存 + 无 Key 立即返回 + 全程 try」三重装甲包住，
+# 最坏情况也只是首次打开后台多等一次接口，绝不会把页面拖成白屏。
 # ===========================================================================
+
+_AUDIT_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
+_AUDIT_TTL = 6 * 3600          # 6 小时：交易日历一天最多变一次
+_ONE_DAY = timedelta(days=1)
+
+
+def calendar_audit() -> Dict[str, Any]:
+    """用同花顺权威交易日历逐日对账本地 holidays 判定。
+
+    为什么需要对账：holidays.py 是硬编码表，2027 年还是「预测值」、补班表为空。
+    判断错一天的后果不是显示错误，而是**虚拟盘在休市日按上一交易日收盘价成交**
+    ——静默产生假数据，靠人眼发现不了。这里把偏差摆到台面上。
+
+    边界（别指望它做超出范围的事）：
+      - 上游窗口是 [今日-1年, 今日]，末端是最后一个交易日，**不能预测未来**；
+      - 本地表只覆盖 2026+2027，所以对账下限取「本地最早覆盖年的 1/1」，
+        否则 2025 年那段会因本地无数据刷出一堆假差异。
+
+    返回 {checked, window, remote_days, miss, extra}：
+      miss  = 上游是交易日、本地判休市（漏判）
+      extra = 本地判交易日、上游没有（多判）
+    """
+    hit = _AUDIT_CACHE["data"]
+    if hit and (time.time() - _AUDIT_CACHE["ts"]) < _AUDIT_TTL:
+        return hit
+
+    def _done(data: Dict[str, Any]) -> Dict[str, Any]:
+        _AUDIT_CACHE["ts"], _AUDIT_CACHE["data"] = time.time(), data
+        return data
+
+    try:
+        import hithink as htk
+    except Exception:
+        return _done({"checked": False, "reason": "hithink 模块不可用"})
+    if not htk.API_AVAILABLE:
+        return _done({"checked": False, "reason": "未配置同花顺 API Key"})
+
+    try:
+        import holidays as hl
+        td = htk.trading_days()
+        if not td["ok"]:
+            return _done({"checked": False, "reason": "交易日历接口不可用"})
+
+        hol = hl.HOLIDAYS or set()
+        ys = sorted({d[:4] for d in hol})
+        lo = "%s-01-01" % (ys[0] if ys else datetime.now().strftime("%Y"))
+        today = datetime.now().strftime("%Y-%m-%d")
+        remote = {d for d in td["days"] if lo <= d <= today}
+        if not remote:
+            return _done({"checked": False,
+                          "reason": f"对账窗口 [{lo},{today}] 内无远程数据"})
+
+        def local_is_trading(ymd: str) -> bool:
+            # 与 datasource.market_state() 口径保持一致：周末一律休市
+            if datetime.strptime(ymd, "%Y-%m-%d").weekday() >= 5:
+                return False
+            return ymd not in hol
+
+        miss: List[str] = []
+        extra: List[str] = []
+        cur = datetime.strptime(lo, "%Y-%m-%d")
+        end = datetime.strptime(today, "%Y-%m-%d")
+        while cur <= end:
+            s = cur.strftime("%Y-%m-%d")
+            lt, rt = local_is_trading(s), s in remote
+            if rt and not lt:
+                miss.append(s)
+            elif lt and not rt:
+                extra.append(s)
+            cur = cur + _ONE_DAY
+
+        return _done({"checked": True, "window": f"{lo}~{today}",
+                      "remote_days": len(remote), "miss": miss, "extra": extra})
+    except Exception as e:
+        return _done({"checked": False, "reason": f"{type(e).__name__}: {e}"})
+
 
 def modules_status() -> Dict[str, Any]:
     items: List[Dict[str, Any]] = []
@@ -486,7 +566,7 @@ def _new_modules_status() -> List[Dict[str, Any]]:
         add("trade_guard", "虚拟盘交易时段守卫", "#103", "unknown",
             f"{type(e).__name__}: {e}")
 
-    # --- #104 本地交易日历（节假日 / 补班） ---
+    # --- #104 本地交易日历（节假日 / 补班） + 同花顺权威日历对账 ---
     try:
         import holidays as hl
         today = datetime.now().strftime("%Y-%m-%d")
@@ -499,8 +579,29 @@ def _new_modules_status() -> List[Dict[str, Any]]:
             + (f"，下一个休市日 {future[0]}" if future
                else "，⚠ 表中已无未来休市日，需补充新年度"),
             {"years": ys, "future_holidays": len(future)})
+
+        audit = calendar_audit()
+        if audit.get("checked"):
+            diff = len(audit["miss"]) + len(audit["extra"])
+            if diff:
+                sample = ", ".join((audit["extra"] or audit["miss"])[:3])
+                add("calendar_audit", "交易日历对账（同花顺）", "#104",
+                    "error",
+                    f"⚠ 与权威日历不符 {diff} 天，如 {sample}"
+                    + ("（多判交易日）" if audit["extra"] else "（漏判交易日）"),
+                    audit)
+            else:
+                add("calendar_audit", "交易日历对账（同花顺）", "#104",
+                    "ready",
+                    f"✅ {audit['window']} 内 {audit['remote_days']} 个交易日与本地判定完全一致",
+                    audit)
+        else:
+            add("calendar_audit", "交易日历对账（同花顺）", "#104", "idle",
+                f"未执行（{audit.get('reason', '—')}）", audit)
     except Exception as e:
         add("calendar", "本地交易日历", "#104", "unknown", f"{type(e).__name__}: {e}")
+        add("calendar_audit", "交易日历对账（同花顺）", "#104", "unknown",
+            f"{type(e).__name__}: {e}")
 
     # --- #105 选股历史（三选股页自动存档） ---
     try:
