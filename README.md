@@ -474,15 +474,6 @@ A：本面板仅供量化学习与研究，不构成任何投资建议；虚拟�
 
 ---
 
-## 🏷️ Topics / 关键词（建议在仓库 Settings → Topics 中填写）
-
-`a-share` · `china-stock-market` · `stock-screener` · `quantitative-finance` · `quantitative-trading` ·
-`stock-analysis` · `trading-dashboard` · `stock-dashboard` · `backtesting` · `technical-analysis` ·
-`real-time-data` · `sentiment-analysis` · `paper-trading` · `limit-up` · `selfhosted` ·
-`python` · `fastapi` · `pandas` · `numpy` · `echarts`
-
----
-
 <div align="center">
 
 **用得上就点个 ⭐，有问题开 Issue～**
