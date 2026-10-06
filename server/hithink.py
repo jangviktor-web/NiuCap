@@ -712,33 +712,175 @@ def to_thscode(code: str) -> str:
 
 
 # ---------------------------------------------------------------- 自检
+#
+# ponytail：非平凡逻辑留一个可运行自检。这里**完全离线**——用桩数据替换
+# _cached，覆盖 A1/A2/A3/B4 的纯函数契约（字段映射、单位换算、代码转换、
+# 窗口截断），因为这些地方错一个就是静默错数据，联网时反而难验。
+
+def selfcheck() -> int:
+    """hithink 纯函数自检（无网络、无需 Key）。返回失败项数。"""
+    fails = 0
+
+    def rec(name, ok, detail=""):
+        nonlocal fails
+        if not ok:
+            fails += 1
+            print(f"  ❌ {name} {detail}")
+        else:
+            print(f"  ✅ {name}")
+
+    # ---- 代码转换 ----
+    rec("to_thscode 沪市", to_thscode("sh600519") == "600519.SH")
+    rec("to_thscode 深市", to_thscode("sz000858") == "000858.SZ")
+    rec("to_thscode 北交所", to_thscode("bj430047") == "430047.BJ")
+    rec("to_thscode 幂等", to_thscode("600519.SH") == "600519.SH")
+    # thscode 后缀在末尾，我方内部前缀在开头——别写反
+    rec("_th_to_internal 沪市", _th_to_internal("600519.SH") == "sh600519")
+    rec("_th_to_internal 北交所", _th_to_internal("430047.BJ") == "bj430047")
+    rec("_th_to_internal 幂等", _th_to_internal("sh600519") == "sh600519")
+    rec("_th_to_internal 裸代码透传", _th_to_internal("600519") == "600519")
+    rec("_bare 取引用", _bare("sh600519") == "600519")
+
+    # ---- 时区：date_ms 是 Asia/Shanghai 零点毫秒，用 UTC 换算会差一天 ----
+    # 2026-09-30 00:00:00 +08 == 2026-09-29 16:00:00 UTC
+    ms = int(datetime.datetime(2026, 9, 29, 16, 0, tzinfo=datetime.timezone.utc).timestamp() * 1000)
+    rec("_sh_date 时区换算", _sh_date(ms) == "2026-09-30", f"得 {_sh_date(ms)}")
+
+    # ---- 数值清洗：heat 是字符串、"17457.0"，空值有多种写法 ----
+    rec("_f 字符串数字", _f("17457.0") == 17457.0)
+    rec("_f 千分位", _f("1,234.5") == 1234.5)
+    rec("_f 带百分号", _f("3.21%") == 3.21)
+    for bad in ("", "--", "null", "None", "-", None):
+        if _f(bad) != 0.0:
+            fails += 1
+            print(f"  ❌ _f 空值 {bad!r} 应为 0.0，得 {_f(bad)}")
+    print("  ✅ _f 空值 6 种写法均归 0")
+
+    # ---- 单位换算：上游 volume 股 -> 手、turnover 元 -> 万元 ----
+    row = _snap_row({
+        "thscode": "600519.SH", "last_price": 1258.62, "prev_price": 1250.0,
+        "volume": 12345, "turnover": 67890000.0,   # 12345 股 / 6789 万元
+    })
+    rec("_snap_row 成交量 股->手", row is not None and row["volume"] == 123.0,
+        f"得 {row and row['volume']}")
+    rec("_snap_row 成交额 元->万元", row is not None and abs(row["amount"] - 6789.0) < 0.01,
+        f"得 {row and row['amount']}")
+    rec("_snap_row 缺失字段填 0", row is not None and row["pe"] == 0.0 and row["float_cap"] == 0.0)
+    rec("_snap_row 标记来源", row is not None and row["source"] == "hithink")
+    rec("_snap_row 价格 0 丢弃", _snap_row({"thscode": "600519.SH", "last_price": 0}) is None)
+    rec("_snap_row 空输入不崩", _snap_row({}) is None)
+
+    # ---- 竞价字段映射：必须保留 auction_ 前缀，且基准的 tags 是概念标签 ----
+    a = _auction_row({"thscode": "600519.SH", "auction_price": 1260.0,
+                      "auction_pct": "1.28", "auction_volume_ratio": 3.5,
+                      "pre_close_price": 1250.0})
+    rec("_auction_row 前缀不丢", a["auction_price"] == 1260.0 and a["auction_pct"] == 1.28)
+    rec("_auction_row 昨收映射", a["pre_close"] == 1250.0)
+
+    # ---- 窗口截断：上游硬上限 100 / 50，日线跨度上限 3600 天 ----
+    rec("_HIST_MAX_DAYS 留余量", _HIST_MAX_DAYS == 3600, f"得 {_HIST_MAX_DAYS}")
+
+    # ---- 桩数据：替换 _cached 验证编排层（不联网） ----
+    global _CACHE
+    _CACHE.clear()
+    calls = []
+
+    def fake_cached(path, params, kind):
+        calls.append((path, params or {}))
+        if path.endswith("calendar/trading-days"):
+            # 上游给的是 yyyyMMdd，且**乱序**返回，验证是否被正确转换+排序
+            return {"item": [{"date": "20260930"}, {"date": "20260102"},
+                              {"date": "20250630"}]}
+        if path.endswith("valuations/snapshot"):
+            return {"item": [{"thscode": "600519.SH", "name": "贵州茅台",
+                               "pe_ttm": 20.5, "pe_mrq": 21.0, "pb_mrq": 7.2,
+                               "ps_ttm": 8.1, "pcf_ttm": 19.3}]}
+        if path.endswith("auction/short-term-benchmark"):
+            return {"date": "2026-09-30", "item": [
+                {"thscode": "000001.SZ", "name": " 平安银行 ", "auction_pct": 1.1,
+                 "tags": ["住宅开发", "  ", ""]}]}
+        return None
+
+    old_cached = _cached
+    globals()["_cached"] = fake_cached
+    try:
+        td = trading_days()
+        rec("trading_days yyyyMMdd 转换", td["days"] == ["2025-06-30", "2026-01-02", "2026-09-30"],
+            f"得 {td['days']}")
+        rec("trading_days 升序", td["days"] == sorted(td["days"]))
+        rec("trading_days 首尾", td["first"] == "2025-06-30" and td["last"] == "2026-09-30")
+        rec("trading_days 计数", td["count"] == 3 and td["ok"] is True)
+
+        v = valuation(["sh600519"])
+        rec("valuation 五口径齐全", len(v) == 1 and all(
+            k in v[0] for k in ("pe_ttm", "pe_mrq", "pb_mrq", "ps_ttm", "pcf_ttm")))
+        rec("valuation 名称去空格", v[0]["name"] == "贵州茅台")
+        # 上限 50：塞 60 只只应取前 50
+        calls.clear()
+        valuation([f"sh600{ i:03d}" for i in range(60)])
+        rec("valuation 截断 50 只", len(calls[-1][1]["thscodes"].split(",")) == 50,
+            f"得 {len(calls[-1][1]['thscodes'].split(','))}")
+
+        bm = auction_benchmark()
+        rec("benchmark 空标签过滤", bm["items"] and bm["items"][0]["tags"] == ["住宅开发"],
+            f"得 {bm['items'] and bm['items'][0]['tags']}")
+        rec("benchmark 名称去空格", bm["items"][0]["name"] == "平安银行")
+
+        calls.clear()
+        auction_snapshot([])
+        rec("auction 空代码不发请求", not calls)
+        snap = auction_snapshot(["sh600519"] * 150)
+        rec("auction 截断 100 只", len(calls[-1][1]["thscodes"].split(",")) == 100,
+            f"得 {len(calls[-1][1]['thscodes'].split(','))}")
+        rec("auction 上游 None 时降级", snap["ok"] is False and snap["status"] == "unavailable")
+        rec("quote_snapshot 无效代码不请求", quote_snapshot(["600519"]) == {})
+        rec("kline_history 非个股返回空", kline_history("600519") == [])
+
+        # 日线窗口：count=250 -> 250*1.55+10=397 天，count 超大则截到 3600
+        calls.clear()
+        kline_history("sh600519", count=250)
+        span = calls[-1][1]
+        rec("kline 只请求 1d", span.get("interval") == "1d")
+        rec("kline 默认前复权", span.get("adjust") == "forward")
+        # span_days 是局部变量，但窗口跨度 = end - start，可直接反推核对
+        got = (span["end"] - span["start"]) / 86400000.0
+        rec("kline 窗口 250 根 -> 397 天", abs(got - 397) < 1.0, f"得 {got:.0f} 天")
+        calls.clear()
+        kline_history("sh600519", count=99999)
+        got2 = (calls[-1][1]["end"] - calls[-1][1]["start"]) / 86400000.0
+        rec("kline 超长窗口截到 3600 天", got2 == _HIST_MAX_DAYS, f"得 {got2:.0f} 天")
+    finally:
+        globals()["_cached"] = old_cached
+        _CACHE.clear()
+
+    # ---- 无 Key 时必须优雅降级，不能抛异常 ----
+    # 注意必须同时桩掉 _load_key：_get 里是 `_KEY or _load_key()`，只置空 _KEY
+    # 会让它从 credentials 文件把真 Key 读回来，然后真的发一次网络请求。
+    # 这里保留真实 _cached，完整走一遍降级路径。
+    old_key, old_avail, old_loader = _KEY, API_AVAILABLE, _load_key
+    globals()["_KEY"], globals()["API_AVAILABLE"] = None, False
+    globals()["_load_key"] = lambda: None
+    try:
+        rec("无 Key 竞价降级", auction_snapshot(["sh600519"])["ok"] is False)
+        rec("无 Key 日线降级", kline_history("sh600519") == [])
+        rec("无 Key 日历降级", trading_days()["ok"] is False)
+        rec("无 Key 估值降级", valuation(["sh600519"]) == [])
+        rec("无 Key 快照降级", quote_snapshot(["sh600519"]) == {})
+    finally:
+        globals()["_KEY"], globals()["API_AVAILABLE"] = old_key, old_avail
+        globals()["_load_key"] = old_loader
+
+    return fails
+
 
 if __name__ == "__main__":
-    print("API_AVAILABLE:", API_AVAILABLE)
-    hr = hot_rank(5)
-    print("hot_rank:", [(x["rank"], x["name"], x["heat"]) for x in hr])
-    lu = limit_up_pool()
-    print("limit_up total:", lu.get("total"))
-    if lu["items"]:
-        s = lu["items"][0]
-        print("  sample:", s["code"], s["name"], s["price"], s["change_pct"],
-              s["continue_day_text"], s["reason"][:20])
-        assert s["price"] > 0 and s["change_pct"] != 0, "涨停池价格/涨幅仍为 0"
-    la = limit_up_ladder()
-    print("ladder total:", la.get("total"), "date:", la.get("date"),
-          "levels:", [(l["label"], len(l["stocks"])) for l in la["levels"]])
-    if la["levels"]:
-        top = la["levels"][0]["stocks"][0]
-        assert top["code"] and top["name"], "天梯个股 code/name 为空"
-    dt = dragon_tiger()
-    print("dragon_tiger:", dt.get("total"), dt.get("date"))
-    if dt["items"]:
-        s = dt["items"][0]
-        print("  sample:", s["code"], s["name"], s["change_pct"], s["net_buy"])
-    an = anomaly_list(3)
-    print("anomaly:", len(an))
-    if an:
-        assert an[0]["name"], "异动股票名为空"
-        print("  sample:", an[0]["code"], an[0]["name"], an[0]["tag"])
-    print("to_thscode:", to_thscode("sh600519"), to_thscode("sz000858"))
-    print("OK")
+    fails = selfcheck()
+    print(f"[hithink.selfcheck] {'通过' if not fails else str(fails) + ' 项失败'}")
+    if API_AVAILABLE:
+        # 联网部分只在有 Key 时跑，作为补充观察（不计入失败）
+        print(f"API_AVAILABLE: {API_AVAILABLE}")
+        print("trading_days:", (trading_days() or {}).get("count"), "条")
+        print("to_thscode:", to_thscode("sh600519"), to_thscode("sz000858"))
+    else:
+        print("未配置同花顺 API Key，跳过联网部分")
+    raise SystemExit(1 if fails else 0)
