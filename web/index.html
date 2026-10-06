@@ -3686,10 +3686,32 @@ function admOverview(el){
     h += '</div>';
 
     h += '<div style="margin-top:14px;font-size:13px;line-height:2">';
+    // 腾讯行情的可用性已由下面的降级链表达（链上就有腾讯一级），
+    // 这里再单独点一次会出现「绿的但没在用」/「红的其实能用」两种误导。
     h += '<div><b>数据源</b>：' +
-         '腾讯行情 ' + dot(src.tencent !== false) +
-         ' ｜ westock ' + dot(!!src.westock) +
+         'westock ' + dot(!!src.westock) +
          ' ｜ 同花顺 ' + dot(!!src.hithink) + '</div>';
+    // 快照降级链：三级依次点亮，当前实际生效的那级加粗。
+    // 为什么必须画这条链：主源挂掉会自动退到下一级，界面上看不出来、数据已经换了源。
+    var sp = src.snapshot || {};
+    if (sp.chain && sp.chain.length) {
+      var LIVE = {eltdx:'eltdx', tencent:'腾讯', hithink:'同花顺'};
+      var live = sp.live;
+      var isList = Object.prototype.toString.call(live) === '[object Array]';
+      var links = sp.chain.map(function(k){
+        var on = isList ? live.indexOf(k) >= 0 : live === k;
+        var nm = LIVE[k] || k;
+        return on ? '<b style="color:var(--tx)">' + esc(nm) + ' ●</b>'
+                  : '<span style="color:var(--tx3)">' + esc(nm) + ' ○</span>';
+      }).join(' <span style="color:var(--tx3)">→</span> ');
+      var tail = '';
+      if (isList) tail = ' <span style="color:var(--tx3)">（混源）</span>';
+      else if (live === 'none') tail = ' <span class="down">全部源无数据</span>';
+      else if (live === 'error') tail = ' <span class="down">探测失败' +
+             (sp.live_error ? '：' + esc(sp.live_error) : '') + '</span>';
+      else if (live) tail = ' <span style="color:var(--tx3)">当前生效</span>';
+      h += '<div><b>快照降级链</b>：' + links + tail + '</div>';
+    }
     var it = d.intraday || {};
     h += '<div><b>分钟数据</b>：主源 <code>' + esc(it.primary || '—') + '</code>，' +
          'eltdx ' + dot(!!it.eltdx) +

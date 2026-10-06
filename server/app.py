@@ -2917,10 +2917,17 @@ def api_admin_overview(request: Request):
 
     # 数据源可用性（沿用已有自检，运行期实时探测）
     try:
-        srcs = {"westock": wst.refresh_status(), "hithink": htk.refresh_status(),
-                "tencent": True}
+        srcs = {"westock": wst.refresh_status(), "hithink": htk.refresh_status()}
     except Exception:
         srcs = {}
+    # 快照降级链：带 live 探测（实测当前真正在用哪一级）。
+    # ⚠ 原来这里有个硬编码的 "tencent": True —— 腾讯挂了也照样显示绿点，
+    #   属于假指示。现在只报探测到的事实：chain 是能力顺序，live 是当前实际生效的那一级。
+    try:
+        snap_st = ds.snapshot_status(probe=True)
+    except Exception as e:
+        snap_st = {"error": str(e)}
+    srcs["snapshot"] = snap_st
     try:
         intraday = ds.intraday_source_status()
     except Exception as e:

@@ -864,7 +864,7 @@ def quote_hithink(codes):
         return {}
 
 
-def snapshot(codes, use_cache=True):
+def snapshot(codes, use_cache=True, write_cache=True):
     """统一实时快照入口：eltdx 优先、腾讯次之、同花顺兜底。
 
     返回格式与 `quote_tencent` **完全兼容**（字段名一致），上层无需分叉。
@@ -873,6 +873,11 @@ def snapshot(codes, use_cache=True):
     为什么要单独一个入口而不是让调用方自己判断：快照是这个工程里
     被调用最频繁的接口（自选、榜单、分时、扫描都要），源选择逻辑
     必须只有一处，否则迟早出现「有的页面用 eltdx、有的用腾讯」。
+
+    write_cache=False：只读不写，给「探测当前实际在用哪个源」用
+    （后台概览的降级链高亮）。**探测时必须显式关掉**——实测
+    use_cache=False 只跳过「读」，「写」照样发生，一次探测就会把
+    样本股行情灌进用户真正看到的缓存。
     """
     codes = [normalize(c) for c in (codes or []) if c]
     if not codes:
@@ -886,7 +891,8 @@ def snapshot(codes, use_cache=True):
 
     out = snapshot_eltdx(codes)
     if out:
-        _cache_put(_quote_cache, ckey, out, skip_empty=True)
+        if write_cache:
+            _cache_put(_quote_cache, ckey, out, skip_empty=True)
         return out
 
     # eltdx 不可用（未装/被开关关闭/连接失败）→ 腾讯降级
@@ -894,19 +900,43 @@ def snapshot(codes, use_cache=True):
     if not out:
         # 腾讯也没数据（WAF 拦截 / 网络故障）→ 同花顺兜底
         out = quote_hithink(codes)
-    if out:
+    if out and write_cache:
         _cache_put(_quote_cache, ckey, out, skip_empty=True)
     return out
 
 
-def snapshot_status():
-    """快照源状态（供 /api/health）。"""
-    st = {"hithink_fallback": bool(_htk is not None and _htk.API_AVAILABLE)}
+def snapshot_status(probe: bool = False):
+    """快照源状态（供 /api/health 与后台概览）。
+
+    chain    : 降级链顺序（前端照此画点，高亮当前生效的那一级）
+    primary  : 首选源（eltdx 装不上时为 tencent）
+    live     : **实测**当前真正在用哪个源 —— 静默降级不透明是这里要解决的事：
+               前面几级全挂时会自动退到下一级，界面上看不出来，数据已经换了源。
+               所以后台概览传 probe=True 真取一次快照读它的 source 字段。
+               ⚠ 探测用流动性最好的单只（sh600519）走网络，不写快照缓存
+               （避免把探测结果灌进用户实际看到的行情缓存里）。
+    """
+    st = {"chain": ["eltdx", "tencent", "hithink"],
+          "hithink_fallback": bool(_htk is not None and _htk.API_AVAILABLE)}
     _e = _load_eltdx_source()
     if _e is None:
         st.update({"primary": "tencent", "eltdx": False})
     else:
         st.update({"primary": "eltdx", "eltdx": True, "batch_max": 80})
+
+    if probe:
+        # 为什么绕过缓存：缓存里存的 source 是「上一次写缓存时」用的那一级，
+        # 可能几小时前腾讯兜过一次，早过期了。这里 use_cache=False 强制走真实
+        # 链路，问的是「此刻请求会走哪一级」——这才是降级链要展示的东西。
+        # write_cache=False 则保证这次探测不污染真实缓存（只读不写）。
+        try:
+            rows = snapshot(["sh600519"], use_cache=False, write_cache=False)
+            got = {r.get("source") for r in rows.values() if r.get("source")}
+            st["live"] = (sorted(got)[0] if len(got) == 1 else
+                          (sorted(got) if got else "none"))   # 混源=列表，全挂=none
+        except Exception as e:
+            st["live"] = "error"
+            st["live_error"] = str(e)[:120]
     return st
 
 
