@@ -91,6 +91,11 @@ INTRADAY_PERIODS = ("1m", "5m", "15m", "30m", "60m")
 #: `ValueError: page size must be between 1 and 800`）。要取更多须用 start 翻页。
 INTRADAY_PAGE_MAX = 800
 
+#: 日线单次请求同样受 800 根硬限制（eltdx 库的 `_validate_page_size` 对日线、
+#: 分钟线共用同一上限）。get_bars_batch 在「非分钟线且 count>800」时自动按 800
+#: 一页翻页合并，使 `--count 2700` 这类补历史需求无需调用方改代码。
+DAY_PAGE_MAX = 800
+
 # 毫秒级实时快照的缓存时长（秒）。TdxClient 内部有连接池，直接复用。
 INTRADAY_QUOTE_TTL = 3.0
 
@@ -326,37 +331,63 @@ def get_bars_batch(codes: Sequence[str], count: int = 500,
     except Exception as e:
         raise EltdxUnavailable(f"eltdx 连接失败：{type(e).__name__}: {e}") from e
 
-    try:
-        series_map = client.bars.get(
-            list(codes),
-            period=period,
-            start=int(start or 0),
-            count=int(count),
-            adjust=adjust,
-            batch_size=BATCH_SIZE,
-        )
-    except Exception as e:
-        # 连接层问题标记为不可用，让调用方降级；其他异常也一并归类，
-        # 因为对本工程而言结果都是「这个源这次没拿到数据」。
-        raise EltdxUnavailable(f"eltdx 取数失败：{type(e).__name__}: {e}") from e
+    # ---- 翻页取数 ----
+    # eltdx 服务端对【单次请求的 bar 数】硬限 1~800（日线、分钟线共用，
+    # 超出抛 `ValueError: page size must be between 1 and 800`）。要取超过 800 根
+    # 的历史（如补 2015 至今的 ~2700 根日线），必须按 800 一页、用 `start`
+    # 偏移累加翻页，再按日期合并。分钟线的翻页由 get_intraday 显式驱动
+    # （它已把 count 截断到 800 并传 start），这里只在「非分钟线且 count>800」
+    # 时自动翻页，既有调用方无需改动即可拿到完整深度。
+    if (not intraday) and int(count) > DAY_PAGE_MAX:
+        pages = []
+        s = int(start or 0)
+        rem = int(count)
+        while rem > 0:
+            pages.append((s, min(rem, DAY_PAGE_MAX)))
+            s += DAY_PAGE_MAX
+            rem -= DAY_PAGE_MAX
+    else:
+        pages = [(int(start or 0), int(count))]
 
     out: Dict[str, List[Dict[str, Any]]] = {}
     dropped = 0
-    for code, series in (series_map or {}).items():
-        bars = getattr(series, "bars", None)
-        if not bars:
-            continue
-        rows = []
-        for b in bars:
-            r = _row_from_bar(b, intraday=intraday)
-            if not r:
+    for pstart, pcount in pages:
+        try:
+            series_map = client.bars.get(
+                list(codes),
+                period=period,
+                start=pstart,
+                count=pcount,
+                adjust=adjust,
+                batch_size=BATCH_SIZE,
+            )
+        except Exception as e:
+            # 连接层问题标记为不可用，让调用方降级；其他异常也一并归类，
+            # 因为对本工程而言结果都是「这个源这次没拿到数据」。
+            raise EltdxUnavailable(f"eltdx 取数失败：{type(e).__name__}: {e}") from e
+        for code, series in (series_map or {}).items():
+            bars = getattr(series, "bars", None)
+            if not bars:
                 continue
-            if DROP_SUSPENDED and _is_suspended_placeholder(r):
-                dropped += 1
-                continue
-            rows.append(r)
-        if rows:
-            out[code] = rows
+            for b in bars:
+                r = _row_from_bar(b, intraday=intraday)
+                if not r:
+                    continue
+                if DROP_SUSPENDED and _is_suspended_placeholder(r):
+                    dropped += 1
+                    continue
+                out.setdefault(code, []).append(r)
+    # 护栏：qfq 复权在「历史分页段」(start>0) 复权因子损坏，会产出负值价格
+    # （实测茅台 2015 段 714 根成块为负）。补多年历史务必用 adjust='hfq'
+    # （锚定上市首日，分页安全）或 'none'；qfq 仅适合取最新段(count<=800)。
+    # 这里对 qfq 历史负值显式报错，避免静默把脏数据落进 daily_bars。
+    if adjust == "qfq":
+        for _rows in out.values():
+            for _r in _rows:
+                if _r.get("close") is not None and _r["close"] <= 0:
+                    raise EltdxUnavailable(
+                        "eltdx qfq 在历史分页段复权损坏（出现负值价格），"
+                        "补多年历史请改用 --adjust hfq 或 none；qfq 仅适用取最新段")
     _LAST_DROPPED[0] = dropped
     return out
 

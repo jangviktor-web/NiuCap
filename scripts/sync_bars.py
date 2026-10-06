@@ -308,7 +308,7 @@ def store_one(code: str, payload: list) -> dict:
 
 
 def sync_via_eltdx(codes: list, count: int, workers: int, limit: int = 0,
-                   incremental: bool = True) -> tuple:
+                   incremental: bool = True, adjust: str = "qfq") -> tuple:
     """走 eltdx 批量取数，再逐只落库。
 
     分两阶段，因为两者的瓶颈完全不同：
@@ -372,7 +372,7 @@ def sync_via_eltdx(codes: list, count: int, workers: int, limit: int = 0,
     try:
         for fn, cs in fetch_plan:
             if cs:
-                data.update(eltdx_source.get_bars_batch(cs, count=fn))
+                data.update(eltdx_source.get_bars_batch(cs, count=fn, adjust=adjust))
     except eltdx_source.EltdxUnavailable as e:
         print(f"  ✗ eltdx 不可用：{e}")
         raise
@@ -494,6 +494,9 @@ def main() -> int:
                     help="关闭增量预筛，整段重拉（默认按缺口拉）")
     ap.add_argument("--dry-run", action="store_true", help="只统计股票池，不发请求")
     ap.add_argument("--status", action="store_true", help="只看落库状态")
+    ap.add_argument("--adjust", default="qfq",
+                    choices=["qfq", "hfq", "none"],
+                    help="复权口径：qfq(默认，仅取最新段) / hfq(补多年历史推荐) / none(不复权)")
     ap.add_argument("--check-source", action="store_true", help="数据源自检")
     args = ap.parse_args()
 
@@ -539,7 +542,8 @@ def main() -> int:
     src_name = "eltdx" if use_eltdx else "tencent"
 
     print(f"股票池【{args.scope}】：{len(codes)} 只，每只 {args.count} 根日线")
-    print(f"数据源：{src_name}" + (f"（v{eltdx_source.version()}）" if use_eltdx else ""))
+    print(f"数据源：{src_name}" + (f"（v{eltdx_source.version()}）" if use_eltdx else "")
+          + f"  复权：{args.adjust}")
 
     if args.dry_run:
         # eltdx 走批量，体感主要是落库的数据库往返；腾讯源受 400ms 限流主导。
@@ -557,7 +561,7 @@ def main() -> int:
         try:
             ok, fail, total_bars, failed = sync_via_eltdx(
                 codes, args.count, args.workers,
-                incremental=not args.no_incremental)
+                incremental=not args.no_incremental, adjust=args.adjust)
         except eltdx_source.EltdxUnavailable as e:
             if args.source == "eltdx":
                 print(f"✗ eltdx 失败：{e}")
