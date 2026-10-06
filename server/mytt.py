@@ -426,5 +426,195 @@ def TDX_SAR(High, Low, iAFStep=2, iAFLimit=20):       #通达信精确SAR(停损
                 SarX[i] = min(Low[i], Low[i - 1])
     return SarX
 
-  
+
+# ---------------------------------------------------------------- 自检
+#
+# ponytail：本文件 72 个函数是 indicator.py 里 61 项指标中 36 项的地基，
+# 但一直没有自检 —— 指标算错了没人知道。这里用**合成 K 线**补一个纯离线自检：
+# 正弦+余弦构造，100% 可复现、不依赖网络与数据库、期望值可手算。
+# 借鉴 deepentropy/lightweight-charts-indicators 的单元测试思路（合成 bars +
+# 结构与数值双断言），但只覆盖地基函数，不铺 1290 个指标。
+
+def _synth(n=300):
+    """合成 OHLCV：价格走 sin+cos 叠加，100% 确定性可复现。
+
+    振幅刻意大于 open 的 ±1 偏移，保证恒有 high >= max(open,close)、
+    low <= min(open,close)（否则合成数据本身就不合法，指标断言会失真）。
+    """
+    import math
+    out, price = [], 100.0
+    for i in range(n):
+        ch = (math.sin(i * 0.1) + math.cos(i * 0.07)) * 2
+        price = max(10.0, price + ch)
+        swing_h = abs(math.sin(i * 0.3)) * 3 + 1.5
+        swing_l = abs(math.cos(i * 0.3)) * 3 + 1.5
+        out.append((
+            price + (1.0 if math.sin(i * 0.5) > 0 else -1.0),   # open
+            price + swing_h,                                   # high
+            price - swing_l,                                   # low
+            price,                                              # close
+            1000 + int(abs(math.sin(i * 0.2)) * 5000),          # volume
+        ))
+    return out
+
+
+def selfcheck(verbose: bool = True) -> dict:
+    """地基函数自检（纯离线）。返回 {ok, fails, steps}。"""
+    import math
+    import numpy as np
+    fails, steps = 0, []
+
+    def rec(name, ok, detail=""):
+        nonlocal fails
+        if not ok:
+            fails += 1
+        steps.append({"name": name, "ok": bool(ok), "detail": detail})
+        if verbose:
+            print(f"  [{'OK ' if ok else 'FAIL'}] {name}"
+                  + (f"  {detail}" if detail else ""))
+
+    # 合成数据：开 / 高 / 低 / 收 / 量
+    bars = _synth(300)
+    O = np.array([b[0] for b in bars])
+    H = np.array([b[1] for b in bars])
+    L = np.array([b[2] for b in bars])
+    C = np.array([b[3] for b in bars])
+    V = np.array([b[4] for b in bars], dtype=float)
+    rec("合成数据长度 300", len(C) == 300 and len(H) == 300 and len(L) == 300)
+    rec("合成 high >= max(open,close)",
+        bool((H >= np.maximum(O, C) - 1e-9).all()))
+    rec("合成 low <= min(open,close)",
+        bool((L <= np.minimum(O, C) + 1e-9).all()))
+
+    # ---- 1. MA/SMA：与 numpy 独立实现对照（期望值手算）----
+    ma20 = MA(C, 20)
+    manual = sum(C[-20:]) / 20.0                 # 末值 = 最后 20 个收盘的算术平均
+    rec("MA(20) 末值 = 手工算术平均",
+        not np.isnan(ma20[-1]) and abs(ma20[-1] - manual) < 1e-9,
+        f"得 {ma20[-1]:.6f} 期望 {manual:.6f}")
+    rec("MA(20) 前 19 个为 NaN（预热期）",
+        bool(np.isnan(ma20[:19]).all()) and not np.isnan(ma20[19]))
+
+    # ---- 2. EMA：alpha=2/(N+1)，首值锚定为 S[0] ----
+    ema10 = EMA(C, 10)
+    alpha = 2.0 / 11.0
+    y = C[0]
+    for v in C[1:]:                              # 用定义式独立递推
+        y = alpha * v + (1 - alpha) * y
+    rec("EMA(10) 末值 = 定义式递推",
+        abs(ema10[-1] - y) < 1e-9, f"得 {ema10[-1]:.8f} 期望 {y:.8f}")
+    rec("EMA(10) 首值 = S[0]", abs(ema10[0] - C[0]) < 1e-12)
+
+    # ---- 3. 中国式 SMA：alpha=1/N，衰减更慢 ----
+    sma20 = SMA(C, 20, 1)
+    y2 = C[0]
+    for v in C[1:]:
+        y2 = (1.0 / 20.0) * v + (1 - 1.0 / 20.0) * y2
+    rec("SMA(20,1) 末值 = alpha=1/N 递推",
+        abs(sma20[-1] - y2) < 1e-9, f"得 {sma20[-1]:.8f} 期望 {y2:.8f}")
+
+    # ---- 4. 单调序列的指标有确定答案（最好验的边界）----
+    up = np.arange(1, 61, dtype=float)           # 1..60 严格单调涨
+    dn = np.arange(60, 0, -1, dtype=float)       # 严格单调跌
+    # RSI：纯涨 → 100（无亏损）。注意 MyTT 用中国式 SMA 平滑（alpha=1/N），
+    # 不是 Wilder 平滑；且首位因 REF 预热为 NaN，第 1 位起就有值。
+    r_up = RSI(up, 14)
+    rec("RSI(14) 单调涨 = 100", abs(r_up[-1] - 100.0) < 1e-3, f"得 {r_up[-1]}")
+    r_dn = RSI(dn, 14)
+    rec("RSI(14) 单调跌 = 0", abs(r_dn[-1] - 0.0) < 1e-3, f"得 {r_dn[-1]}")
+    rec("RSI(14) 首位为 NaN（REF 预热）", bool(np.isnan(r_up[0])))
+    # 恒定序列 → DIF 恒 0 → RSI 分母 0，应为 NaN 而非崩溃
+    flat_rsi = RSI(np.full(30, 50.0), 14)
+    rec("RSI 恒定序列不崩溃（返回 NaN 而非抛错）",
+        np.isnan(flat_rsi[-1]) or flat_rsi[-1] == 0.0, f"得 {flat_rsi[-1]}")
+
+    # ---- 5. STD/STD(总体) 与 numpy ddof=0 一致 ----
+    std20 = STD(C, 20)
+    ref_std = float(np.std(C[-20:], ddof=0))      # MyTT 用 ddof=0（总体标准差）
+    rec("STD(20) = numpy ddof=0",
+        abs(std20[-1] - ref_std) < 1e-9,
+        f"得 {std20[-1]:.8f} 期望 {ref_std:.8f}")
+
+    # ---- 6. HHV/LLV：末值为窗口内极值 ----
+    hhv5 = HHV(C, 5)
+    rec("HHV(5) 末值 = max(最后5根close)", abs(hhv5[-1] - C[-5:].max()) < 1e-12)
+    llv5 = LLV(C, 5)
+    rec("LLV(5) 末值 = min(最后5根close)", abs(llv5[-1] - C[-5:].min()) < 1e-12)
+
+    # ---- 7. REF/DIFF 移位语义 ----
+    rec("REF(x,1)[0] 为 NaN（移位产生预热）", bool(np.isnan(REF(C, 1)[0])))
+    rec("REF(x,1)[i] == x[i-1]", abs(REF(C, 1)[5] - C[4]) < 1e-12)
+    rec("DIFF(x,1)[i] == x[i]-x[i-1]",
+        abs(DIFF(C, 1)[5] - (C[5] - C[4])) < 1e-12)
+
+    # ---- 8. MACD 三线关系：DIF = EMA(fast) - EMA(slow) ----
+    # 注意 MyTT 的 MACD 三条线都过 RD() 四舍五入到 3 位小数，容差取 1e-3。
+    dif, dea, macd = MACD(C, 12, 26, 9)
+    rec("MACD DIF = EMA12 - EMA26",
+        abs(dif[-1] - (EMA(C, 12)[-1] - EMA(C, 26)[-1])) < 1e-3,
+        f"得 {dif[-1]} 期望 {EMA(C, 12)[-1] - EMA(C, 26)[-1]:.3f}")
+    rec("MACD DEA = DIF 的 9 期 EMA（不是 SMA）",
+        abs(dea[-1] - EMA(dif, 9)[-1]) < 1e-3)
+    rec("MACD 柱 = 2×(DIF-DEA)（国内口径）",
+        abs(macd[-1] - 2.0 * (dif[-1] - dea[-1])) < 1e-3,
+        f"得 {macd[-1]} 期望 {2.0*(dif[-1]-dea[-1]):.3f}")
+
+    # ---- 9. KDJ：K/D 由 HHV/LLV 递推，J = 3K-2D ----
+    K, D, J = KDJ(H, L, C, 9, 3, 3)
+    rec("KDJ J = 3K-2D", abs(J[-1] - (3 * K[-1] - 2 * D[-1])) < 1e-9)
+    rec("KDJ K/D 落在 0~100", 0.0 <= K[-1] <= 100.0 and 0.0 <= D[-1] <= 100.0,
+        f"K={K[-1]:.4f} D={D[-1]:.4f}")
+
+    # ---- 10. BOLL：中轨=MA，上下轨对称（注意 RD 舍入到 3 位）----
+    up_b, mid_b, lo_b = BOLL(C, 20, 2)
+    rec("BOLL 中轨 = MA(20)", abs(mid_b[-1] - MA(C, 20)[-1]) < 1e-3,
+        f"得 {mid_b[-1]} 期望 {MA(C, 20)[-1]:.3f}")
+    rec("BOLL 上下轨对称",
+        abs((up_b[-1] - mid_b[-1]) - (mid_b[-1] - lo_b[-1])) < 1e-3)
+    rec("BOLL 上轨 >= 中轨 >= 下轨",
+        up_b[-1] >= mid_b[-1] >= lo_b[-1])
+
+    # ---- 11. ATR：TR = max(H-L, |昨收-H|, |昨收-L|)，ATR = MA(TR, N) ----
+    # ⚠ MyTT 的签名是 ATR(CLOSE, HIGH, LOW)，不是 (HIGH, LOW, CLOSE)
+    atr14 = ATR(C, H, L, 14)
+    tr = np.maximum(H[1:] - L[1:],
+                    np.maximum(np.abs(C[:-1] - H[1:]), np.abs(C[:-1] - L[1:])))
+    tr_ma = float(np.mean(tr[-14:]))               # MA(TR,14) 末值
+    rec("ATR(14) = MA(TR,14) 手工计算", abs(atr14[-1] - tr_ma) < 1e-6,
+        f"得 {atr14[-1]:.6f} 期望 {tr_ma:.6f}")
+    rec("ATR(14) 为正", atr14[-1] > 0, f"得 {atr14[-1]:.4f}")
+
+    # ---- 12. OBV：累计序列，MyTT 口径末尾 /10000（缩放到「万」）----
+    obv = OBV(C, V)
+    d_last = C[-1] - C[-2]                       # 最后一根的涨跌方向
+    v_last = V[-1]
+    step_v = v_last if d_last > 0 else (-v_last if d_last < 0 else 0.0)
+    rec("OBV 单步变化 = 符号(ΔC)×V/10000",
+        abs(float(obv[-1] - obv[-2]) - step_v / 10000.0) < 1e-6,
+        f"得 {float(obv[-1] - obv[-2]):.6f} 期望 {step_v / 10000.0:.6f}")
+    # 全程单调涨 → OBV 末值 = 成交量总和 / 10000（第 0 位无前值故不计）
+    obv_up = OBV(up, np.ones(60))
+    rec("OBV 单调涨 = 成交量总和/10000",
+        abs(float(obv_up[-1]) - 59.0 / 10000.0) < 1e-9,
+        f"得 {float(obv_up[-1])} 期望 {59.0/10000.0}")
+
+    # ---- 13. CROSS 语义：上穿返回 1，其余 0 ----
+    up_cross = CROSS(C, MA(C, 20))
+    rec("CROSS 取值只有 0/1", set(np.unique(up_cross)) <= {0.0, 1.0})
+
+    # ---- 14. HHVBARS/LLVBARS 定位最近极值下标 ----
+    hb = HHVBARS(C, 5)
+    rec("HHVBARS 末值指向窗口内最高点",
+        0 <= int(hb[-1]) < 5 and abs(C[-1 - int(hb[-1])] - C[-5:].max()) < 1e-12,
+        f"得 {int(hb[-1])}")
+
+    return {"ok": fails == 0, "fails": fails, "steps": steps}
+
+
+if __name__ == "__main__":
+    r = selfcheck()
+    print(f"[mytt.selfcheck] {'通过' if r['ok'] else str(r['fails']) + ' 项失败'}")
+    raise SystemExit(0 if r["ok"] else 1)
+
+
   #望大家能提交更多指标和函数  https://github.com/mpquant/MyTT
