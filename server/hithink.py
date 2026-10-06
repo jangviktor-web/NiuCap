@@ -11,8 +11,10 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
+import re
 import time
 import urllib.parse
 import urllib.request
@@ -216,6 +218,176 @@ def auction_benchmark(date: Optional[str] = None) -> Dict[str, Any]:
         "total": len(items),
         "items": items,
     }
+
+
+# ---------------------------------------------------------------- 行情备源
+#
+# 定位：**第三备源**，排在 eltdx / 腾讯 / 新浪之后。只在那些源全挂时才走，
+# 所以常态零开销。它的价值是「前两个源同时不可用时页面还有数据」，而不是
+# 「更快的行情源」——腾讯 0.35s 节流批量的速度远优于这里。
+#
+# 实测约束（2026-10-06，均为踩过的坑，改动前务必重测）：
+#  1. **混入 1 个无效代码会让整批归零**（code=3001）。自选股里只要有一只
+#     退市/未上市的票，整批就全废 —— 所以 quote_snapshot 必须整批失败后逐只
+#     重试，否则这个源等于不存在。
+#  2. **只支持沪深 A 股个股**：ETF(510300)、指数(000300)、北交所(430047)
+#     全部返回 None。别指望它给 ETF 页兜底。
+#  3. historical 只支持 interval=1d，且窗口跨度 ≤ 10 年（实测 3650 天 OK、
+#     3660 天返回 code=1003）。
+#  4. volume 单位是**股**、turnover 是**元**；date_ms 是 Asia/Shanghai 零点
+#     毫秒，用 UTC 换算会整体差一天。
+
+_SH_TZ = datetime.timezone(datetime.timedelta(hours=8))
+_HIST_MAX_DAYS = 3600          # 实测 3650 天可用、3660 超限；留 50 天余量
+
+
+def _sh_date(ms: int) -> str:
+    """毫秒时间戳 -> 'YYYY-MM-DD'（Asia/Shanghai）。"""
+    return datetime.datetime.fromtimestamp(ms / 1000, _SH_TZ).strftime("%Y-%m-%d")
+
+
+def _th_to_internal(code: str) -> str:
+    """thscode(600519.SH) -> 我方内部格式(sh600519)；已是内部格式则原样返回。
+
+    注意别写反：thscode 的交易所后缀在**末尾**（600519.SH），
+    我方内部格式的交易所前缀在**开头**（sh600519）。
+    """
+    c = (code or "").strip()
+    if "." in c:
+        head, _, ex = c.partition(".")
+        if head.isdigit() and len(ex) == 2:          # 600519.SH / 430047.BJ
+            return ex.lower() + head
+    return c
+
+
+def _bare(code: str) -> str:
+    """内部格式取纯代码：sh600519 -> 600519（与 datasource.bare 同语义，
+    独立实现以避免 datasource ← hithink 的循环 import）。"""
+    return re.sub(r"^(sh|sz|bj|hk|us)", "", str(code).lower())
+
+
+def quote_snapshot(codes: List[str], per_code_limit: int = 30) -> Dict[str, Dict[str, Any]]:
+    """行情快照（备源）。codes: 我方格式 -> {内部代码: 行情行}。
+
+    行字段与 quote_tencent / snapshot_eltdx **完全兼容**，上层无需分叉。
+    单位已换算成我方口径：volume 手、amount 万元、float_cap/total_cap 亿。
+
+    整批失败时逐只重试（最多 per_code_limit 只）—— 因为一个坏代码就能让整批
+    归零，这是实测踩到的第一个坑。逐只重试只在降级路径发生，正常源可用时
+    根本走不到这里。
+    """
+    ths: List[str] = []
+    for c in (codes or []):
+        t = to_thscode(str(c).strip())
+        if t and "." in t and t not in ths:
+            ths.append(t)
+    if not ths:
+        return {}
+
+    data = _cached("/api/a-share/prices/snapshot",
+                   {"thscodes": ",".join(ths)}, "realtime")
+
+    if not data:
+        # 整批失败 → 逐只试，隔离坏代码
+        out: Dict[str, Dict[str, Any]] = {}
+        for t in ths[:per_code_limit]:
+            one = _cached("/api/a-share/prices/snapshot", {"thscodes": t}, "realtime")
+            if not one:
+                continue
+            for r in (one.get("item") or []):
+                row = _snap_row(r)
+                if row:
+                    out[row["code"]] = row
+        return out
+
+    out = {}
+    for r in (data.get("item") or []):
+        row = _snap_row(r)
+        if row:
+            out[row["code"]] = row
+    return out
+
+
+def _snap_row(r: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """上游行情行 -> 我方快照行；价格 <= 0 视为无效丢弃。"""
+    price = _f(r.get("last_price"))
+    if price <= 0:
+        return None
+    code = _th_to_internal(r.get("thscode") or "")
+    prev = _f(r.get("prev_price"))
+    vol_shares = _f(r.get("volume"))
+    amount_yuan = _f(r.get("turnover"))
+    return {
+        "code": code,
+        "symbol": _bare(code),
+        "name": (r.get("name") or "").strip(),
+        "price": round(price, 3),
+        "prev_close": round(prev, 3),
+        "open": round(_f(r.get("open_price")), 3),
+        "high": round(_f(r.get("high_price")), 3),
+        "low": round(_f(r.get("low_price")), 3),
+        "change": round(_f(r.get("price_change")), 3),
+        "change_pct": round(_f(r.get("price_change_ratio_pct")), 2),
+        "volume": round(vol_shares / 100.0, 0),          # 股 -> 手
+        "amount": round(amount_yuan / 10000.0, 2),       # 元 -> 万元
+        # 以下字段上游不提供，填 0：上层用 `> 0` 判断有无（榜单里 0 显示「亏损」）
+        "turnover": 0.0,
+        "pe": 0.0,
+        "pb": 0.0,
+        "amplitude": 0.0,
+        "float_cap": 0.0,
+        "total_cap": 0.0,
+        "limit_up": 0.0,
+        "limit_down": 0.0,
+        "time": "",
+        "source": "hithink",
+    }
+
+
+def kline_history(code: str, count: int = 250,
+                  adjust: str = "forward") -> List[Dict[str, Any]]:
+    """历史日 K（备源）。返回 [{date, open, close, high, low, volume}]，volume 单位手。
+
+    count 只是**目标**根数：上游按时间窗返回，实际根数取决于窗口内有多少
+    交易日。窗口算法：从今天回溯 count × 1.55 天（A 股约 0.65 交易日/天）
+    再按 10 年上限截断，这样要 250 根时约能拿到 250±15 根，够用。
+
+    adjust：forward(前复权) / backward(后复权) / none。我方主源是前复权，
+    所以默认 forward，口径对齐。
+    """
+    ths = to_thscode(str(code).strip())
+    if not ths or "." not in ths:
+        return []
+    now_ms = int(time.time() * 1000)
+    span_days = min(int(count * 1.55) + 10, _HIST_MAX_DAYS)
+    start_ms = now_ms - span_days * 86400000
+
+    data = _cached("/api/a-share/prices/historical",
+                   {"thscode": ths, "interval": "1d",
+                    "start": start_ms, "end": now_ms, "adjust": adjust},
+                   "daily")
+    if not data:
+        return []
+
+    out = []
+    for r in (data.get("item") or []):
+        try:
+            ms = int(r.get("date_ms") or 0)
+            close = _f(r.get("close_price"))
+            if ms <= 0 or close <= 0:
+                continue
+            out.append({
+                "date": _sh_date(ms),
+                "open": round(_f(r.get("open_price")), 3),
+                "close": round(close, 3),
+                "high": round(_f(r.get("high_price")), 3),
+                "low": round(_f(r.get("low_price")), 3),
+                "volume": round(_f(r.get("volume")) / 100.0, 0),   # 股 -> 手
+            })
+        except (TypeError, ValueError):
+            continue
+    out.sort(key=lambda x: x["date"])
+    return out[-count:] if count and len(out) > count else out
 
 
 # ---------------------------------------------------------------- 交易日历

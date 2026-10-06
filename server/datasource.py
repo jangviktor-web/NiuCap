@@ -13,6 +13,14 @@ from typing import Optional
 # 本地 A 股节假日表（休市日 + 调休补班日），见文件内说明
 import holidays as _hl
 
+# 同花顺（fuyao）备源。定位是**第三级降级**：只在 eltdx / 腾讯 / 新浪全挂时
+# 才起作用，所以常态零开销。顶层 import 但包了 try —— 拿不到凭证时
+# _htk.API_AVAILABLE 为 False，降级链自动少一级，不影响任何现有路径。
+try:
+    import hithink as _htk
+except Exception:                     # pragma: no cover
+    _htk = None
+
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/122.0 Safari/537.36")
 
@@ -408,9 +416,9 @@ def kline_sina(code, count=250):
 
 
 def get_kline(code, period="1d", count=250, use_cache=True):
-    """K线多源降级：腾讯 -> 新浪（日线），带缓存
+    """K线多源降级：腾讯 -> 新浪 -> 同花顺（日线），带缓存
 
-    注：分钟/周/月线仅腾讯支持；日线双源互备。
+    注：分钟/周/月线仅腾讯支持（上游同花顺只给日线）；日线三源互备。
     """
     code = normalize(code)
     period = normalize_period(period)
@@ -423,10 +431,27 @@ def get_kline(code, period="1d", count=250, use_cache=True):
     rows = kline_tencent(code, period, count)
     if not rows and period == "1d":
         rows = kline_sina(code, count)
+        if not rows:
+            rows = kline_hithink(code, count)
 
     # 不缓存空结果：数据源限流时会静默返回空，缓存了会把自己锁死 TTL。
     _cache_put(_kline_cache, ckey, rows, skip_empty=True)
     return rows
+
+
+def kline_hithink(code, count=250, adjust="forward"):
+    """同花顺历史日 K（第三级备源）。无凭证 / 上游不可用时返回 []。
+
+    为什么放在最后：它是**兜底**不是**优化** —— 腾讯 0.4s 节流批量的速度
+    远优于这里，本地库已有 274 万根日线也轮不到它。价值只在前两个源同时
+    不可用时（eltdx 被关 / 腾讯被 WAF）让页面还有数据。
+    """
+    if _htk is None or not _htk.API_AVAILABLE:
+        return []
+    try:
+        return _htk.kline_history(code, count, adjust)
+    except Exception:
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -824,11 +849,26 @@ def snapshot_eltdx(codes):
         return {}
 
 
+def quote_hithink(codes):
+    """同花顺行情快照（第三级备源），返回 {内部代码: 行情行}；不可用返回 {}。
+
+    ⚠ 实测两条硬限制（详见 server/hithink.py 注释）：
+      - 上游**不返回 name**，只有价格/量额。调用方目前只用 price，无影响；
+      - 只支持沪深 A 股个股，ETF / 指数 / 北交所一律取不到。
+    """
+    if _htk is None or not _htk.API_AVAILABLE:
+        return {}
+    try:
+        return _htk.quote_snapshot(codes)
+    except Exception:
+        return {}
+
+
 def snapshot(codes, use_cache=True):
-    """统一实时快照入口：eltdx 优先、腾讯降级。
+    """统一实时快照入口：eltdx 优先、腾讯次之、同花顺兜底。
 
     返回格式与 `quote_tencent` **完全兼容**（字段名一致），上层无需分叉。
-    两个源的单位差异已在各自适配层抹平（amount 统一为「元」）。
+    三个源的单位差异已在各自适配层抹平（volume 手 / amount 万元 / 市值 亿）。
 
     为什么要单独一个入口而不是让调用方自己判断：快照是这个工程里
     被调用最频繁的接口（自选、榜单、分时、扫描都要），源选择逻辑
@@ -851,6 +891,9 @@ def snapshot(codes, use_cache=True):
 
     # eltdx 不可用（未装/被开关关闭/连接失败）→ 腾讯降级
     out = quote_tencent(codes, use_cache=False)
+    if not out:
+        # 腾讯也没数据（WAF 拦截 / 网络故障）→ 同花顺兜底
+        out = quote_hithink(codes)
     if out:
         _cache_put(_quote_cache, ckey, out, skip_empty=True)
     return out
@@ -858,10 +901,13 @@ def snapshot(codes, use_cache=True):
 
 def snapshot_status():
     """快照源状态（供 /api/health）。"""
+    st = {"hithink_fallback": bool(_htk is not None and _htk.API_AVAILABLE)}
     _e = _load_eltdx_source()
     if _e is None:
-        return {"primary": "tencent", "eltdx": False}
-    return {"primary": "eltdx", "eltdx": True, "batch_max": 80}
+        st.update({"primary": "tencent", "eltdx": False})
+    else:
+        st.update({"primary": "eltdx", "eltdx": True, "batch_max": 80})
+    return st
 
 
 # ---------------------------------------------------------------------------
