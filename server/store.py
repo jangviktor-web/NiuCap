@@ -986,6 +986,19 @@ def current_user_id() -> int:
     return _ensure_default_user(c)
 
 
+def current_user_is_anonymous() -> bool:
+    """本请求是否未登录。
+
+    与 current_user_id() 的区别：后者在匿名时会回落到 local 默认账号，
+    所以「返回的是不是默认账号」不能直接代表「是不是匿名」。这里直接看
+    中间件有没有注入真实登录用户，才是「真的没登录」。
+
+    用途：盘前竞价等以「我的」为名的接口，匿名访客没有真正的自选，
+    不该把 local 默认账号的私有自选当成「我的」展示出来。
+    """
+    return _current_uid.get() is None
+
+
 # ------------------------------------------------------------------ 账号
 
 # 密码哈希：标准库 pbkdf2_hmac，零新依赖。

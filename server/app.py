@@ -2641,20 +2641,26 @@ def api_auction(stage: str = Query("final", description="live=实时 / final=终
 
     # 自选股竞价快照（上游单次上限 100，超出截断）
     watch: Dict[str, Any] = {"ok": False, "total": 0, "items": []}
-    try:
-        store.initialize()
-        items = store.list_items()
-        codes = [it.get("code") for it in (items or []) if it.get("code")]
-        if codes:
-            watch = htk.auction_snapshot(codes[:100], stage)
-            # 补自选股备注名（上游只给标准简称）
-            alias = {str(it.get("code")): it.get("alias") or it.get("name")
-                     for it in items}
-            for r in watch["items"]:
-                if not r.get("name") and alias.get(r["code"]):
-                    r["name"] = alias[r["code"]]
-    except Exception:
-        watch = {"ok": False, "total": 0, "items": []}
+    if store.current_user_is_anonymous():
+        # 未登录（匿名回落到 local 默认账号）：不展示「我的自选」。
+        # 匿名访客没有真正的自选，展示 local 账号的私有自选既误导
+        # （写着「我的」却不是他的）又会在多用户部署时暴露部署者的数据。
+        pass
+    else:
+        try:
+            store.initialize()
+            items = store.list_items()
+            codes = [it.get("code") for it in (items or []) if it.get("code")]
+            if codes:
+                watch = htk.auction_snapshot(codes[:100], stage)
+                # 补自选股备注名（上游只给标准简称）
+                alias = {str(it.get("code")): it.get("alias") or it.get("name")
+                         for it in items}
+                for r in watch["items"]:
+                    if not r.get("name") and alias.get(r["code"]):
+                        r["name"] = alias[r["code"]]
+        except Exception:
+            watch = {"ok": False, "total": 0, "items": []}
 
     return {
         "available": htk.API_AVAILABLE,
