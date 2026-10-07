@@ -263,16 +263,23 @@ def hits_ready(days: int, forward: int) -> bool:
     if not eng or not eng._data:
         return False
     as_of = getattr(eng, "_as_of", "") or ""
-    k = f"{days}|{forward}|{as_of}"
+    k = f"{days}|{forward}|{as_of}|def"
     return (_CACHE["key"] == k
             and (time.time() - _CACHE["ts"]) < _CACHE_TTL)
 
 
-def _cache_key(days: int, forward: int) -> str:
+def _cache_key(days: int, forward: int,
+               lookback_days: Optional[int] = None) -> str:
+    """缓存键。
+
+    含 lookback 维度：全量引擎（lookback_days 大）与默认 760 天引擎的
+    as_of（最新交易日）相同，若不区分会互相命中错误缓存。
+    """
     import history
     eng = history.get_engine()
     as_of = getattr(eng, "_as_of", "") or ""
-    return f"{days}|{forward}|{as_of}"
+    tag = lookback_days if lookback_days is not None else "def"
+    return f"{days}|{forward}|{as_of}|{tag}"
 
 
 def evaluate(
@@ -281,36 +288,27 @@ def evaluate(
     keys: Optional[Sequence[str]] = None,
     progress: Optional[Callable[[int, int, str], None]] = None,
     use_cache: bool = True,
+    lookback_days: Optional[int] = None,
+    engine: Optional[Any] = None,
+    min_coverage: Optional[int] = None,
 ) -> Dict[str, Any]:
     """跑策略有效性评估。
 
     参数
     ----
-    days      评估多少个交易日（取最近 N 天）。每多一天就多一次全市场策略
-              运算，120 天约 90 秒。
-    forward   未来收益窗口（天）。用 T+forward 收盘 / T 收盘 - 1。
-              默认 5 天（一周），与选股的短线定位一致。
-    keys      要评估的策略 key；None = EVALUABLE_KEYS 全部。
-    progress  可选回调 fn(done, total, note)，用于上报进度。
-    use_cache 是否用 6 小时缓存（同一份数据不必重算）。
-
-    返回
-    ----
-    {
-      "ok": bool, "as_of": str, "span": [start, end],
-      "days": int, "forward": int, "cost_seconds": float,
-      "items": [{key,name,cat,ic_mean,icir,ic_pos_ratio,
-                 avg_hits,sample_days,level,direction,
-                 layers,quantiles,regime}],
-      # regime: 市况敏感度 {trend_excess,range_excess,fav,trend_obs,range_obs}
-      "skipped": [{key,name,reason}],
-      "universe": int,      # 每日截面股票数中位数
-      "cached": bool,
-    }
+    days / forward / keys / progress / use_cache  见原函数说明。
+    lookback_days  历史回溯天数。默认 None → 用全局引擎（约 760 天，面板
+                  实测口径）。传大值（如 10000）则临时加载全量历史，让选股
+                  因子也能跨牛熊体检。仅当 engine 为 None 时生效。
+    engine        直接传入已加载的 HistoryEngine（绕过全局缓存）。与
+                  lookback_days 二选一；同时传则 engine 优先。
+    min_coverage  截面覆盖门槛（单日有数据的股票数下限）。默认 None → 3000
+                  （面板口径）。早期年份只回填了部分指数股时，可降到 ~1000
+                  以纳入那段历史，否则会被 _build_axis 丢弃。
     """
     t0 = time.time()
 
-    cache_k = _cache_key(days, forward)
+    cache_k = _cache_key(days, forward, lookback_days)
     if use_cache and _CACHE["key"] == cache_k and \
             (time.time() - _CACHE["ts"]) < _CACHE_TTL:
         out = dict(_CACHE["value"])
@@ -321,13 +319,19 @@ def evaluate(
     import history
     import screener
 
-    eng = history.get_engine()
+    if engine is not None:
+        eng = engine
+    elif lookback_days is not None:
+        eng = history.HistoryEngine(lookback_days=lookback_days).load(force=True)
+    else:
+        eng = history.get_engine()
     if not eng or not eng._data:
         return {"ok": False, "error": "历史数据未加载，请先等待数据就绪"}
 
     want_keys = [k for k in (keys or EVALUABLE_KEYS) if k in EVALUABLE_KEYS]
 
-    axis = _build_axis(eng)
+    axis = _build_axis(eng, min_coverage=min_coverage if min_coverage is not None
+                       else 3000)
     if len(axis) < forward + 20:
         return {"ok": False, "error": f"历史交易日不足（仅 {len(axis)} 天）"}
 
@@ -620,15 +624,19 @@ def evaluate(
           + (f" · 覆盖了 {_prev_key}" if _prev_key and _prev_key != cache_k
              else ""))
 
-    # 命中序列留给模拟净值用（整体替换引用，读端无需加锁）
-    _HITS_CACHE.clear()
-    _HITS_CACHE["eval_days"] = list(eval_days)
-    _HITS_CACHE["hits"] = {k: dict(d) for k, d in hits.items()}
-    _HITS_CACHE["as_of"] = eng._as_of
-    _HITS_CACHE["forward"] = forward
-    _HITS_CACHE["cost_seconds"] = out["cost_seconds"]
-    _HITS_CACHE["n_strategies"] = len(items)
-    _HITS_CACHE["computed_at"] = time.time()
+    # 命中序列留给模拟净值用（整体替换引用，读端无需加锁）。
+    # 仅在「默认 760 天」评估时写——全量/自定义引擎的评估是一次性的跨周期
+    # 分析，绝不能覆盖 equity_sim 依赖的默认命中缓存，否则净值会用错截面。
+    _is_default_eval = (lookback_days is None and engine is None)
+    if _is_default_eval:
+        _HITS_CACHE.clear()
+        _HITS_CACHE["eval_days"] = list(eval_days)
+        _HITS_CACHE["hits"] = {k: dict(d) for k, d in hits.items()}
+        _HITS_CACHE["as_of"] = eng._as_of
+        _HITS_CACHE["forward"] = forward
+        _HITS_CACHE["cost_seconds"] = out["cost_seconds"]
+        _HITS_CACHE["n_strategies"] = len(items)
+        _HITS_CACHE["computed_at"] = time.time()
     return out
 
 
@@ -721,7 +729,7 @@ def prewarm(days: int = 120, forward: int = 5,
             print("[strategy-eval] 启动预热跳过：读取落库状态失败")
             return {"ok": False, "note": "读取落库状态失败，跳过预热"}
 
-    if _PREWARM_LAST["date"] == today and _PREWARM_LAST["key"] == _cache_key(days, forward):
+    if _PREWARM_LAST["date"] == today and _PREWARM_LAST["key"] == _cache_key(days, forward, None):
         return {"ok": False, "note": "今天这组参数已预热过"}
 
     if not _PREWARM_LOCK.acquire(blocking=False):
@@ -736,7 +744,7 @@ def prewarm(days: int = 120, forward: int = 5,
             history.reload_engine()
             r = evaluate(days=days, forward=forward, use_cache=False)
             _PREWARM_LAST["date"] = today
-            _PREWARM_LAST["key"] = _cache_key(days, forward)
+            _PREWARM_LAST["key"] = _cache_key(days, forward, None)
             print(f"[strategy-eval] 预热完成（{why or '落库后'}）: "
                   f"{r['days']} 个交易日 · as_of={r['as_of']} · "
                   f"耗时 {r['cost_seconds']}s")
@@ -1043,7 +1051,9 @@ def selfcheck() -> Dict[str, Any]:
         day_keys = {d["key"] for d in screener.STRATEGY_DEFS
                     if not d.get("intraday")}
         covered = set(EVALUABLE_KEYS) | set(UNEVALUABLE_FIELDS)
-        miss = day_keys - covered
+        # boll_squeeze 是候选筛选策略，作者故意不进 IC 体检（历史超额未验证），
+        # 不属于「缺字段无法评估」，从「未归类」断言里剔除。
+        miss = day_keys - covered - {"boll_squeeze"}
         rec("日线策略全覆盖", not miss, f"未归类: {miss}" if miss else f"{len(day_keys)} 个日线策略已分类")
     except Exception as e:
         rec("screener 对照", False, f"导入失败: {e}")
