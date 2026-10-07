@@ -148,7 +148,8 @@ def _turnover(old: Sequence[int], new: Sequence[int]) -> float:
 def rotate(mats: Dict[str, Any], score: np.ndarray, *,
            rebal: int = 21, topk: int = 20,
            ma_win: int = 120, use_filter: bool = True,
-           cost_on: bool = True) -> Dict[str, Any]:
+           cost_on: bool = True,
+           warm_days: Optional[int] = None) -> Dict[str, Any]:
     """组合轮动回测。
 
     rebal      调仓周期（交易日）
@@ -167,8 +168,11 @@ def rotate(mats: Dict[str, Any], score: np.ndarray, *,
     idx = equal_weight_index(close)
     idx_ma = ma(idx, ma_win)
 
-    # 预热：因子最长窗口(120)与风控均线(ma_win)都要满足
-    warm = max(130, ma_win if use_filter else 130)
+    # 预热：因子最长窗口(120)与风控均线(ma_win)都要满足。
+    # warm_days 可由调用方覆盖（如 walk-forward：因子已在全历史上预计算，
+    # 窗口起点的信号本就有效，无需再 warm-up；传 0 即可让首日即参与换仓）。
+    warm = warm_days if warm_days is not None else \
+        (max(130, ma_win) if use_filter else 130)
     start = min(warm, T - 2)
 
     equity = [1.0]
