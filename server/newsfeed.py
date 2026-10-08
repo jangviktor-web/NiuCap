@@ -74,19 +74,38 @@ def _ts_text(v, fmt="%m-%d %H:%M") -> str:
         return str(v or "")[:16]
 
 
+def _pub_text(ts: int) -> str:
+    """真实发布时间戳 → 带年份的展示文本 'YYYY-MM-DD HH:MM'。
+
+    为什么带年份：此前展示只有 'MM-DD HH:MM'，跨年缓存（12-31 存、1-01 重载）
+    无法区分年份，用户按时间筛板块舆情时会混淆。带年份后歧义消除。
+    """
+    try:
+        return time.strftime("%Y-%m-%d %H:%M", time.localtime(int(ts)))
+    except Exception:
+        return ""
+
+
 def _norm(sid: str, source: str, tm: str, content: str, red: bool = False,
-          url: str = "", stocks: list = None) -> Dict[str, Any]:
+          url: str = "", stocks: list = None, pub_ts: int = 0) -> Dict[str, Any]:
     """归一化一条快讯。id = 源前缀 + 源内 id（无 id 用内容指纹）。
 
     stocks: 关联股票 [{symbol: 'sh600010', name: '包钢股份'}]（新浪 ext 提供）。
+    pub_ts: 真实发布时刻（epoch 秒），源可解析则传；为 0 时回落抓取时刻。
+    注意与 epoch 的区别——epoch 是「被抓进来的时刻」（滚动缓冲保鲜期用，
+    语义 = 进 _history 多久后淘汰）；pub_ts 是「新闻实际发布时刻」（时间筛选/
+    展示用）。二者不是一个东西，混用会让回填的老新闻被当成最新（曾踩）。
     """
     content = re.sub(r"\s+", " ", str(content or "")).strip()
     key = str(sid or "").strip() or hashlib.md5(
         (tm + content).encode()).hexdigest()[:16]
-    return {"id": f"{source}:{key}", "source": source, "time": tm,
-            "content": content, "red": bool(red), "url": url,
+    now = int(time.time())
+    pub = int(pub_ts or 0) or now          # 解析不到真实发布时刻则回落抓取时刻
+    return {"id": f"{source}:{key}", "source": source,
+            "time": _pub_text(pub) if pub_ts else tm,   # 有真实时刻用带年份文本
+            "pub_ts": pub, "content": content, "red": bool(red), "url": url,
             "stocks": stocks or [],
-            "epoch": int(time.time()),
+            "epoch": now,
             "fp": hashlib.md5(content[:120].encode()).hexdigest()[:16]}
 
 
@@ -142,17 +161,18 @@ def _fetch_sina_page(pg: int, timeout: int = 8):
             docurl = ext.get("docurl") or ""
         except Exception:
             pass
-        # create_time 形如 '2026-09-26 20:39:05'，取 '09-26 20:39'
+        # create_time 形如 '2026-09-26 20:39:05'，取带年份展示文本
         ct = str(x.get("create_time") or "")
+        cte = 0
         if ct:
             try:
-                cte = datetime.strptime(ct, "%Y-%m-%d %H:%M:%S").timestamp()
+                cte = int(datetime.strptime(ct, "%Y-%m-%d %H:%M:%S").timestamp())
                 min_ct = cte if min_ct is None else min(min_ct, cte)
             except Exception:
                 pass
         out.append(_norm(x.get("id"), "新浪7x24", ct[5:16],
                          x.get("rich_text") or "", red=False,
-                         url=docurl, stocks=stocks))
+                         url=docurl, stocks=stocks, pub_ts=cte))
     return out, min_ct
 
 
@@ -181,11 +201,18 @@ def fetch_ths(timeout: int = 8) -> List[Dict[str, Any]]:
                               "User-Agent": UA})
     r.raise_for_status()
     lst = (r.json().get("data") or {}).get("list") or []
-    return [_norm(x.get("id"), "同花顺",
-                  _ts_text(x.get("ctime")),
-                  ((x.get("title") or "") + " " + (x.get("digest") or "")).strip(),
-                  red=str(x.get("color")) == "2",
-                  url=x.get("url") or "") for x in lst]
+    out = []
+    for x in lst:
+        try:
+            cts = int(x.get("ctime") or 0)   # 同花顺 ctime 为 epoch 秒
+        except Exception:
+            cts = 0
+        out.append(_norm(x.get("id"), "同花顺",
+                         _ts_text(cts),
+                         ((x.get("title") or "") + " " + (x.get("digest") or "")).strip(),
+                         red=str(x.get("color")) == "2",
+                         url=x.get("url") or "", pub_ts=cts))
+    return out
 
 
 def _dedup_merge(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -282,11 +309,12 @@ def _save_history_md() -> None:
             stocks = ";".join(
                 f"{s.get('symbol', '')}:{s.get('name', '')}"
                 for s in (x.get("stocks") or []))
-            lines.append("- %s | %s | %s | %s | %s | %s | %s | %s | %s" % (
+            # 第 10 列 pub_ts：真实发布时刻（时间筛选用）。旧文件无此列时重载回落 epoch。
+            lines.append("- %s | %s | %s | %s | %s | %s | %s | %s | %s | %s" % (
                 _sanitize_md(x.get("time")), x.get("id"), x.get("source"),
                 sent.get("tone", "neutral"), sent.get("score", 0.0),
                 int(x.get("epoch", 0)), stocks, _sanitize_md(x.get("url", "")),
-                _sanitize_md(x.get("content"))))
+                _sanitize_md(x.get("content")), int(x.get("pub_ts", 0) or 0)))
         os.makedirs(os.path.dirname(HISTORY_MD_FILE), exist_ok=True)
         tmp = HISTORY_MD_FILE + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -317,6 +345,15 @@ def _load_history_md() -> int:
                     epoch_v = int(epoch)
                 except Exception:
                     epoch_v = int(time.time())
+                # 第 10 列 pub_ts（新格式才有）；旧文件回落 epoch，保证时间筛选不崩
+                pub_v = 0
+                if len(parts) >= 10:
+                    try:
+                        pub_v = int(parts[9])
+                    except Exception:
+                        pub_v = 0
+                if pub_v <= 0:
+                    pub_v = epoch_v
                 stock_list = [
                     {"symbol": a, "name": b}
                     for a, b in (p.split(":", 1) for p in stocks.split(";") if p and ":" in p)
@@ -324,6 +361,7 @@ def _load_history_md() -> int:
                 loaded.append({
                     "id": iid, "source": source, "time": time_t, "content": content,
                     "red": False, "url": url, "stocks": stock_list, "epoch": epoch_v,
+                    "pub_ts": pub_v,
                     "fp": hashlib.md5(content[:120].encode()).hexdigest()[:16],
                     # ponytail: 不信任 md 里落盘的 tone/score，重载时按原文重新打分，
                     # 既自愈历史毒数据（首启回填未挂情绪的条目），也自动吃到词典升级。
@@ -399,12 +437,16 @@ atexit.register(_save_history_md)
 
 
 def get_sector_window(window_sec: int = 3 * 3600) -> List[Dict[str, Any]]:
-    """板块舆情滚动窗口：最近 window_sec 秒内被抓取到的快讯（已去重）。
+    """板块舆情滚动窗口：最近 window_sec 秒内【发布】的快讯（已去重）。
 
-    仅做轻量过滤——_history 本身已裁剪到 HISTORY_SECS，window_sec 应 ≤ 它。
+    关键：按「真实发布时间」pub_ts 过滤，而非「抓取时刻」epoch。
+    此前用 epoch 会把启动回填进来的老新闻（几小时前发布、此刻才抓到，epoch=现在）
+    误算成「1 小时内」，用户按时间筛板块舆情就被混淆。pub_ts 缺失（旧缓存）回落 epoch。
+    _history 本身已按 epoch 裁剪到 HISTORY_SECS，这里再做一层发布时间过滤。
     """
     now = time.time()
-    return [x for x in _history if now - x.get("epoch", now) <= window_sec]
+    return [x for x in _history
+            if now - (x.get("pub_ts") or x.get("epoch", now)) <= window_sec]
 
 
 def cache_status() -> Dict[str, Any]:
@@ -451,6 +493,13 @@ def selfcheck() -> int:
     y = _norm("123", "同花顺", "09-26 20:01", "标题")
     eq(y["id"], "同花顺:123", "有 id → 源前缀+id")
 
+    print("\n[1b] 发布时间 pub_ts（时间筛选/展示语义）")
+    z = _norm("7", "新浪7x24", "09-26 20:00", "带发布时间", pub_ts=1791493228)
+    eq(z["pub_ts"], 1791493228, "pub_ts 传入被保留")
+    eq(z["time"], "2026-10-09 05:00", "展示文本带年份 YYYY-MM-DD HH:MM")
+    z0 = _norm("8", "新浪7x24", "09-26 20:00", "缺 pub_ts", pub_ts=0)
+    eq(z0["pub_ts"] == z0["epoch"], True, "缺 pub_ts → 回落抓取时刻")
+
     print("\n[2] 两级去重 + 倒序")
     a = _norm("1", "新浪7x24", "09-26 20:02", "同一条新闻")
     b = _norm("9", "同花顺", "09-26 20:01", "同一条新闻")   # 内容指纹相同
@@ -482,6 +531,32 @@ def selfcheck() -> int:
     eq(f2.get("cached"), True, "30s 内二次取走缓存")
     tones = [x["sentiment"]["tone"] for x in f["items"] if "sentiment" in x]
     eq(len(tones) == len(f["items"]), True, "每条都挂了 sentiment")
+
+    print("\n[5] 板块窗口按发布时间过滤（而非抓取时刻）")
+    import time as _t
+    now = int(_t.time())
+    with _lock:
+        saved = list(_history)
+        _history.clear()
+        _hist_ids.clear()
+        # 老新闻：1 小时前发布，此刻才抓到（epoch=now）→ 不该进 30 分钟窗口
+        old_item = _norm("old", "新浪7x24", "", "一小时前的老新闻",
+                         pub_ts=now - 3600)
+        # 新新闻：5 分钟前发布 → 应进 30 分钟窗口
+        new_item = _norm("new", "新浪7x24", "", "五分钟前的新新闻",
+                         pub_ts=now - 300)
+        _history.append(old_item)
+        _history.append(new_item)
+        win = get_sector_window(1800)
+        ids = {x["id"] for x in win}
+        eq("新浪7x24:new" in ids, True, "5分钟前发布 → 进 30分钟窗口")
+        eq("新浪7x24:old" in ids, False,
+           "1小时前发布(刚抓到) → 不进 30分钟窗口（旧 bug: 会误进）")
+        _history.clear()
+        _hist_ids.clear()
+        for it in saved:
+            _history.append(it)
+            _hist_ids.add(it["id"])
 
     print("\n" + "=" * 46)
     if fails:
