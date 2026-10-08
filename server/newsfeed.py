@@ -90,6 +90,26 @@ def _norm(sid: str, source: str, tm: str, content: str, red: bool = False,
             "fp": hashlib.md5(content[:120].encode()).hexdigest()[:16]}
 
 
+def _ensure_sentiment(item: Dict[str, Any]) -> None:
+    """就地补 sentiment（缺失才补）。复用 #89 词典情绪；单条失败不阻断整批。
+
+    ponytail：这是修复「板块舆情几乎全中性」的关键。此前只有 get_feed 的
+    实时循环会给快讯打情绪，而背景回填（_backfill_history）与 md 重载
+    （_load_history_md）走的是 _accumulate_history，那条路径不挂 sentiment——
+    于是首启回填的近 24h 新浪历史快讯全落盘成 neutral，重启又按 id 去重不再重算，
+    舆情窗口 99.6% 变中性。统一在这里兜底，保证任何进 _history 的条目都有情绪。
+    """
+    if item.get("sentiment"):
+        return
+    try:
+        import sentiment as senti
+        r = senti.analyze(item.get("content") or "")
+        item["sentiment"] = {"tone": r["tone"], "tone_text": r["tone_text"],
+                             "score": r["score"]}
+    except Exception:
+        item["sentiment"] = {"tone": "neutral", "tone_text": "中性", "score": 0.0}
+
+
 def _fetch_sina_page(pg: int, timeout: int = 8):
     """抓新浪 7x24 单页（zhibo_id=152）。返回 (items, min_create_ts)。
 
@@ -230,6 +250,7 @@ def _accumulate_history(merged: List[Dict[str, Any]], now: float) -> None:
             iid = x["id"]
             if iid in _hist_ids:
                 continue
+            _ensure_sentiment(x)   # 回填/重载进来的条目可能没情绪，兜底补算
             _hist_ids.add(iid)
             _history.append(x)
         # 队首惰性裁剪：抓取时刻超过 HISTORY_SECS 的出队
@@ -304,8 +325,11 @@ def _load_history_md() -> int:
                     "id": iid, "source": source, "time": time_t, "content": content,
                     "red": False, "url": url, "stocks": stock_list, "epoch": epoch_v,
                     "fp": hashlib.md5(content[:120].encode()).hexdigest()[:16],
-                    "sentiment": {"tone": tone, "tone_text": tone, "score": float(score)},
+                    # ponytail: 不信任 md 里落盘的 tone/score，重载时按原文重新打分，
+                    # 既自愈历史毒数据（首启回填未挂情绪的条目），也自动吃到词典升级。
+                    "sentiment": None,
                 })
+                _ensure_sentiment(loaded[-1])
     except Exception as e:
         print(f"[history-md] 载入失败（忽略，从头积累）：{e}")
         return 0
