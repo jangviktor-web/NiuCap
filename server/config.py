@@ -44,6 +44,16 @@ _REGISTRY: List[Tuple[str, str, str, Any, str]] = [
      "每次同步每只股票拉多少根日线（250 ≈ 1 年）。加大首次会更慢。"),
     ("TICK_SYNC_BARS_SCOPE", "日线落库 · 股票池", "scope", "all",
      "all=全市场（约 5575 只，含北交所）；也可填 hs300 / zz500 / zz1000 / zz2000。"),
+
+    # ── 新闻 API 密钥（自部署用户在后台填写，存 meta 表；前端密码框渲染）────
+    # 优先级同样 meta > env > 默认（空）。sector_news_lab 读取顺序：
+    # 后台 config.get → 环境变量 → .env 文件。留空则该新闻源自动降级跳过。
+    ("FINLIGHT_API_KEY", "新闻 API · Finlight 密钥", "secret", "",
+     "Finlight 金融新闻 API 密钥（api.finlight.me）。自带情绪分析+公司标注+中文；"
+     "留空则板块舆情聚合跳过 Finlight。也可在 .env 用同名校验变量配置。"),
+    ("FREENEWS_API_KEY", "新闻 API · FreeNews 密钥", "secret", "",
+     "Free News API 密钥（api.freenewsapi.io，5000 次/天免费）。英文为主、无情绪，"
+     "用本地词典补情绪；留空则跳过。也可在 .env 用同名校验变量配置。"),
 ]
 
 _BY_KEY = {r[0]: r for r in _REGISTRY}
@@ -107,6 +117,13 @@ def _validator(key: str):
             if not s or not _re.fullmatch(r"[A-Za-z0-9_]{1,16}", s):
                 raise ValueError(f"{title} 应为股票池名（all/hs300/zz500…）或 6 位指数代码，收到 {s!r}")
             return s.lower()
+        return v
+
+    if typ == "secret":
+        # 密钥类：只做去空白，不限制长度/字符（不同服务 key 格式差异大）。
+        # 不落日志、不在 /api/about 暴露；管理页以密码框渲染（见 web/index.html）。
+        def v(x):
+            return str(x).strip()
         return v
 
     if typ == "float":

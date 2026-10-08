@@ -2401,6 +2401,21 @@ def api_newsfeed(limit: int = Query(50, ge=1, le=100), force: int = Query(0)):
             "errors": f["errors"], "ts": f["ts"], "cached": f.get("cached", False)}
 
 
+@app.get("/api/newsfeed/sectors")
+def api_newsfeed_sectors(limit: int = Query(50, ge=1, le=100), force: int = Query(0)):
+    """板块舆情热度（基于双源快讯，复用 30s 缓存；描述性参考，非预测）。
+
+    把 /api/newsfeed 的快讯按 ticker 反查 + 关键词聚到板块，给出偏多/偏空/中性与净情绪。
+    不新增任何网络请求——直接复用 newsfeed 的 items 与缓存。
+    """
+    import sector_sentiment as _ss
+    f = nf.get_feed(force=bool(force))
+    items = f["items"][:limit]
+    rows = _ss.heat_table(_ss.aggregate(items))
+    return {"rows": rows, "sources": f["sources"], "errors": f["errors"],
+            "ts": f["ts"], "cached": f.get("cached", False)}
+
+
 @app.get("/api/market_phase")
 def api_market_phase():
     """市场情绪周期（6 阶段）与实时主线。"""

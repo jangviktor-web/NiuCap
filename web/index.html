@@ -1860,10 +1860,15 @@ td .starbtn{font-size:16px}
       <div class="card-h">
         <h2>📰 市场快讯</h2>
         <div class="meta" id="newsMeta">加载中…</div>
+        <div style="margin-left:auto;display:flex;gap:4px" id="newsTabs">
+          <button class="btn sm" data-ntab="feed" onclick="switchNews('feed')">快讯流</button>
+          <button class="btn sm" data-ntab="sector" onclick="switchNews('sector')">板块舆情</button>
+        </div>
       </div>
       <div class="card-b" id="newsBody">
         <div class="load"><span class="spin"></span>加载双源快讯…</div>
       </div>
+      <div class="card-b" id="sectorBody" style="display:none"></div>
     </div>
   </div>
 
@@ -2155,7 +2160,7 @@ function switchTab(want){
   // 懒加载：首次进入「虚拟盘」时拉取
   if(want === 'paper' && !ppState.loaded) loadPaper();
   // 懒加载：进入「快讯」即拉取（30s 内是缓存，随便切）
-  if(want === 'news') loadNews();
+  if(want === 'news'){ loadNews(); switchNews('feed'); }
   // 懒加载：进入「监控中心」即拉取规则与告警
   if(want === 'alerts') loadAlerts();
   // 懒加载：首次进入「条件选股」时拉取分钟扫描的预设条件
@@ -3597,7 +3602,7 @@ var ADMIN_TABS = [
    desc:'选股历史全量视图（跨账户、带模块分布与未归属统计，可按模块/用户筛选），一键把未归属记录认领到指定用户；' +
         '另有<b>窗口胜率回测</b>调试（自定义代码 / 每只金额 / 回看天数，直接调 /api/sim/window）与<b>入选后表现</b>调试（按记录 ID 调 performance）。'},
   {key:'config', name:'运行参数', emo:'🔧',
-   desc:'7 项可调，改完立即生效无需重启（连接池 / 批量取数 / 缓存时长 / 扫描取样根数 / 停牌占位等）；优先级为 管理页设置 &gt; 环境变量 &gt; 内置默认，每项标注来源并可一键还原；写入前过校验器，脏值永不落库。'},
+   desc:'可调参数（连接池 / 批量取数 / 缓存时长 / 扫描取样 / 停牌占位 / 新闻 API 密钥等），改完立即生效无需重启；优先级为 管理页设置 &gt; 环境变量 &gt; 内置默认，每项标注来源并可一键还原；写入前过校验器，脏值永不落库。'},
   {key:'bars', name:'数据落库', emo:'🗄️',
    desc:'日线覆盖率、同步进度、失败清单（含原因，可跳个股）；一键触发全市场补数据（250 根），后台线程跑并实时进度，同一时刻只允许一个任务。'},
   {key:'database', name:'数据库', emo:'🛠️',
@@ -4132,6 +4137,10 @@ function admConfig(el){
       if(p.type === 'bool'){
         cell = '<label style="font-size:13px"><input type="checkbox" data-cfgc="' + p.key + '"' +
                (p.value ? ' checked' : '') + '> ' + (p.value ? '开启' : '关闭') + '</label>';
+      } else if(p.type === 'secret'){
+        // 密钥类：密码框掩码，不在页面明文回显（仍为管理员可见的明文值，仅视觉遮挡）
+        cell = '<input class="in" style="width:200px;padding:3px 6px" data-cfgi="' + p.key +
+               '" type="password" autocomplete="off" placeholder="留空=不修改/跳过" value="' + attr(p.value) + '">';
       } else {
         cell = '<input class="in" style="width:110px;padding:3px 6px" data-cfgi="' + p.key +
                '" type="' + (p.type === 'int' ? 'number' : 'text') + '" value="' + attr(p.value) + '">';
@@ -5170,6 +5179,51 @@ function loadNews(){
     el.innerHTML = h;
     scheduleNews();
   }).catch(function(e){ die(el, '快讯加载失败：' + e.message); });
+}
+
+var sectorNewsLoaded = false;
+function switchNews(which){
+  var feed = $('newsBody'), sec = $('sectorBody');
+  if(feed) feed.style.display = which === 'feed' ? '' : 'none';
+  if(sec) sec.style.display = which === 'sector' ? '' : 'none';
+  var tabs = document.querySelectorAll('#newsTabs button');
+  for(var i=0;i<tabs.length;i++){
+    tabs[i].classList.toggle('pri', tabs[i].getAttribute('data-ntab') === which);
+  }
+  if(which === 'sector' && !sectorNewsLoaded) loadSectorNews();
+}
+function loadSectorNews(){
+  var el = $('sectorBody'); if(!el) return;
+  el.innerHTML = '<div class="load"><span class="spin"></span>加载板块舆情…</div>';
+  api('/api/newsfeed/sectors?limit=60').then(function(d){
+    sectorNewsLoaded = true;
+    if(!d.rows || !d.rows.length){ die(el, '暂无板块舆情'); return; }
+    var h = '<table style="width:100%;border-collapse:collapse;font-size:13px">'
+          + '<tr style="color:var(--tx3)"><th style="text-align:left;padding:4px 8px">板块</th>'
+          + '<th>条数</th><th style="color:var(--up)">偏多</th><th style="color:var(--down)">偏空</th>'
+          + '<th>中性</th><th>净情绪</th></tr>';
+    d.rows.forEach(function(r){
+      var net = r.net;
+      var col = net < -0.1 ? 'var(--down)' : (net > 0.1 ? 'var(--up)' : 'var(--tx3)');
+      var arrow = net < -0.1 ? '▼' : (net > 0.1 ? '▲' : '─');
+      h += '<tr><td style="padding:4px 8px">'+esc(r.sector)+'</td>'
+         + '<td style="text-align:center">'+r.n+'</td>'
+         + '<td style="text-align:center;color:var(--up)">'+r.pos+'</td>'
+         + '<td style="text-align:center;color:var(--down)">'+r.neg+'</td>'
+         + '<td style="text-align:center">'+r.neu+'</td>'
+         + '<td style="text-align:center;color:'+col+'">'+arrow+' '+net.toFixed(2)+'</td></tr>';
+    });
+    h += '</table>';
+    h += '<div style="margin-top:10px;font-size:12px;line-height:1.7">';
+    d.rows.slice(0,8).forEach(function(r){
+      if(r.samples && r.samples.length){
+        h += '<div style="margin:4px 0"><b>'+esc(r.sector)+'</b>：'+ r.samples.map(esc).join('；') +'</div>';
+      }
+    });
+    h += '</div>';
+    h += '<div class="meta" style="margin-top:8px">描述性参考 · ticker反查+关键词聚合，非预测；净情绪=偏多占比−偏空占比</div>';
+    el.innerHTML = h;
+  }).catch(function(e){ die(el, '板块舆情加载失败：' + e.message); });
 }
 function scheduleNews(){
   // 30s 轻刷新：页签在前台且浏览器可见才真请求，否则空转（省配额）
