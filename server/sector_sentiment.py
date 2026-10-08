@@ -49,7 +49,7 @@ SECTOR_KEYWORDS: Dict[str, List[str]] = {
             "gold", "copper", "aluminum", "rare earth", "metal", "mining"],
     "化工": ["化工", "化肥", "化纤", "塑料", "纯碱", "钛白粉",
             "chemical", "petrochemical"],
-    "能源": ["煤炭", "电力", "石油", "天然气", "火电", "水电", "核电", "霍尔木兹",
+    "能源": ["煤炭", "电力", "石油", "原油", "油价", "天然气", "火电", "水电", "核电", "霍尔木兹",
             "oil", "coal", "natural gas", "power", "nuclear", "crude"],
     "建材": ["钢铁", "水泥", "玻璃", "螺纹钢", "建材",
             "steel", "cement", "cement"],
