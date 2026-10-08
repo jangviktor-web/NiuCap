@@ -878,6 +878,39 @@ td .starbtn{font-size:16px}
   *,*::before,*::after{animation-duration:.001ms!important;animation-iteration-count:1!important;
     transition-duration:.001ms!important;scroll-behavior:auto!important}
 }
+
+/* ---------- 板块舆情（sector sentiment）美化 ---------- */
+.st-summary{font-size:12px;color:var(--tx2);margin:2px 2px 12px}
+.st-summary b{color:var(--tx)}
+.st-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+@media(max-width:680px){.st-grid{grid-template-columns:1fr}}
+.st-card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px 14px;
+  box-shadow:0 1px 2px rgba(16,24,40,.04)}
+.st-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:9px}
+.st-name{font-size:15px;font-weight:700;color:var(--tx)}
+.st-net{font-size:15px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+.st-bar{display:flex;height:7px;border-radius:4px;overflow:hidden;background:var(--line2);margin-bottom:8px}
+.st-seg{height:100%}
+.st-seg.pos{background:var(--up)}
+.st-seg.neu{background:var(--flat);opacity:.5}
+.st-seg.neg{background:var(--down)}
+.st-counts{font-size:12px;color:var(--tx2);margin-bottom:8px}
+.st-counts b{font-weight:600}
+.st-samples{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.st-item{display:flex;gap:7px;align-items:flex-start;font-size:12.5px;line-height:1.5}
+.st-txt{color:var(--tx2);flex:1;min-width:0}
+.st-badge{flex:none;font-size:11px;line-height:1;padding:3px 6px;border-radius:5px;font-weight:600;white-space:nowrap}
+.st-badge.pos{background:rgba(217,52,43,.12);color:var(--up)}
+.st-badge.neg{background:rgba(18,161,92,.12);color:var(--down)}
+.st-badge.neu{background:rgba(139,147,161,.16);color:var(--flat)}
+.st-note{font-size:11.5px;color:var(--tx3);margin:14px 2px 2px;line-height:1.6}
+.st-note b{color:var(--tx2)}
+.st-range{display:flex;gap:6px;flex-wrap:wrap;margin:2px 2px 14px}
+.st-rbtn{font-size:12px;line-height:1;padding:6px 12px;border:1px solid var(--line);
+  background:var(--card);color:var(--tx2);border-radius:999px;cursor:pointer;
+  transition:all .12s;font-family:inherit}
+.st-rbtn:hover{border-color:var(--tx3);color:var(--tx)}
+.st-rbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
 </style>
 </head>
 <body>
@@ -5181,7 +5214,8 @@ function loadNews(){
   }).catch(function(e){ die(el, '快讯加载失败：' + e.message); });
 }
 
-var sectorNewsLoaded = false;
+var sectorHours = 3;
+function setSectorHours(h){ sectorHours = h; loadSectorNews(); }
 function switchNews(which){
   var feed = $('newsBody'), sec = $('sectorBody');
   if(feed) feed.style.display = which === 'feed' ? '' : 'none';
@@ -5190,38 +5224,53 @@ function switchNews(which){
   for(var i=0;i<tabs.length;i++){
     tabs[i].classList.toggle('pri', tabs[i].getAttribute('data-ntab') === which);
   }
-  if(which === 'sector' && !sectorNewsLoaded) loadSectorNews();
+  if(which === 'sector') loadSectorNews();
 }
 function loadSectorNews(){
   var el = $('sectorBody'); if(!el) return;
   el.innerHTML = '<div class="load"><span class="spin"></span>加载板块舆情…</div>';
-  api('/api/newsfeed/sectors?limit=60').then(function(d){
-    sectorNewsLoaded = true;
+  api('/api/newsfeed/sectors?hours='+sectorHours).then(function(d){
     if(!d.rows || !d.rows.length){ die(el, '暂无板块舆情'); return; }
-    var h = '<table style="width:100%;border-collapse:collapse;font-size:13px">'
-          + '<tr style="color:var(--tx3)"><th style="text-align:left;padding:4px 8px">板块</th>'
-          + '<th>条数</th><th style="color:var(--up)">偏多</th><th style="color:var(--down)">偏空</th>'
-          + '<th>中性</th><th>净情绪</th></tr>';
-    d.rows.forEach(function(r){
-      var net = r.net;
-      var col = net < -0.1 ? 'var(--down)' : (net > 0.1 ? 'var(--up)' : 'var(--tx3)');
+    var rows = d.rows;
+    var cards = '';
+    rows.forEach(function(r){
+      var net = r.net || 0;
+      var col = net < -0.1 ? 'var(--down)' : (net > 0.1 ? 'var(--up)' : 'var(--flat)');
       var arrow = net < -0.1 ? '▼' : (net > 0.1 ? '▲' : '─');
-      h += '<tr><td style="padding:4px 8px">'+esc(r.sector)+'</td>'
-         + '<td style="text-align:center">'+r.n+'</td>'
-         + '<td style="text-align:center;color:var(--up)">'+r.pos+'</td>'
-         + '<td style="text-align:center;color:var(--down)">'+r.neg+'</td>'
-         + '<td style="text-align:center">'+r.neu+'</td>'
-         + '<td style="text-align:center;color:'+col+'">'+arrow+' '+net.toFixed(2)+'</td></tr>';
+      var n = r.n || 1;
+      var posP = Math.round((r.pos||0)/n*100), neuP = Math.round((r.neu||0)/n*100);
+      var negP = Math.max(0, 100 - posP - neuP);
+      var samples = (r.samples||[]).map(function(s){
+        var m = /^\[(pos|neg|neutral)\]\s*([\s\S]*)$/.exec(s);
+        var t = m ? (m[1]==='pos'?'pos':m[1]==='neg'?'neg':'neu') : 'neu';
+        var txt = m ? m[2] : s;
+        var lbl = t==='pos'?'偏多':t==='neg'?'偏空':'中性';
+        return '<li class="st-item"><span class="st-badge '+t+'">'+lbl+'</span>'
+             + '<span class="st-txt">'+esc(txt)+'</span></li>';
+      }).join('');
+      cards += '<div class="st-card">'
+        + '<div class="st-head"><span class="st-name">'+esc(r.sector)+'</span>'
+        + '<span class="st-net" style="color:'+col+'">'+arrow+' '+net.toFixed(2)+'</span></div>'
+        + '<div class="st-bar"><span class="st-seg pos" style="width:'+posP+'%"></span>'
+        + '<span class="st-seg neu" style="width:'+neuP+'%"></span>'
+        + '<span class="st-seg neg" style="width:'+negP+'%"></span></div>'
+        + '<div class="st-counts"><b style="color:var(--up)">偏多 '+(r.pos||0)+'</b> · '
+        + '<span style="color:var(--flat)">中性 '+(r.neu||0)+'</span> · '
+        + '<b style="color:var(--down)">偏空 '+(r.neg||0)+'</b> · 共 '+r.n+' 条</div>'
+        + (samples ? '<ul class="st-samples">'+samples+'</ul>' : '')
+        + '</div>';
     });
-    h += '</table>';
-    h += '<div style="margin-top:10px;font-size:12px;line-height:1.7">';
-    d.rows.slice(0,8).forEach(function(r){
-      if(r.samples && r.samples.length){
-        h += '<div style="margin:4px 0"><b>'+esc(r.sector)+'</b>：'+ r.samples.map(esc).join('；') +'</div>';
-      }
-    });
-    h += '</div>';
-    h += '<div class="meta" style="margin-top:8px">描述性参考 · ticker反查+关键词聚合，非预测；净情绪=偏多占比−偏空占比</div>';
+    var total = rows.reduce(function(a,r){return a+(r.n||0);},0);
+    var ts = d.ts ? new Date(d.ts*1000).toLocaleTimeString('zh-CN',{hour12:false}) : '—';
+    var wh = d.window_hours || 3;
+    var ranges = [[24,'24小时内'],[12,'12小时内'],[6,'6小时内'],[3,'3小时内'],[1,'1小时内']];
+    var rbtn = ranges.map(function(r){
+      return '<button class="st-rbtn'+(r[0]===sectorHours?' active':'')+'" onclick="setSectorHours('+r[0]+')">'+r[1]+'</button>';
+    }).join('');
+    var h = '<div class="st-range">'+rbtn+'</div>'
+          + '<div class="st-summary">共 <b>'+rows.length+'</b> 个板块 · <b>'+total+'</b> 条快讯 · 近 '+wh+' 小时滚动 · 更新于 '+ts+'</div>'
+          + '<div class="st-grid">'+cards+'</div>'
+          + '<div class="st-note">描述性参考 · ticker 反查 + 关键词聚合，<b>非预测</b>；净情绪 = 偏多占比 − 偏空占比；统计窗口为<b>近 '+wh+' 小时</b>滚动，非实时单条</div>';
     el.innerHTML = h;
   }).catch(function(e){ die(el, '板块舆情加载失败：' + e.message); });
 }

@@ -115,6 +115,7 @@
 - [📘 部署教程：一键发布到 WorkBuddy 云平台](#-部署教程一键发布到-workbuddy-云平台)
 - [⚠️ 首次部署必读：数据初始化](#-首次部署必读数据初始化)
 - [⚙️ 配置（.env，可选）](#-配置env可选)
+- [🔐 默认管理员账号](#-默认管理员账号)
 - [📁 目录结构](#-目录结构)
 - [🤝 贡献方式](#-贡献方式)
 - [🗺️ 路线图](#-路线图)
@@ -178,6 +179,10 @@
 <tr>
 <td width="50%" valign="top"><b>🎯 题材雷达</b> —— 板块四维评分<br><sub>行业板块融合去重 + 实时主线排行，热点一目了然</sub><br><img src="docs/screenshots/10-theme.webp" width="100%"/></td>
 <td width="50%" valign="top"><b>ℹ️ 关于</b> —— 模块构成实时统计<br><sub>指标数 / 策略数由后端实时统计，新增即自动同步；附技术实现、数据源与免责声明</sub><br><img src="docs/screenshots/07-about.webp" width="100%"/></td>
+</tr>
+<tr>
+<td width="50%" valign="top"><b>🏭 板块舆情</b> —— 快讯按板块聚合的多空热度<br><sub>双源快讯近 1/3/6/12/24 小时滚动窗口，按 ticker 反查 + 关键词聚到板块，给出偏多/中性/偏空占比与净情绪；卡片化展示，非实时单条、非预测</sub><br><img src="docs/screenshots/17-sector-sentiment.webp" width="100%"/></td>
+<td width="50%" valign="top"><b>🌐 多源快讯 + 后台 API 密钥</b> —— 自建可自填密钥<br><sub>快讯并联 Finlight（带情绪）/ FreeNews / OkSurf 多源；后台「运行参数」页把 API 密钥设为密码框，自托管用户可在网页后台直接填写，无需改代码</sub><br><img src="docs/screenshots/05-news.webp" width="100%"/></td>
 </tr>
 </table>
 
@@ -382,9 +387,27 @@ curl "http://localhost:8899/api/theme?limit=40"
 - **每日自动同步**：`TICK_SYNC_BARS_AUTO=1` + `TICK_SYNC_BARS_AT=15:30` + `TICK_SYNC_BARS_COUNT=250` + `TICK_SYNC_BARS_SCOPE=all`。
   - 内置**同步守门三重判断**：工作日 15:00 前不跑全量 / 当日已同步标记 / 抽检覆盖率 ≥90% 跳过，避免重复劳动与误触发。
 - **虚拟盘费率**：`TICK_FEE_RATE` / `TICK_STAMP_RATE` 等（仅新用户开户默认值）。
-- **管理员**：`TICK_ADMIN_USERS=用户名1,用户名2` —— 不设则后台管理页整体关闭。
+- **管理员**：`TICK_ADMIN_USERS=用户名1,用户名2` —— 显式配置后仅名单内用户为管理员；**不设则内置默认管理员账号 `admin`**（见下）。
 
 > `.env` 含数据库密码，**已被 `.gitignore` 排除，切勿提交**。
+
+---
+
+## 🔐 默认管理员账号
+
+**只要 `admin` 在管理员名单内（未配置 `TICK_ADMIN_USERS` 时默认在内，或你显式把它列入），且 `admin` 账号尚不存在，服务首次启动就会自动创建该账号**，开箱即可进后台：
+
+| 项目 | 值 |
+|---|---|
+| 用户名 | `admin` |
+| 密码 | `123456` |
+
+```bash
+# 登录后建议立刻改密（后台管理 → 用户 → 重置密码），或显式接管管理员：
+TICK_ADMIN_USERS=你的用户名
+```
+
+> ⚠️ **安全警告**：`123456` 是极弱默认密码。只要把面板暴露到公网，**任何人都能用 admin/123456 登入后台**。请务必在首次登录后立即修改密码，或用 `TICK_ADMIN_USERS` 指定你自己的管理员用户名（指定后内置默认 admin 即失效）。该账号仅用于「开箱即用」，不应长期保留默认密码。
 
 ---
 

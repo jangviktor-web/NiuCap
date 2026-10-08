@@ -27,6 +27,7 @@ import json
 import re
 import threading
 import time
+from collections import deque
 from typing import Any, Dict, List
 
 import requests
@@ -39,6 +40,13 @@ TTL = 30
 
 _lock = threading.Lock()
 _cache: Dict[str, Any] = {"ts": 0.0, "items": [], "errors": {}, "sources": {}}
+
+#: 板块舆情用的滚动历史：保留最近 HISTORY_SECS 秒内被抓取到的快讯（去重）。
+#: 让舆情统计的是「近几小时」而非「当下 40 条实时窗口」，避免每 30s 整窗翻滚导致热度乱跳。
+HISTORY_SECS = 24 * 3600
+HISTORY_MAX = 4000
+_history: "deque" = deque(maxlen=HISTORY_MAX)
+_hist_ids: set = set()
 
 
 def _ts_text(v, fmt="%m-%d %H:%M") -> str:
@@ -61,6 +69,7 @@ def _norm(sid: str, source: str, tm: str, content: str, red: bool = False,
     return {"id": f"{source}:{key}", "source": source, "time": tm,
             "content": content, "red": bool(red), "url": url,
             "stocks": stocks or [],
+            "epoch": int(time.time()),
             "fp": hashlib.md5(content[:120].encode()).hexdigest()[:16]}
 
 
@@ -159,7 +168,36 @@ def get_feed(force: bool = False) -> Dict[str, Any]:
 
         _cache.update({"ts": time.time(), "items": merged,
                        "errors": errors, "sources": sources})
+        _accumulate_history(merged, time.time())
         return {**_cache, "cached": False}
+
+
+def _accumulate_history(merged: List[Dict[str, Any]], now: float) -> None:
+    """把本轮去重后的快讯并入滚动历史（按 id 去重，超龄/超限出队）。"""
+    global _hist_ids
+    for x in merged:
+        iid = x["id"]
+        if iid in _hist_ids:
+            continue
+        _hist_ids.add(iid)
+        _history.append(x)
+    # 队首惰性裁剪：抓取时刻超过 HISTORY_SECS 的出队
+    while _history and now - _history[0].get("epoch", now) > HISTORY_SECS:
+        old = _history.popleft()
+        _hist_ids.discard(old["id"])
+    # ponytail: deque 因 maxlen 溢出会静默丢弃最旧项，但 _hist_ids 不自动收缩；
+    # 周期性用 deque 重建集合，避免内存随运行时间无限增长
+    if len(_hist_ids) - len(_history) > 200:
+        _hist_ids = {x["id"] for x in _history}
+
+
+def get_sector_window(window_sec: int = 3 * 3600) -> List[Dict[str, Any]]:
+    """板块舆情滚动窗口：最近 window_sec 秒内被抓取到的快讯（已去重）。
+
+    仅做轻量过滤——_history 本身已裁剪到 HISTORY_SECS，window_sec 应 ≤ 它。
+    """
+    now = time.time()
+    return [x for x in _history if now - x.get("epoch", now) <= window_sec]
 
 
 def cache_status() -> Dict[str, Any]:

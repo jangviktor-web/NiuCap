@@ -109,7 +109,7 @@ def aggregate(items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
             else:
                 a["neu"] += 1
             if len(a["samples"]) < 3:
-                a["samples"].append(f"[{tone}] {content[:42]}")
+                a["samples"].append(f"[{tone}] {content[:56]}")
     return dict(agg)
 
 

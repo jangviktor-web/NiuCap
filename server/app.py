@@ -200,6 +200,12 @@ def startup():
     admins = _admin_names()
     print(f"[admin] 管理员: {','.join(sorted(admins)) if admins else '未配置（管理页关闭）'}")
 
+    # 自建部署开箱默认管理员（仅当未显式配置 TICK_ADMIN_USERS 时）
+    try:
+        _seed_default_admin()
+    except Exception as e:
+        print(f"[seed] 默认管理员初始化失败（可忽略）：{e}")
+
     # 日线落库每日调度（开关默认关，由 config 控制；开启后无需重启）
     try:
         import scheduler as _sch
@@ -2402,18 +2408,19 @@ def api_newsfeed(limit: int = Query(50, ge=1, le=100), force: int = Query(0)):
 
 
 @app.get("/api/newsfeed/sectors")
-def api_newsfeed_sectors(limit: int = Query(50, ge=1, le=100), force: int = Query(0)):
-    """板块舆情热度（基于双源快讯，复用 30s 缓存；描述性参考，非预测）。
+def api_newsfeed_sectors(hours: int = Query(3, ge=1, le=24), force: int = Query(0)):
+    """板块舆情热度（近 hours 小时滚动窗口；描述性参考，非预测）。
 
-    把 /api/newsfeed 的快讯按 ticker 反查 + 关键词聚到板块，给出偏多/偏空/中性与净情绪。
-    不新增任何网络请求——直接复用 newsfeed 的 items 与缓存。
+    不再用「当下 40 条实时窗口」实时重聚合（那样每 30s 整窗翻滚、热度乱跳、看不出趋势），
+    改为聚合 newsfeed 近 hours 小时的滚动历史，舆情更稳定、能读出持续性。
+    仍复用 newsfeed 的抓取与 30s TTL——不新增任何网络请求。
     """
     import sector_sentiment as _ss
-    f = nf.get_feed(force=bool(force))
-    items = f["items"][:limit]
+    f = nf.get_feed(force=bool(force))          # 触发抓取，让新快讯进入滚动历史
+    items = nf.get_sector_window(hours * 3600)
     rows = _ss.heat_table(_ss.aggregate(items))
     return {"rows": rows, "sources": f["sources"], "errors": f["errors"],
-            "ts": f["ts"], "cached": f.get("cached", False)}
+            "ts": f["ts"], "window_hours": hours, "cached": f.get("cached", False)}
 
 
 @app.get("/api/market_phase")
@@ -2894,7 +2901,31 @@ def api_me(request: Request):
 
 def _admin_names() -> set:
     raw = os.environ.get("TICK_ADMIN_USERS", "").strip()
-    return {x.strip().lower() for x in raw.split(",") if x.strip()}
+    names = {x.strip().lower() for x in raw.split(",") if x.strip()}
+    if not names:
+        # 未显式配置管理员时，内置默认管理员账号 admin（配合启动时种子），
+        # 自建部署开箱即可进后台；显式配置后此默认即失效。
+        names.add("admin")
+    return names
+
+
+def _seed_default_admin() -> None:
+    """确保 admin 账号存在（初始密码 123456），开箱即可进后台。
+
+    触发条件：admin 在管理员名单内（未配置 TICK_ADMIN_USERS 时默认在内，
+    或显式列入），且 admin 账号尚不存在。register 遇「已存在」会抛 ValueError
+    被捕获——绝不覆盖用户自设密码。默认密码极弱，README 已强制要求改密。
+    """
+    if "admin" not in _admin_names():
+        return
+    import store as _store
+    try:
+        _store.register("admin", "123456", "管理员")
+        print("[seed] 已创建默认管理员 admin / 123456（请尽快在后台修改密码！）")
+    except ValueError:
+        pass  # 账号已存在，保留现状
+    except Exception as e:
+        print(f"[seed] 默认管理员创建失败（可忽略）：{e}")
 
 
 def _is_admin(u: Optional[Dict[str, Any]]) -> bool:
