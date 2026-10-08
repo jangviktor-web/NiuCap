@@ -905,6 +905,14 @@ td .starbtn{font-size:16px}
 .st-badge.neu{background:rgba(139,147,161,.16);color:var(--flat)}
 .st-note{font-size:11.5px;color:var(--tx3);margin:14px 2px 2px;line-height:1.6}
 .st-note b{color:var(--tx2)}
+/* 板块级催化剂（利空/利好词解析） */
+.st-cat{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px;
+  padding:6px 8px;border-radius:8px;background:var(--line2)}
+.st-cat-lab{font-size:11px;color:var(--tx3);flex:none}
+.st-catchip{font-size:11px;line-height:1;padding:3px 7px;border-radius:999px;font-weight:600;white-space:nowrap}
+.st-catchip.up{background:rgba(217,52,43,.12);color:var(--up)}
+.st-catchip.dn{background:rgba(18,161,92,.12);color:var(--down)}
+.st-catnet{font-size:11.5px;font-weight:700;font-variant-numeric:tabular-nums;margin-left:auto;white-space:nowrap}
 .st-range{display:flex;gap:6px;flex-wrap:wrap;margin:2px 2px 14px}
 .st-rbtn{font-size:12px;line-height:1;padding:6px 12px;border:1px solid var(--line);
   background:var(--card);color:var(--tx2);border-radius:999px;cursor:pointer;
@@ -5248,9 +5256,23 @@ function loadSectorNews(){
         return '<li class="st-item"><span class="st-badge '+t+'">'+lbl+'</span>'
              + '<span class="st-txt">'+esc(txt)+'</span></li>';
       }).join('');
+      // 板块级催化剂（利好/利空词解析）：cat_net = 利好词数 − 利空词数
+      var catNet = (typeof r.cat_net === 'number') ? r.cat_net : 0;
+      var catCol = catNet > 0 ? 'var(--up)' : (catNet < 0 ? 'var(--down)' : 'var(--flat)');
+      var catArrow = catNet > 0 ? '↑' : (catNet < 0 ? '↓' : '─');
+      var catRow = '';
+      if(r.bull || r.bear){
+        catRow = '<div class="st-cat">'
+          + '<span class="st-cat-lab">催化剂</span>'
+          + '<span class="st-catchip up">利好 '+(r.bull||0)+'</span>'
+          + '<span class="st-catchip dn">利空 '+(r.bear||0)+'</span>'
+          + '<span class="st-catnet" style="color:'+catCol+'">'+catArrow+' 净信号 '+catNet+'</span>'
+          + '</div>';
+      }
       cards += '<div class="st-card">'
         + '<div class="st-head"><span class="st-name">'+esc(r.sector)+'</span>'
         + '<span class="st-net" style="color:'+col+'">'+arrow+' '+net.toFixed(2)+'</span></div>'
+        + catRow
         + '<div class="st-bar"><span class="st-seg pos" style="width:'+posP+'%"></span>'
         + '<span class="st-seg neu" style="width:'+neuP+'%"></span>'
         + '<span class="st-seg neg" style="width:'+negP+'%"></span></div>'
@@ -5270,7 +5292,7 @@ function loadSectorNews(){
     var h = '<div class="st-range">'+rbtn+'</div>'
           + '<div class="st-summary">共 <b>'+rows.length+'</b> 个板块 · <b>'+total+'</b> 条快讯 · 近 '+wh+' 小时滚动 · 更新于 '+ts+'</div>'
           + '<div class="st-grid">'+cards+'</div>'
-          + '<div class="st-note">描述性参考 · ticker 反查 + 关键词聚合，<b>非预测</b>；净情绪 = 偏多占比 − 偏空占比；统计窗口为<b>近 '+wh+' 小时</b>滚动，非实时单条</div>';
+          + '<div class="st-note">描述性参考 · ticker 反查 + 关键词聚合，<b>非预测</b>；净情绪 = 偏多占比 − 偏空占比；统计窗口为<b>近 '+wh+' 小时</b>滚动，非实时单条。<b>催化剂净信号</b> = 命中的利好词数 − 利空词数（如「OPEC减产/霍尔木兹」→能源利好、「集采/降价」→医药利空）。</div>';
     el.innerHTML = h;
   }).catch(function(e){ die(el, '板块舆情加载失败：' + e.message); });
 }
