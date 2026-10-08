@@ -22,12 +22,15 @@ go-stock 原实现抓财联社 HTML 的前提（服务端渲染）已不存在�
 """
 from __future__ import annotations
 
+import atexit
 import hashlib
 import json
+import os
 import re
 import threading
 import time
 from collections import deque
+from datetime import datetime
 from typing import Any, Dict, List
 
 import requests
@@ -38,7 +41,7 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 #: 缓存秒数。快讯 30s 足够新鲜，且两个免费源都别高频薅
 TTL = 30
 
-_lock = threading.Lock()
+_lock = threading.RLock()
 _cache: Dict[str, Any] = {"ts": 0.0, "items": [], "errors": {}, "sources": {}}
 
 #: 板块舆情用的滚动历史：保留最近 HISTORY_SECS 秒内被抓取到的快讯（去重）。
@@ -47,6 +50,20 @@ HISTORY_SECS = 24 * 3600
 HISTORY_MAX = 4000
 _history: "deque" = deque(maxlen=HISTORY_MAX)
 _hist_ids: set = set()
+
+#: 每轮刷新抓新浪前 N 页，接住滑出 page1 的实时漏抓（同花顺 page>1 返回重复且
+#: ctime 为假，固定 1 页，见 _depth 实测）。实测新浪翻页时间连续无缺口。
+SINA_PAGES_PER_CYCLE = 2
+#: 启动回填新浪历史页上限（翻到 24h 前或触顶即停），避免失控/被限流
+SINA_BACKFILL_PAGES_MAX = 50
+#: 缓冲落盘节流（秒）
+HISTORY_SAVE_MIN = 60
+#: markdown 持久化路径（data/ 已被 gitignore，不会进版本库）
+HISTORY_MD_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "news_cache.md")
+#: 落盘时间戳 / 回填是否已启动（模块级状态）
+_last_save: float = 0.0
+_backfill_started: bool = False
 
 
 def _ts_text(v, fmt="%m-%d %H:%M") -> str:
@@ -73,10 +90,14 @@ def _norm(sid: str, source: str, tm: str, content: str, red: bool = False,
             "fp": hashlib.md5(content[:120].encode()).hexdigest()[:16]}
 
 
-def fetch_sina(timeout: int = 8) -> List[Dict[str, Any]]:
-    """新浪 7x24 全球直播（zhibo_id=152）。JSONP 剥壳照抄 go-stock。"""
+def _fetch_sina_page(pg: int, timeout: int = 8):
+    """抓新浪 7x24 单页（zhibo_id=152）。返回 (items, min_create_ts)。
+
+    min_create_ts = 本页最旧条目的真实发布时刻（epoch 秒，用于回填停例），无则 None。
+    JSONP 剥壳照抄 go-stock。
+    """
     url = ("https://zhibo.sina.com.cn/api/zhibo/feed?callback=callback"
-           "&page=1&page_size=20&zhibo_id=152&tag_id=0&dire=f&dpc=1"
+           f"&page={pg}&page_size=20&zhibo_id=152&tag_id=0&dire=f&dpc=1"
            f"&pagesize=20&id=4161089&type=0&_={int(time.time() * 1000)}")
     r = requests.get(url, timeout=timeout,
                      headers={"Referer": "https://finance.sina.com.cn",
@@ -89,7 +110,7 @@ def fetch_sina(timeout: int = 8) -> List[Dict[str, Any]]:
         raise ValueError(f"JSONP 剥壳失败：{js[:80]!r}")
     d = json.loads(js[i:j + 1])
     raw = ((d.get("result") or {}).get("data") or {}).get("feed") or {}
-    out = []
+    out, min_ct = [], None
     for x in (raw.get("list") or []):
         # ext 是 JSON 字符串：含关联股票 stocks:[{market,symbol,key}] 与 docurl。
         # ponytail: 关联股票先只做展示与 A 股跳转，不做行情联动
@@ -103,9 +124,31 @@ def fetch_sina(timeout: int = 8) -> List[Dict[str, Any]]:
             pass
         # create_time 形如 '2026-09-26 20:39:05'，取 '09-26 20:39'
         ct = str(x.get("create_time") or "")
+        if ct:
+            try:
+                cte = datetime.strptime(ct, "%Y-%m-%d %H:%M:%S").timestamp()
+                min_ct = cte if min_ct is None else min(min_ct, cte)
+            except Exception:
+                pass
         out.append(_norm(x.get("id"), "新浪7x24", ct[5:16],
                          x.get("rich_text") or "", red=False,
                          url=docurl, stocks=stocks))
+    return out, min_ct
+
+
+def fetch_sina(timeout: int = 8, pages: int = 1) -> List[Dict[str, Any]]:
+    """新浪 7x24 全球直播（zhibo_id=152）。pages>1 翻取前 N 页减少实时漏抓。"""
+    out = []
+    for pg in range(1, max(1, pages) + 1):
+        try:
+            items, _ = _fetch_sina_page(pg, timeout)
+        except Exception as e:
+            if pg == 1:
+                raise  # 第一页失败才向上抛（保持原语义：整源不可用）
+            break       # 后续页失败则停止翻页
+        if not items:
+            break
+        out.extend(items)
     return out
 
 
@@ -147,7 +190,8 @@ def get_feed(force: bool = False) -> Dict[str, Any]:
             return {**_cache, "cached": True}
 
         items, errors, sources = [], {}, {}
-        for name, fn in (("新浪7x24", fetch_sina), ("同花顺", fetch_ths)):
+        for name, fn in (("新浪7x24", lambda: fetch_sina(pages=SINA_PAGES_PER_CYCLE)),
+                         ("同花顺", fetch_ths)):
             try:
                 got = fn()
                 sources[name] = len(got)
@@ -169,26 +213,165 @@ def get_feed(force: bool = False) -> Dict[str, Any]:
         _cache.update({"ts": time.time(), "items": merged,
                        "errors": errors, "sources": sources})
         _accumulate_history(merged, time.time())
+        # 节流落盘：最多每 HISTORY_SAVE_MIN 秒写一次（另有后台周期线程兜底）
+        if time.time() - _last_save > HISTORY_SAVE_MIN:
+            _save_history_md()
         return {**_cache, "cached": False}
 
 
 def _accumulate_history(merged: List[Dict[str, Any]], now: float) -> None:
-    """把本轮去重后的快讯并入滚动历史（按 id 去重，超龄/超限出队）。"""
+    """把本轮去重后的快讯并入滚动历史（按 id 去重，超龄/超限出队）。
+
+    后台回填线程也会调用，故用 RLock 保护（get_feed 外层已持锁，RLock 可重入）。
+    """
     global _hist_ids
-    for x in merged:
-        iid = x["id"]
-        if iid in _hist_ids:
-            continue
-        _hist_ids.add(iid)
-        _history.append(x)
-    # 队首惰性裁剪：抓取时刻超过 HISTORY_SECS 的出队
-    while _history and now - _history[0].get("epoch", now) > HISTORY_SECS:
-        old = _history.popleft()
-        _hist_ids.discard(old["id"])
-    # ponytail: deque 因 maxlen 溢出会静默丢弃最旧项，但 _hist_ids 不自动收缩；
-    # 周期性用 deque 重建集合，避免内存随运行时间无限增长
-    if len(_hist_ids) - len(_history) > 200:
-        _hist_ids = {x["id"] for x in _history}
+    with _lock:
+        for x in merged:
+            iid = x["id"]
+            if iid in _hist_ids:
+                continue
+            _hist_ids.add(iid)
+            _history.append(x)
+        # 队首惰性裁剪：抓取时刻超过 HISTORY_SECS 的出队
+        while _history and now - _history[0].get("epoch", now) > HISTORY_SECS:
+            old = _history.popleft()
+            _hist_ids.discard(old["id"])
+        # ponytail: deque 因 maxlen 溢出会静默丢弃最旧项，但 _hist_ids 不自动收缩；
+        # 周期性用 deque 重建集合，避免内存随运行时间无限增长
+        if len(_hist_ids) - len(_history) > 200:
+            _hist_ids = {x["id"] for x in _history}
+
+
+def _sanitize_md(s: Any) -> str:
+    """落盘前清洗：去掉换行与管道符（避免破坏 markdown 表格分隔）。"""
+    return str(s or "").replace("\r", " ").replace("\n", " ").replace("|", "／").strip()
+
+
+def _save_history_md() -> None:
+    """把滚动缓冲落盘为 markdown（人类可读 + 可重载）。原子替换防半写。"""
+    global _last_save
+    try:
+        with _lock:
+            items = list(_history)
+        lines = ["# 快讯缓存（滚动历史 · 24h）", "",
+                 "> 自动维护，请勿手动编辑。最近保存：" +
+                 _ts_text(int(time.time()), "%Y-%m-%d %H:%M:%S"), ""]
+        for x in items:
+            sent = x.get("sentiment") or {}
+            stocks = ";".join(
+                f"{s.get('symbol', '')}:{s.get('name', '')}"
+                for s in (x.get("stocks") or []))
+            lines.append("- %s | %s | %s | %s | %s | %s | %s | %s | %s" % (
+                _sanitize_md(x.get("time")), x.get("id"), x.get("source"),
+                sent.get("tone", "neutral"), sent.get("score", 0.0),
+                int(x.get("epoch", 0)), stocks, _sanitize_md(x.get("url", "")),
+                _sanitize_md(x.get("content"))))
+        os.makedirs(os.path.dirname(HISTORY_MD_FILE), exist_ok=True)
+        tmp = HISTORY_MD_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        os.replace(tmp, HISTORY_MD_FILE)
+        _last_save = time.time()
+    except Exception as e:
+        print(f"[history-md] 保存失败（可忽略）：{e}")
+
+
+def _load_history_md() -> int:
+    """从 markdown 重载滚动缓冲，返回载入条数（重启跨会话保留）。"""
+    global _last_save
+    if not os.path.exists(HISTORY_MD_FILE):
+        return 0
+    loaded = []
+    try:
+        with open(HISTORY_MD_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.rstrip("\n")
+                if not line.startswith("- "):
+                    continue
+                parts = line[2:].split(" | ")
+                if len(parts) < 9:
+                    continue
+                time_t, iid, source, tone, score, epoch, stocks, url, content = parts[:9]
+                try:
+                    epoch_v = int(epoch)
+                except Exception:
+                    epoch_v = int(time.time())
+                stock_list = [
+                    {"symbol": a, "name": b}
+                    for a, b in (p.split(":", 1) for p in stocks.split(";") if p and ":" in p)
+                ]
+                loaded.append({
+                    "id": iid, "source": source, "time": time_t, "content": content,
+                    "red": False, "url": url, "stocks": stock_list, "epoch": epoch_v,
+                    "fp": hashlib.md5(content[:120].encode()).hexdigest()[:16],
+                    "sentiment": {"tone": tone, "tone_text": tone, "score": float(score)},
+                })
+    except Exception as e:
+        print(f"[history-md] 载入失败（忽略，从头积累）：{e}")
+        return 0
+    with _lock:
+        _history.clear()
+        _hist_ids.clear()
+        cutoff = time.time() - HISTORY_SECS
+        for x in loaded:
+            if x["epoch"] < cutoff:
+                continue
+            _hist_ids.add(x["id"])
+            _history.append(x)
+        _last_save = time.time()
+    return len(_history)
+
+
+def _backfill_history() -> None:
+    """启动回填：翻取新浪历史页，把滚动缓冲种子到近 24h（首次运行/无 md 时）。
+
+    翻到本页最旧条目已早于 HISTORY_SECS 前，或触 SINA_BACKFILL_PAGES_MAX 上限即停；
+    每页限速 0.25s，避免触发源反爬。后台线程执行，不阻塞启动。
+    """
+    now = time.time()
+    cutoff = now - HISTORY_SECS
+    fetched = 0
+    for pg in range(1, SINA_BACKFILL_PAGES_MAX + 1):
+        try:
+            items, min_ct = _fetch_sina_page(pg)
+        except Exception as e:
+            print(f"[backfill] 第 {pg} 页失败，停止：{type(e).__name__}: {str(e)[:60]}")
+            break
+        if not items:
+            break
+        _accumulate_history(items, now)
+        fetched += len(items)
+        if min_ct and min_ct < cutoff:
+            break
+        time.sleep(0.25)
+    if fetched:
+        _save_history_md()
+    print(f"[backfill] 启动回填完成：约 {fetched} 条（目标近 24h）")
+
+
+def _periodic_save() -> None:
+    """后台周期落盘，兜底进程崩溃/未正常退出时的丢失。"""
+    while True:
+        time.sleep(HISTORY_SAVE_MIN)
+        _save_history_md()
+
+
+def ensure_history_loaded() -> None:
+    """启动时入口：先从 md 重载（保留上次会话），否则后台回填种子 24h；
+    并拉起周期落盘线程。"""
+    global _backfill_started
+    n = _load_history_md()
+    if n:
+        print(f"[history] 从 {os.path.basename(HISTORY_MD_FILE)} 重载 {n} 条快讯（跨重启保留）")
+    else:
+        print("[history] 无本地缓存，启动后台回填近 24h …")
+        if not _backfill_started:
+            _backfill_started = True
+            threading.Thread(target=_backfill_history, daemon=True).start()
+    threading.Thread(target=_periodic_save, daemon=True).start()
+
+
+atexit.register(_save_history_md)
 
 
 def get_sector_window(window_sec: int = 3 * 3600) -> List[Dict[str, Any]]:

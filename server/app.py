@@ -206,6 +206,12 @@ def startup():
     except Exception as e:
         print(f"[seed] 默认管理员初始化失败（可忽略）：{e}")
 
+    # 快讯滚动缓冲：重启从 md 重载（保留上次会话），否则后台回填近 24h
+    try:
+        nf.ensure_history_loaded()
+    except Exception as e:
+        print(f"[history] 缓冲预热失败（将从实时流重新积累）：{e}")
+
     # 日线落库每日调度（开关默认关，由 config 控制；开启后无需重启）
     try:
         import scheduler as _sch
