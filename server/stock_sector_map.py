@@ -56,6 +56,8 @@ _SEED: List[Tuple[str, str, str]] = [
     ("600436", "片仔癀", "医药"),
     ("000538", "云南白药", "医药"),
     ("300759", "康龙化成", "医药"),
+    ("xort", "XORTX Therapeutics", "医药"),  # 纳斯达克 XORT，稀有病/痛风(XORLO)药物
+    ("", "XORTX", "医药"),
     # ── 消费（白酒 / 食饮 / 家电 / 免税）──
     ("600519", "贵州茅台", "消费"),
     ("000858", "五粮液", "消费"),
@@ -291,6 +293,8 @@ def selfcheck() -> int:
         ("OpenAI→科技AI", lookup(name="OpenAI") == "科技AI"),
         ("Codex→科技AI", lookup(name="Codex") == "科技AI"),
         ("Green AI Cloud→科技AI", lookup(name="Green AI Cloud") == "科技AI"),
+        ("XORTX→医药", lookup(name="XORTX") == "医药"),
+        ("XORTX Therapeutics→医药", lookup(name="XORTX Therapeutics") == "医药"),
     ]
     fails = 0
     for label, ok in steps:
