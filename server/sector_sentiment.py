@@ -98,7 +98,14 @@ SECTOR_BULLISH: Dict[str, List[str]] = {
     "通信": ["算力", "光模块", "光通信", "CPO", "NPO", "5G-A", "6G", "卫星通信",
             "资本开支", "订单", "数据中心", "AI基础设施", "提速", "放量"],
     "医药": ["获批", "FDA批准", "创新药", "医保", "商保", "集采豁免", "BD出海",
-            "临床", "定价新政", "出海", "商业化", "里程碑", "突破"],
+            "临床", "定价新政", "出海", "商业化", "里程碑", "突破",
+            # 疫情方向：爆发/扩散/失控 → 医药需求上升 = 利好（与词典直觉相反，
+            # 词典会把"爆发/失控"判负面，故必须靠板块词表显式纠正）
+            "疫情爆发", "疫情扩散", "疫情失控", "疫情蔓延", "疫情反弹", "疫情加重",
+            "疫情严峻", "疫情升级", "病毒变异", "传染病爆发", "突发疫情",
+            "病例激增", "感染人数上升", "新增病例增加", "确诊病例增加",
+            "不明原因肺炎", "人传人", "传播风险", "公共卫生事件", "防疫升级",
+            "疫情防控升级", "检测需求", "检测试剂", "疫苗研发", "抗病毒药物"],
     "新能源": ["装机", "中标", "订单", "出口", "渗透率", "涨价", "扩容", "政策",
               "投产", "放量"],
     "半导体": ["国产替代", "涨价", "订单", "扩产", "突破", "算力", "景气", "出货",
@@ -125,7 +132,12 @@ SECTOR_BEARISH: Dict[str, List[str]] = {
     "通信": ["FCC限制", "禁令", "降价", "贸易限制", "制裁", "限制", "出口管制",
             "价格回落", "需求不及预期", "竞争加剧", "砍单"],
     "医药": ["集采", "降价", "砍价", "临床失败", "不及预期", "反腐", "内卷",
-            "专利悬崖", "调查", "违约"],
+            "专利悬崖", "调查", "违约",
+            # 疫情方向：得到控制/缓解 → 医药需求回落 = 利空（同样与直觉相反）
+            "疫情得到控制", "疫情已控制", "疫情可控", "疫情缓解", "疫情消退",
+            "疫情好转", "疫情趋缓", "疫情结束", "疫情受控", "疫情平稳",
+            "病例下降", "新增病例减少", "感染人数下降", "解除防控", "防控降级",
+            "应急响应终止", "风险等级下调", "疫情基本结束"],
     "新能源": ["价格战", "内卷", "降价", "产能过剩", "补贴退坡", "减值", "砍单"],
     "半导体": ["制裁", "出口管制", "降价", "砍单", "库存", "需求疲软", "周期下行",
               "限制"],
@@ -169,19 +181,30 @@ def _match_terms(content: str, terms: List[str]) -> List[str]:
     return hit
 
 
-def detect_catalysts(content: str, sectors: List[str] = None) -> Dict[str, List[str]]:
+def detect_catalysts(content: str, sectors: List[str] = None) -> Dict[str, Any]:
     """解析一条快讯命中的利空/利好催化剂词。
 
-    返回 {"bull": [...], "bear": [...]}：全局词 + 命中板块各自的板块级词合并。
-    用于「解析每个板块的利空利好词语」——既给出词表，也给出实时命中。
+    返回 {"bull","bear","sec_bull","sec_bear","sec_net"}：
+      · bull/bear = 全局词 + 板块词合并（展示用）
+      · sec_bull/sec_bear = 仅板块专属词；sec_net = 板块专属净信号，
+        用于修正词典情绪——板块词的方向由业务定义，可能与词典直觉相反
+        （如「疫情爆发」词典判负面、但对医药是利好；「疫情得到控制」反之）。
+        全局词与词典同向，不参与修正，否则会把方向搞乱。
     """
     sectors = sectors or []
     bull = _match_terms(content, GLOBAL_BULLISH)
     bear = _match_terms(content, GLOBAL_BEARISH)
+    sec_bull, sec_bear = [], []
     for s in sectors:
-        bull += _match_terms(content, SECTOR_BULLISH.get(s, []))
-        bear += _match_terms(content, SECTOR_BEARISH.get(s, []))
-    return {"bull": bull, "bear": bear}
+        b = _match_terms(content, SECTOR_BULLISH.get(s, []))
+        d = _match_terms(content, SECTOR_BEARISH.get(s, []))
+        sec_bull += b
+        sec_bear += d
+        bull += b
+        bear += d
+    return {"bull": bull, "bear": bear,
+            "sec_bull": sec_bull, "sec_bear": sec_bear,
+            "sec_net": len(sec_bull) - len(sec_bear)}
 
 
 def map_sectors(content: str) -> List[str]:
@@ -232,20 +255,31 @@ def aggregate(items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
             continue
         cats = detect_catalysts(content, secs)
         bull_n, bear_n = len(cats["bull"]), len(cats["bear"])
+        sec_net = cats["sec_net"]
         for s in secs:
             a = agg[s]
             a["n"] += 1
             a["score_sum"] += score
             a["bull"] += bull_n
             a["bear"] += bear_n
-            if tone == "pos":
+            # ponytail: 板块专属词方向由业务定义，可能与词典直觉相反
+            # （「疫情爆发」→医药利好，词典却判负面）。命中板块词时以板块词
+            # 方向为准修正本条对该板块的贡献，避免舆情读反。
+            eff = tone
+            if sec_net > 0:
+                eff = "pos"
+            elif sec_net < 0:
+                eff = "neg"
+            if eff == "pos":
                 a["pos"] += 1
-            elif tone == "neg":
+            elif eff == "neg":
                 a["neg"] += 1
             else:
                 a["neu"] += 1
+            # 被板块词修正过方向的，样本加 * 标记（便于回看"为什么读反了"）
+            flag = "*" if (sec_net and eff != tone) else ""
             if len(a["samples"]) < 3:
-                a["samples"].append(f"[{tone}] {content[:56]}")
+                a["samples"].append(f"[{eff}{flag}] {content[:56]}")
             # 催化剂样本：只保留「有利好或利空命中」且样本未满的，便于回看触发词
             if (bull_n or bear_n) and len(a["catalyst_samples"]) < 3:
                 tag = "↑" + "/".join(cats["bull"]) if cats["bull"] else ""
@@ -325,6 +359,21 @@ def selfcheck() -> int:
     ok("通信 催化剂：限制=利空", "限制" in c4["bear"])
     c5 = detect_catalysts("玉米因厄尔尼诺减产，粮价上行", ["农业"])
     ok("农业 催化剂：减产/上行=利好", "减产" in c5["bull"] and "上行" in c5["bull"])
+
+    # 疫情方向与词典直觉相反：爆发/扩散/失控→医药利好；得到控制→医药利空
+    c6 = detect_catalysts("某地疫情爆发，已出现失控迹象", ["医药"])
+    ok("医药 疫情爆发→利好", c6["sec_net"] > 0 and "疫情爆发" in c6["sec_bull"])
+    c7 = detect_catalysts("疫情扩散，感染人数持续上升", ["医药"])
+    ok("医药 疫情扩散→利好", c7["sec_net"] > 0)
+    c8 = detect_catalysts("疫情已得到控制，新增病例下降", ["医药"])
+    ok("医药 疫情受控→利空", c8["sec_net"] < 0 and "病例下降" in c8["sec_bear"])
+    c9 = detect_catalysts("疫情可控，应急响应终止", ["医药"])
+    ok("医药 疫情可控→利空", c9["sec_net"] < 0)
+    # 板块词方向应覆盖词典情绪（词典会把"爆发/失控"判正面，这里须读成利好/或至少不被反向）
+    _fake = [{"content": "疫情扩散，感染人数持续上升",
+              "sentiment": {"tone": "neg", "score": -2.0}, "stocks": []}]
+    ok("板块词修正词典情绪：疫情扩散(词典neg)→计为偏多",
+       aggregate(_fake)["医药"]["pos"] == 1)
 
     # 3) aggregate 产出催化剂列
     fake = [
