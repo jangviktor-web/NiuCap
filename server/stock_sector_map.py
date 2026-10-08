@@ -151,6 +151,9 @@ _SEED: List[Tuple[str, str, str]] = [
     ("688041", "海光信息", "科技AI"),
     ("orcl", "甲骨文", "科技AI"),  # Oracle：全球科技风向标，外盘快讯常客
     ("", "Anthropic", "科技AI"),  # Claude 大模型厂商，AI 风向标（私有未上市）
+    ("", "OpenAI", "科技AI"),  # ChatGPT 厂商，AI 风向标（私有未上市）
+    ("", "Codex", "科技AI"),  # OpenAI 编程模型/产品
+    ("", "Green AI Cloud", "科技AI"),  # 绿色 AI 云服务商
     # ── 通信（卫星互联网 / 设备 / 运营商）──
     ("", "SpaceX", "通信"),  # 火箭/星链，卫星互联网视角归通信（私有未上市，ticker 留空）
     ("", "Starlink", "通信"),
@@ -285,6 +288,9 @@ def selfcheck() -> int:
         ("AT&T→通信", lookup(ticker="t") == "通信"),
         ("Verizon→通信", lookup(ticker="vz") == "通信"),
         ("Anthropic→科技AI", lookup(name="Anthropic") == "科技AI"),
+        ("OpenAI→科技AI", lookup(name="OpenAI") == "科技AI"),
+        ("Codex→科技AI", lookup(name="Codex") == "科技AI"),
+        ("Green AI Cloud→科技AI", lookup(name="Green AI Cloud") == "科技AI"),
     ]
     fails = 0
     for label, ok in steps:

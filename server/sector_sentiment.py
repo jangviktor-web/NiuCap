@@ -55,7 +55,7 @@ SECTOR_KEYWORDS: Dict[str, List[str]] = {
             "steel", "cement", "cement"],
     "科技AI": ["人工智能", "AI", "算力", "机器人", "大模型", "数据中心", "GPU",
               "artificial intelligence", "robot", "gpu", "datacenter",
-              "compute", "cloud", "software"],
+              "compute", "cloud", "software", "openai", "codex", "green ai cloud"],
     "农业": ["农业", "猪肉", "粮食", "种业", "养殖",
             "agriculture", "grain", "pork", "farm"],
     "中概港股": ["港股", "中概", "恒生", "南向", "互联互通",
