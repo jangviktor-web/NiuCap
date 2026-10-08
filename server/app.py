@@ -2425,7 +2425,9 @@ def api_newsfeed_sectors(hours: int = Query(3, ge=1, le=24), force: int = Query(
     f = nf.get_feed(force=bool(force))          # 触发抓取，让新快讯进入滚动历史
     items = nf.get_sector_window(hours * 3600)
     rows = _ss.heat_table(_ss.aggregate(items))
-    return {"rows": rows, "sources": f["sources"], "errors": f["errors"],
+    return {"rows": rows,
+            "catalyst_lexicon": _ss.catalyst_lexicon(),  # 各板块利空利好词表（解析报告）
+            "sources": f["sources"], "errors": f["errors"],
             "ts": f["ts"], "window_hours": hours, "cached": f.get("cached", False)}
 
 
