@@ -275,6 +275,41 @@ def sectors_for_stocks(stocks: Optional[List[Any]]) -> List[str]:
     return out
 
 
+def _jump_code(t: str) -> str:
+    """把种子 ticker 归一成前端可跳转的代码。
+
+    · 6 位数字 → A 股（openStock/normCode 会补 sh/sz/bj 前缀）
+    · 4~5 位数字（如 00700）→ 港股，补 hk 前缀
+    · 外盘字母代码（axp/orcl/.sox 等）→ 非标准，返回空，前端仅展示不可跳转
+    """
+    t = (t or "").strip().lower()
+    if re.fullmatch(r"\d{6}", t):
+        return t
+    if re.fullmatch(r"\d{4,5}", t):
+        return "hk" + t
+    return ""
+
+
+def sector_stocks(sector: str) -> List[Dict[str, str]]:
+    """板块 → 成分股列表（来自种子映射 _SEED）。
+
+    返回 [{"code", "name", "jump"}]，按 _SEED 顺序去重；jump 为空串表示该成分股仅名称
+    （未上市/外盘别名，如 Anthropic、SpaceX），前端据此决定可否点击跳转个股。
+    """
+    out: List[Dict[str, str]] = []
+    seen: set = set()
+    for t, n, s in _SEED:
+        if s != sector:
+            continue
+        key = (t or "", n or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"code": (t or ""), "name": (n or ""),
+                    "jump": _jump_code(t)})
+    return out
+
+
 def selfcheck() -> int:
     """离线自检（不碰网络/不碰文件）。返回失败条数。"""
     steps = [
@@ -307,6 +342,15 @@ def selfcheck() -> int:
         ("Green AI Cloud→科技AI", lookup(name="Green AI Cloud") == "科技AI"),
         ("XORTX→医药", lookup(name="XORTX") == "医药"),
         ("XORTX Therapeutics→医药", lookup(name="XORTX Therapeutics") == "医药"),
+        # sector_stocks 反查成分股（供板块舆情点击跳转）
+        ("新能源首只=隆基绿能601012", sector_stocks("新能源")[0]["code"] == "601012"),
+        ("中概港股含腾讯(港股jump=hk00700)",
+         any(s["name"] == "腾讯控股" and s["jump"] == "hk00700"
+             for s in sector_stocks("中概港股"))),
+        ("科技AI含Anthropic(未上市不可跳)",
+         any(s["name"] == "Anthropic" and s["jump"] == ""
+             for s in sector_stocks("科技AI"))),
+        ("未知板块→空列表", sector_stocks("不存在板块") == []),
     ]
     fails = 0
     for label, ok in steps:

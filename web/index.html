@@ -923,6 +923,38 @@ td .starbtn{font-size:16px}
   transition:all .12s;font-family:inherit}
 .st-rbtn:hover{border-color:var(--tx3);color:var(--tx)}
 .st-rbtn.active{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+/* 板块名可点击 → 跳成分股 */
+.st-name{cursor:pointer;transition:color .12s}
+.st-name:hover{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+.st-jump{font-style:normal;font-size:11px;color:var(--accent);opacity:.7;font-weight:700}
+.st-name:hover .st-jump{opacity:1}
+
+/* ============ 板块成分股弹窗 ============ */
+.modal{position:fixed;inset:0;z-index:1000;display:none;align-items:center;justify-content:center}
+.modal.open{display:flex}
+.modal-mask{position:absolute;inset:0;background:rgba(15,23,42,.46);backdrop-filter:blur(1px)}
+.modal-panel{position:relative;z-index:1;width:min(440px,92vw);max-height:78vh;display:flex;
+  flex-direction:column;background:var(--card);border:1px solid var(--line);border-radius:14px;
+  box-shadow:0 18px 50px rgba(15,23,42,.28);overflow:hidden;animation:modalIn .14s ease-out}
+@keyframes modalIn{from{transform:translateY(8px) scale(.98);opacity:0}to{transform:none;opacity:1}}
+.modal-head{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:13px 16px;border-bottom:1px solid var(--line)}
+.modal-title{font-size:15px;font-weight:700;color:var(--tx)}
+.modal-close{flex:none;width:28px;height:28px;border:1px solid var(--line);background:var(--card);
+  border-radius:8px;color:var(--tx2);cursor:pointer;font-size:14px;line-height:1}
+.modal-close:hover{color:var(--tx);border-color:var(--tx3)}
+.modal-body{overflow:auto;padding:8px 8px 12px}
+.ssm-count{font-size:11.5px;color:var(--tx3);padding:4px 8px 10px}
+.ssm-row{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:9px;
+  font-size:13.5px;cursor:default}
+.ssm-row.clickable{cursor:pointer}
+.ssm-row.clickable:hover{background:var(--line2)}
+.ssm-code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--tx2);
+  min-width:62px;flex:none}
+.ssm-name{flex:1;min-width:0;color:var(--tx);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ssm-go{flex:none;font-size:13px;color:var(--accent);font-weight:700}
+.ssm-go.muted{font-size:11px;color:var(--tx3);font-weight:500}
+@media(max-width:680px){.modal-panel{width:94vw;max-height:82vh}}
 </style>
 </head>
 <body>
@@ -984,6 +1016,18 @@ td .starbtn{font-size:16px}
   <div class="nd-panel" role="dialog" aria-label="模块菜单">
     <div class="nd-head"><span>选择模块</span><button class="nd-close" id="navClose" aria-label="关闭">✕</button></div>
     <div class="nd-list" id="navList"></div>
+  </div>
+</div>
+
+<!-- ============ 板块成分股弹窗 ============ -->
+<div class="modal" id="sectorStocksModal" aria-hidden="true">
+  <div class="modal-mask" onclick="closeSectorStocks()"></div>
+  <div class="modal-panel" role="dialog" aria-label="板块成分股">
+    <div class="modal-head">
+      <span class="modal-title ssm-title">成分股</span>
+      <button class="modal-close" onclick="closeSectorStocks()" aria-label="关闭">✕</button>
+    </div>
+    <div class="modal-body ssm-list"></div>
   </div>
 </div>
 
@@ -5281,7 +5325,9 @@ function loadSectorNews(){
           + '</div>';
       }
       cards += '<div class="st-card">'
-        + '<div class="st-head"><span class="st-name">'+esc(r.sector)+'</span>'
+        + '<div class="st-head"><span class="st-name" data-sec="'+esc(r.sector)
+        + '" onclick="openSectorStocks(this.dataset.sec)" title="点击查看成分股">'
+        + esc(r.sector) + ' <i class="st-jump">↗</i></span>'
         + '<span class="st-net" style="color:'+col+'">'+arrow+' '+net.toFixed(2)+'</span></div>'
         + catRow
         + '<div class="st-bar"><span class="st-seg pos" style="width:'+posP+'%"></span>'
@@ -5307,6 +5353,49 @@ function loadSectorNews(){
     el.innerHTML = h;
   }).catch(function(e){ die(el, '板块舆情加载失败：' + e.message); });
 }
+
+/* 板块舆情：点击板块名 → 弹窗列出该板块成分股；可跳转成分股点击 openStock。
+   数据来自 /api/sector/stocks（种子映射，非全市场）。 */
+function openSectorStocks(sector){
+  var modal = $('sectorStocksModal'); if(!modal) return;
+  modal.querySelector('.ssm-title').textContent = sector + ' · 成分股';
+  var body = modal.querySelector('.ssm-list');
+  body.innerHTML = '<div class="load"><span class="spin"></span>加载成分股…</div>';
+  modal.classList.add('open');
+  modal.setAttribute('aria-hidden', 'false');
+  document.body.style.overflow = 'hidden';
+  api('/api/sector/stocks?sector=' + encodeURIComponent(sector)).then(function(d){
+    var arr = d.stocks || [];
+    if(!arr.length){ body.innerHTML = '<div class="die">该板块暂无种子成分股</div>'; return; }
+    var rows = arr.map(function(s){
+      var jump = s.jump || '';
+      var cls = 'ssm-row' + (jump ? ' clickable' : '');
+      var go = jump
+        ? '<span class="ssm-go">↗</span>'
+        : '<span class="ssm-go muted">' + (s.code ? '外盘' : '未上市') + '</span>';
+      var attr = jump ? (' onclick="openStock(\'' + jump + '\');closeSectorStocks();"') : '';
+      return '<div class="' + cls + '"' + attr + '>'
+        + '<span class="ssm-code">' + esc(s.code || '—') + '</span>'
+        + '<span class="ssm-name">' + esc(s.name || '') + '</span>'
+        + go + '</div>';
+    }).join('');
+    body.innerHTML = '<div class="ssm-count">共 ' + arr.length + ' 只 · 种子成分股（非全市场，约120只主要标的）</div>' + rows;
+  }).catch(function(e){
+    body.innerHTML = '<div class="die">加载失败：' + esc(e.message) + '</div>';
+  });
+}
+function closeSectorStocks(){
+  var modal = $('sectorStocksModal'); if(!modal) return;
+  modal.classList.remove('open');
+  modal.setAttribute('aria-hidden', 'true');
+  document.body.style.overflow = '';
+}
+// ESC 关闭弹窗
+document.addEventListener('keydown', function(e){
+  if(e.key === 'Escape' && $('sectorStocksModal') && $('sectorStocksModal').classList.contains('open')){
+    closeSectorStocks();
+  }
+});
 function scheduleNews(){
   // 30s 轻刷新：页签在前台且浏览器可见才真请求，否则空转（省配额）
   if(newsTimer) clearTimeout(newsTimer);

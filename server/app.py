@@ -2431,6 +2431,17 @@ def api_newsfeed_sectors(hours: int = Query(3, ge=1, le=24), force: int = Query(
             "ts": f["ts"], "window_hours": hours, "cached": f.get("cached", False)}
 
 
+@app.get("/api/sector/stocks")
+def api_sector_stocks(sector: str = Query(..., min_length=1, description="板块名，如 能源")):
+    """板块成分股列表（来自种子映射，非全市场）。
+
+    供板块舆情卡点击板块名后弹窗展示；每行含 code/name/jump，
+    jump 非空表示可点击跳转个股分析（openStock）。
+    """
+    import stock_sector_map as _ssm
+    return {"sector": sector, "stocks": _ssm.sector_stocks(sector)}
+
+
 @app.get("/api/market_phase")
 def api_market_phase():
     """市场情绪周期（6 阶段）与实时主线。"""
