@@ -929,13 +929,14 @@ td .starbtn{font-size:16px}
 
 <header>
   <div class="hd">
+    <!-- 手机端菜单按钮固定为顶栏第一个元素：任何屏宽/换行下始终在最左侧 -->
+    <button class="nav-toggle" id="navToggleM" aria-label="菜单" aria-expanded="false" style="display:none"><span class="bars">☰</span>菜单</button>
     <div class="logo"><span class="dot"></span>牛来选股面板 <small>A股量化选股与择时分析</small></div>
     <div class="searchbox">
       <span class="ico">🔍</span>
       <input id="q" type="text" placeholder="搜索股票代码或名称，如 600519 / 茅台" autocomplete="off">
       <div class="sug" id="sug"></div>
     </div>
-    <button class="nav-toggle" id="navToggleM" aria-label="菜单" aria-expanded="false" style="display:none"><span class="bars">☰</span>菜单</button>
     <span class="hbadge" id="hBadge" title="巡检告警" style="display:none">🚨 <b id="hBadgeN">0</b></span>
     <div class="uarea" id="uArea">
       <button class="ubtn" id="uLogin">登录 / 注册</button>
