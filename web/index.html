@@ -72,6 +72,8 @@ nav{background:var(--card);border-bottom:1px solid var(--line)}
   border:1px solid var(--line);border-radius:8px;padding:7px 11px;font-size:13px;font-weight:600;
   cursor:pointer;font-family:inherit;flex-shrink:0;line-height:1}
 .nav-toggle .bars{font-size:15px;line-height:1}
+/* 顶栏菜单按钮（#navToggleM）：仅手机端显示，紧邻「运行正常」徽章；桌面隐藏 */
+#navToggleM{display:none !important}
 
 /* 手机端抽屉（左侧滑出） */
 .navdrawer{position:fixed;inset:0;z-index:300;display:none}
@@ -250,8 +252,10 @@ tbody tr:hover{background:#f7f9fc}
   .hd{padding:10px 11px;gap:9px}
   .logo{font-size:15px} .logo small{display:none}
   .navinner{padding:0 11px}
-  /* 手机端：inline tab 行被 navright 挤压成约 5px 不可点 → 改用汉堡抽屉 */
-  .nav-toggle{display:inline-flex}
+  /* 手机端：inline tab 行被 navright 挤压成约 5px 不可点 → 改用汉堡抽屉；
+     汉堡上移到顶栏「运行正常」徽章旁（#navToggleM），导航条内原按钮让位 */
+  #navToggleM{display:inline-flex !important}
+  #navToggle{display:none}
   .tabs{display:none}
   .navright .reftip{display:none}
   .mktclock{max-width:148px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -932,6 +936,7 @@ td .starbtn{font-size:16px}
       <div class="sug" id="sug"></div>
     </div>
     <span class="hbadge" id="hBadge" title="巡检告警" style="display:none">🚨 <b id="hBadgeN">0</b></span>
+    <button class="nav-toggle" id="navToggleM" aria-label="菜单" aria-expanded="false" style="display:none"><span class="bars">☰</span>菜单</button>
     <div class="uarea" id="uArea">
       <button class="ubtn" id="uLogin">登录 / 注册</button>
     </div>  </div>
@@ -2222,9 +2227,11 @@ document.querySelectorAll('.tabs button').forEach(function(b){
 
 /* 手机端抽屉：复用现有 tab 列表生成大点击区清单（#mobile-nav） */
 function setupNavDrawer(){
-  var drawer = $('navDrawer'), list = $('navList'), toggle = $('navToggle'),
+  var drawer = $('navDrawer'), list = $('navList'),
       mask = $('navMask'), close = $('navClose');
-  if(!drawer || !list || !toggle) return;
+  // 双按钮：导航条内原汉堡（桌面）+ 顶栏「运行正常」旁汉堡（手机端）
+  var toggles = [$('navToggle'), $('navToggleM')].filter(Boolean);
+  if(!drawer || !list || !toggles.length) return;
   // 按功能分组渲染（浅灰小标题），跳过 display:none 的隐藏项（hot/moves/未登录 admin）。
   var NAV_GROUPS = [
     {label:'📊 看盘', items:['rank','theme','limitup','news']},
@@ -2247,17 +2254,20 @@ function setupNavDrawer(){
   list.querySelectorAll('.nd-item').forEach(function(el){
     el.onclick = function(){ switchTab(el.dataset.tab); closeNavDrawer(); };
   });
+  function setExpanded(v){
+    toggles.forEach(function(t){ t.setAttribute('aria-expanded', v ? 'true' : 'false'); });
+  }
   function openNavDrawer(){
     drawer.classList.add('open'); drawer.setAttribute('aria-hidden','false');
-    toggle.setAttribute('aria-expanded','true');
+    setExpanded(true);
     document.body.style.overflow = 'hidden';  // 锁定背景滚动，避免抽屉后穿透
   }
   function closeNavDrawer(){
     drawer.classList.remove('open'); drawer.setAttribute('aria-hidden','true');
-    toggle.setAttribute('aria-expanded','false');
+    setExpanded(false);
     document.body.style.overflow = '';  // 所有关闭路径统一还原
   }
-  toggle.onclick = openNavDrawer;
+  toggles.forEach(function(t){ t.onclick = openNavDrawer; });
   if(mask) mask.onclick = closeNavDrawer;
   if(close) close.onclick = closeNavDrawer;
   document.addEventListener('keydown', function(e){
