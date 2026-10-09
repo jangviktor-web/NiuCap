@@ -296,6 +296,16 @@ def map_sectors(content: str) -> List[str]:
                 if kw in text:
                     hit.append(sec)
                     break
+    # 举一反三：一揽子品类并列快讯（如「统计局流通领域重要生产资料」同时罗列
+    # 生猪/电解铜/螺纹钢/天然气等多个品类价格）会被关键词散归到多个板块，造成
+    # "猪肉新闻利好建材"式误读——螺纹钢只是被顺带列举，并非新闻主体。
+    # 命中 ≥3 板块视为汇总型，收敛到「标题/首句」命中的主品类，抑制后文并列
+    # 列举的板块噪声扩散（独立讲某品类的快讯命中数 <3，不受影响）。
+    if len(hit) >= 3:
+        head = re.split(r"[；。!！?？]", text, 1)[0]
+        head_secs = [s for s in hit if any(k in head for k in SECTOR_KEYWORDS[s])]
+        if head_secs:
+            return head_secs
     return hit
 
 
@@ -509,6 +519,20 @@ def selfcheck() -> int:
     ok("数据泄露不归医药", "医药" not in map_sectors("某大厂服务器数据泄露，用户信息外流"))
     ok("AI幻觉不归医药", "医药" not in map_sectors("AI幻觉导致客服答非所问"))
     ok("AI成瘾/防沉迷不归医药", "医药" not in map_sectors("用户对AI聊天成瘾，平台推出防沉迷"))
+
+    # 举一反三：一揽子品类并列快讯收敛（猪肉新闻不再利好建材）
+    # 统计局「流通领域重要生产资料」同时罗列生猪/电解铜/天然气/螺纹钢/液化石油气
+    basket = ("国家统计局：9月下旬生猪（外三元）为10.3元/千克，环比下降3.7%；"
+              "电解铜为111742.5元/吨，环比增长2.7%；液化天然气为6185.9元/吨，环比下降0.6%；"
+              "螺纹钢为3175.9元/吨，环比增长0.3%；复合肥为3599.7元/吨，环比下降0.3%；"
+              "液化石油气为7506.1元/吨，环比增长0.2%。")
+    basket_secs = map_sectors(basket)
+    ok("一揽子品类快讯 收敛到主品类(农业)", basket_secs == ["农业"])
+    ok("一揽子品类快讯 不再误归建材", "建材" not in basket_secs)
+    ok("一揽子品类快讯 不再误归有色/能源", "有色" not in basket_secs and "能源" not in basket_secs)
+    # 独立讲某品类的快讯：命中数<3，不受影响，正常归建材
+    ok("独立螺纹钢快讯 仍归建材", "建材" in map_sectors("螺纹钢主力合约涨2.1%，钢厂补库需求回暖"))
+
 
     # 3) aggregate 产出催化剂列
     fake = [
