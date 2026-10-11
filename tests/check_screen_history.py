@@ -76,14 +76,25 @@ def main():
     # ---- 2. 选股历史存档 CRUD（直接走 store，确定性） ----
     import store
     store.initialize()
-    before = len(store.list_screen_history())
+    # 注意：list_screen_history 默认 limit=200，而库里真实存量早已超过 200，
+    # 因此「before/after 计数 +1」的旧断言会被这个封顶永久击穿（before==after==200）。
+    # 改为按 id 回查：既不受封顶影响，也不受并发存档干扰。
+    before_ids = {h["id"] for h in store.list_screen_history(limit=100000)}
     hid = store.save_screen_history(
         "newbie", "单元测试·稳健", {"preset": "steady"},
         [{"code": "sh600519", "name": "贵州茅台", "price": 1258, "change_pct": 1.2},
          {"code": "sz000001", "name": "平安银行", "price": 11.3, "change_pct": -0.5}])
-    after = len(store.list_screen_history())
-    ok = rec("历史·存档新增", after == before + 1, f"before={before} after={after}")
+    rec1 = store.get_screen_history(hid)
+    ok = rec("历史·存档新增", rec1 is not None and hid not in before_ids,
+             f"hid={hid} 可回查={rec1 is not None}")
     ok_all &= ok
+    ok = rec("历史·存档内容完整",
+             rec1 is not None and rec1.get("module") == "newbie"
+             and len(rec1.get("items") or []) == 2,
+             f"module={(rec1 or {}).get('module')} "
+             f"items={len((rec1 or {}).get('items') or [])}")
+    ok_all &= ok
+    after = len(store.list_screen_history(limit=100000))
 
     st, j = req("GET", f"/api/screen/history/{hid}")
     ok = rec("历史·明细接口200", st == 200, f"st={st}")

@@ -70,6 +70,7 @@ import intent as itt
 import tdx as tdxc
 import newbie as nwb
 import grid as grd
+import screen_dsl as sdsl
 import market_phase as mp
 import alerts as alt
 import webhook
@@ -681,6 +682,58 @@ def api_market(
     }
 
 
+def _legacy_screen_conditions(
+    pe_min, pe_max, pb_min, pb_max, cap_min, cap_max,
+    chg_min, chg_max, turnover_min, turnover_max, amount_min,
+) -> list:
+    """把 /api/screener 的旧 ``*_min/_max`` 参数翻译成 screen_dsl 条件。
+
+    存在的唯一理由：**保持旧行为逐字节等价**。翻译的每一条都能在原实现里
+    找到对应的那段 ``if ... return False``，因此旧签名、旧 UI、旧存档记录
+    的行文方式都不用改；新能力（任意字段 × 任意算子）走另一条 filters 通道。
+
+    两个容易漏的非对称语义（已复现，改动前务必对照）：
+      · PE / PB：只要传了区间任一端，旧实现就先要求 ``值 > 0`` 再比区间，
+        所以这里**显式补一条 gt 0**；
+      · 市值 / 涨跌幅 / 换手 / 成交额：旧实现没有 >0 门槛，只比区间，
+        缺失值按 0 参与比较（上游 pool_rows 本来就用 0 表示"取不到"）。
+    """
+
+    def c(field, op, value):
+        return sdsl.compile_condition({"field": field, "op": op, "value": value})
+
+    out = []
+    # 估值：设了区间就先排除 0/负值（0 是上游的"缺失"编码，不是真便宜）
+    if pe_min is not None or pe_max is not None:
+        out.append(c("pe", "gt", 0))
+    if pe_min is not None:
+        out.append(c("pe", "gte", pe_min))
+    if pe_max is not None:
+        out.append(c("pe", "lte", pe_max))
+    if pb_min is not None or pb_max is not None:
+        out.append(c("pb", "gt", 0))
+    if pb_min is not None:
+        out.append(c("pb", "gte", pb_min))
+    if pb_max is not None:
+        out.append(c("pb", "lte", pb_max))
+    # 规模 / 行情 / 量能：无 >0 门槛，缺失按 0 参与
+    if cap_min is not None:
+        out.append(c("total_cap", "gte", cap_min))
+    if cap_max is not None:
+        out.append(c("total_cap", "lte", cap_max))
+    if chg_min is not None:
+        out.append(c("change_pct", "gte", chg_min))
+    if chg_max is not None:
+        out.append(c("change_pct", "lte", chg_max))
+    if turnover_min is not None:
+        out.append(c("turnover", "gte", turnover_min))
+    if turnover_max is not None:
+        out.append(c("turnover", "lte", turnover_max))
+    if amount_min is not None:
+        out.append(c("amount", "gte", amount_min))
+    return out
+
+
 @app.get("/api/screener")
 def api_screener(
     pe_min: Optional[float] = None, pe_max: Optional[float] = None,
@@ -695,50 +748,49 @@ def api_screener(
     sort: str = Query("change_pct"),
     order: str = Query("desc"),
     limit: int = Query(100, ge=1, le=500),
+    filters: str = Query(
+        "", description=("通用条件数组（JSON），与旧参数 AND 叠加。"
+                         '如 [{"field":"change_pct","op":"gt","value":3},'
+                         '{"field":"name","op":"match","value":"科技"}]；'
+                         "field 见 /api/screen/fields")),
 ):
-    """条件选股器"""
+    """条件选股器。
+
+    两套用法可以混着用（互相 AND）：
+      1. 旧的 ``pe_min`` 等 *_min/_max 参数 —— 翻译后走引擎，行为不变；
+      2. 新的 ``filters`` JSON —— 支持 17 个可筛字段 × 10 个算子，
+         不限于旧参数覆盖的那 6 个字段。
+
+    新用法示例：
+      ``/api/screener?filters=[{"field":"turnover","op":"between","value":[3,15]},``
+      ``{"field":"market","op":"in","value":["sz","sh"]}]``
+    """
     rows = MARKET.ensure()
 
+    # filters 是用户手写的 JSON：解析失败要给 400 并说清位置，
+    # 不能让 json.loads 的异常一路冒上去把整个端点打成 500。
+    try:
+        extra_conds = sdsl.parse_filters(filters)
+    except ValueError as e:
+        raise HTTPException(400, f"筛选条件有误：{e}")
+
+    conds = _legacy_screen_conditions(
+        pe_min, pe_max, pb_min, pb_max, cap_min, cap_max,
+        chg_min, chg_max, turnover_min, turnover_max, amount_min)
+    conds = conds + extra_conds
+    if market:
+        conds = conds + [sdsl.compile_condition(
+            {"field": "market", "op": "eq", "value": market})]
+
     def ok(r):
-        pe, pb = r.get("pe") or 0, r.get("pb") or 0
-        cap, chg = r.get("total_cap") or 0, r.get("change_pct") or 0
-        tov, amt = r.get("turnover") or 0, r.get("amount") or 0
-
-        if exclude_st and ("ST" in r["name"].upper() or "退" in r["name"]):
+        # ponytail: exclude_st/exclude_bj 是开关不是条件，硬拧成 DSL 条件属于
+        # 过度抽象，保持直写。
+        if exclude_st and ("ST" in str(r.get("name") or "").upper()
+                           or "退" in str(r.get("name") or "")):
             return False
-        if exclude_bj and r["code"].startswith("bj"):
+        if exclude_bj and str(r.get("code") or "").startswith("bj"):
             return False
-        if market and not r["code"].startswith(market):
-            return False
-
-        # PE 区间（PE<=0 视为无效，仅在未指定区间时保留）
-        if pe_min is not None or pe_max is not None:
-            if pe <= 0:
-                return False
-            if pe_min is not None and pe < pe_min:
-                return False
-            if pe_max is not None and pe > pe_max:
-                return False
-        if pb_min is not None and (pb <= 0 or pb < pb_min):
-            return False
-        if pb_max is not None and (pb <= 0 or pb > pb_max):
-            return False
-
-        if cap_min is not None and cap < cap_min:
-            return False
-        if cap_max is not None and cap > cap_max:
-            return False
-        if chg_min is not None and chg < chg_min:
-            return False
-        if chg_max is not None and chg > chg_max:
-            return False
-        if turnover_min is not None and tov < turnover_min:
-            return False
-        if turnover_max is not None and tov > turnover_max:
-            return False
-        if amount_min is not None and amt < amount_min:
-            return False
-        return True
+        return sdsl.match_row(r, conds)
 
     hits = [r for r in rows if ok(r)]
 
@@ -763,18 +815,47 @@ def api_screener(
         title_bits.append(market.upper())
     if exclude_st:
         title_bits.append("去ST")
+    if extra_conds:
+        title_bits.append(sdsl.describe(extra_conds))
+
     _save_screen_history(
         "screen", "条件·" + (" ".join(title_bits) if title_bits else "全部"),
         {"pe": [pe_min, pe_max], "pb": [pb_min, pb_max],
          "cap": [cap_min, cap_max], "chg": [chg_min, chg_max],
+         "turnover": [turnover_min, turnover_max], "amount_min": amount_min,
          "market": market, "exclude_st": exclude_st, "exclude_bj": exclude_bj,
-         "sort": sort, "order": order}, hits[:limit])
+         "sort": sort, "order": order,
+         # 新通道原样留存，便于从历史记录复现这次筛选
+         "filters": sdsl.describe(extra_conds, limit=16)}, hits[:limit])
     return {
         "items": hits[:limit],
         "total": len(hits),
         "universe": len(rows),
+        # 回显实际生效的条件，前端可据此渲染「当前筛选标签」；
+        # 也是排查「明明设了条件却没生效」的第一现场
+        "conditions": [{"field": c.field, "op": c.op, "desc": c.desc}
+                       for c in conds],
         "updated": (datetime.fromtimestamp(upd).strftime("%Y-%m-%d %H:%M:%S")
                     if upd else None),
+    }
+
+
+@app.get("/api/screen/fields")
+def api_screen_fields():
+    """列出 /api/screener 的 filters 可用字段与算子。
+
+    静态幂等数据，前端据此动态渲染筛选项 —— 加一个可筛字段只需在
+    ``screen_dsl.FIELDS`` 加一行，不用改 API 签名也不用改前端。
+    """
+    fields = [{"key": k, "label": f.label, "kind": f.kind, "unit": f.unit,
+               "cat": f.cat}
+              for k, f in sdsl.FIELDS.items()]
+    return {
+        "fields": fields,
+        "ops": sorted(sdsl.OPS),
+        "arity": sdsl.OP_ARITY,
+        # 前端据此决定 value 控件形态：1=单值，2=区间，-1=数组
+        "note": "value 形态由 arity 决定：1 单值 / 2 上下界数组 / -1 任意长度数组",
     }
 
 
