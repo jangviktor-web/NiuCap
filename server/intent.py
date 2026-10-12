@@ -28,6 +28,8 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional
 
+import screen_dsl  # Tier 5：用通用算子引擎校验生成的条件
+
 # ---------------------------------------------------------------- 词典
 
 _INDICATORS = [
@@ -120,6 +122,237 @@ def _extract_pct(text: str, keys: List[str]) -> Optional[float]:
         if m:
             return float(m.group(1)) / 100.0
     return None
+
+
+# ---------------------------------------------------------------- Tier 5: NL → 筛选条件 (Tier 1 DSL)
+#
+# 把自然语言映射成 server/screen_dsl 的 {field, op, value} 条件，可直接喂
+# /api/screener?filters=...。只覆盖 16 个快照字段（PE/PB/市值/涨跌幅/换手/
+# 成交额/价格/名称/代码/市场）；技术指标类（RSI/MACD/均线/上穿下穿…）没有
+# 对应快照字段，归入 unsupported，绝不伪装成可执行条件（那需要 Tier 3 多周期）。
+
+# 字段中文同义词 → screen_dsl.FIELDS 的 key
+_FIELD_SYN = [
+    ("pe", ["市盈率", "pe"]),
+    ("pb", ["市净率", "pb"]),
+    ("total_cap", ["总市值", "市值"]),
+    ("float_cap", ["流通市值"]),
+    ("price", ["最新价", "收盘价", "股价", "价格", "现价"]),
+    ("open", ["开盘价", "开盘"]),
+    ("high", ["最高价", "最高"]),
+    ("low", ["最低价", "最低"]),
+    ("prev_close", ["昨收价", "昨收", "昨收盘"]),
+    ("change_pct", ["涨跌幅", "涨幅", "跌幅", "涨跌"]),
+    ("turnover", ["换手率", "换手"]),
+    ("amount", ["成交额", "成交金额", "金额"]),
+    ("volume", ["成交量"]),
+    ("name", ["股票名称", "股票名", "名称", "名字", "个股"]),
+    ("code", ["代码", "代号"]),
+    ("market", ["沪市", "深市", "北交所", "创业板", "科创板"]),
+]
+
+# 市场关键词 → market 字段取值
+_MARKET_VAL = {
+    "沪市": "sh", "上海": "sh", "科创板": "sh",
+    "深市": "sz", "深圳": "sz", "创业板": "sz",
+    "北交所": "bj", "北京": "bj",
+}
+
+# 算子（按特异性从高到低匹配）；cross 类属 Tier 3，这里不接
+_OP_PATTERNS = [
+    ("not_between", ["不介于", "不在.*之间", "不在"]),
+    ("between", ["介于", "在.*之间", "从.*到"]),
+    ("gte", ["大于等于", "不小于", "不低于", "不少于", "至少"]),
+    ("lte", ["小于等于", "不大于", "不高于", "不超过", "至多", "最多"]),
+    ("gt", ["大于", "高于", "超过", "之上", "以上"]),
+    ("lt", ["小于", "低于", "之下", "不到", "以内", "以下"]),
+    ("ne", ["不等于", "不是", "非"]),
+    ("eq", ["等于", "刚好", "正好"]),
+    ("match", ["包含", "含", "带"]),
+    ("in", ["属于", "在.*中", "之一", "包括"]),
+]
+
+# 数值字段口语单位 → 字段原生单位 的换算系数
+_UNIT_MULT = {
+    "total_cap": {"亿": 1, "万": 0.0001},
+    "float_cap": {"亿": 1, "万": 0.0001},
+    "amount": {"亿": 10000, "万": 1},
+    "price": {"元": 1, "块": 1},
+    "open": {"元": 1, "块": 1},
+    "high": {"元": 1, "块": 1},
+    "low": {"元": 1, "块": 1},
+    "prev_close": {"元": 1, "块": 1},
+    "volume": {"万": 10000},
+}
+
+# 这些指标/形态没有快照字段，需 Tier 3 多周期
+_UNSUPPORTED_INDIC = ["rsi", "macd", "kdj", "boll", "布林", "均线", "ma", "ema",
+                      "cci", "atr", "dmi", "adx", "obv", "mfi", "wr", "bias",
+                      "金叉", "死叉", "上穿", "下穿", "突破"]
+
+
+def _norm_num(field: str, num: float, unit: str) -> float:
+    mult = _UNIT_MULT.get(field, {})
+    if unit and unit in mult:
+        return num * mult[unit]
+    return num
+
+
+def _detect_op(win: str):
+    """在窗口内检测算子，按特异性顺序。返回 op 字符串或 None。"""
+    for op, pats in _OP_PATTERNS:
+        for p in pats:
+            if re.search(p, win):
+                return op
+    return None
+
+
+def _extract_number(win: str):
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(亿|万|%|元|块|手)?", win)
+    if not m:
+        return None, ""
+    return float(m.group(1)), (m.group(2) or "")
+
+
+def _extract_range(win: str):
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:亿|万|%|元|块|手)?\s*(?:到|至|-|~|—)\s*(\d+(?:\.\d+)?)", win)
+    if not m:
+        return None
+    return [float(m.group(1)), float(m.group(2))]
+
+
+def _extract_list(win: str):
+    """取算子词之后的文本，按中英文逗号/顿号切分。"""
+    tail = re.sub(r"^.*?(?:属于|在|之一|包括|包含|含)", "", win)
+    return [p.strip() for p in re.split(r"[,，、/]", tail) if p.strip()]
+
+
+def parse_screener_conditions(text: str) -> Dict[str, Any]:
+    """自然语言 → Tier 1 筛选条件列表（可直接喂 /api/screener?filters=）。
+
+    返回 {conditions:[{field,op,value},...], unsupported:[...], error:None}。
+    只映射快照字段；技术指标类归入 unsupported。每条条件经引擎校验，
+    非法条直接丢弃，不阻断其他条件。
+    """
+    raw = str(text or "").strip()
+    if not raw:
+        return {"conditions": [], "unsupported": [],
+                "error": "请输入一句话，例如：市盈率小于20，换手率介于3%到15%，名称包含银行"}
+    low = raw.lower()
+
+    unsupported: List[str] = []
+    hit_indics = [k for k in _UNSUPPORTED_INDIC if k in low]
+    if hit_indics:
+        unsupported.append("技术指标类条件（" + "、".join(sorted(set(hit_indics))) +
+                           "）需 Tier 3 多周期版本，当前仅支持快照字段")
+
+    # 定位每个字段首次出现的位置
+    mentions = []
+    for field, syns in _FIELD_SYN:
+        for s in syns:
+            i = low.find(s.lower())
+            if i >= 0:
+                mentions.append((field, i))
+                break
+    if not mentions:
+        return {"conditions": [], "unsupported": unsupported, "error": None}
+
+    # 按位置排序，每个字段取 [自己, 下一个字段) 为窗口，避免跨字段串味
+    mentions.sort(key=lambda x: x[0] if False else x[1])
+    conditions: List[Dict[str, Any]] = []
+    for idx, (field, pos) in enumerate(mentions):
+        nxt = mentions[idx + 1][1] if idx + 1 < len(mentions) else len(low)
+        win = low[pos:nxt]
+
+        if field == "market":  # 关键词 → 取值，无数字
+            val = next((code for kw, code in _MARKET_VAL.items() if kw in raw), None)
+            if val:
+                conditions.append({"field": "market", "op": "eq", "value": val})
+            continue
+
+        op = _detect_op(win)
+        rng = _extract_range(win)
+        # 既无算子关键词、也无 "num 到 num" 区间 → 这条字段无法构成条件，跳过
+        if op is None and rng is None:
+            continue
+        fkind = screen_dsl.FIELDS[field].kind
+        try:
+            if fkind == "text":
+                if op == "in":
+                    vals = _extract_list(win)
+                    if not vals:
+                        continue
+                    cond = {"field": field, "op": "in", "value": vals}
+                elif op == "match":
+                    m = re.search(r"(?:包含|含|带)\s*([一-龥A-Za-z0-9]+)", win)
+                    if not m:
+                        continue
+                    cond = {"field": field, "op": "match", "value": m.group(1)}
+                else:  # eq / ne
+                    m = re.search(r"(?:等于|为|是|非|不是)\s*([一-龥A-Za-z0-9]+)", win)
+                    if not m:
+                        continue
+                    cond = {"field": field, "op": op, "value": m.group(1)}
+            else:  # 数值字段
+                if op in ("between", "not_between"):
+                    rg = rng
+                    if not rg:
+                        continue
+                    lo, hi = rg
+                    _, unit = _extract_number(win)
+                    lo = _norm_num(field, lo, unit)
+                    hi = _norm_num(field, hi, unit)
+                    cond = {"field": field, "op": op, "value": [lo, hi]}
+                    # 低估值语义：pe/pb 下界 ≤ 0 时补 >0 排除缺失值
+                    if field in ("pe", "pb") and lo <= 0:
+                        conditions.append({"field": field, "op": "gt", "value": 0})
+                elif rng is not None:
+                    # 出现 "num 到 num" 但没写介于/在...之间，也按区间处理
+                    lo, hi = rng
+                    _, unit = _extract_number(win)
+                    lo = _norm_num(field, lo, unit)
+                    hi = _norm_num(field, hi, unit)
+                    cond = {"field": field, "op": "between", "value": [lo, hi]}
+                    if field in ("pe", "pb") and lo <= 0:
+                        conditions.append({"field": field, "op": "gt", "value": 0})
+                elif op == "in":
+                    vals = _extract_list(win)
+                    nums = []
+                    ok = True
+                    for v in vals:
+                        try:
+                            nums.append(float(v))
+                        except ValueError:
+                            ok = False
+                            break
+                    if not ok or not nums:
+                        continue
+                    cond = {"field": field, "op": "in", "value": nums}
+                else:  # gt / lt / gte / lte / eq / ne
+                    num, unit = _extract_number(win)
+                    if num is None:
+                        continue
+                    num = _norm_num(field, num, unit)
+                    cond = {"field": field, "op": op, "value": num}
+                    # 低估值语义：pe/pb 的 lt/lte（且上界>0）补 >0
+                    if field in ("pe", "pb") and op in ("lt", "lte") and num > 0:
+                        conditions.append({"field": field, "op": "gt", "value": 0})
+            # 用引擎编译校验，非法直接丢弃（不阻断其他条件）
+            screen_dsl.compile_condition(cond)
+            conditions.append(cond)
+        except (ValueError, KeyError):
+            continue
+
+    # 去重（同 field+op+value）；低估值补的 gt0 与显式 gt0 自然合并
+    seen = set()
+    uniq = []
+    for c in conditions:
+        key = (c["field"], c["op"], str(c["value"]))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(c)
+    return {"conditions": uniq, "unsupported": unsupported, "error": None}
 
 
 # ---------------------------------------------------------------- 主解析
@@ -226,7 +459,10 @@ def parse_intent(text: str) -> Dict[str, Any]:
         score += 0.05
     confidence = round(min(0.95, score), 2)
 
+    scr = parse_screener_conditions(raw)
     return {
+        "conditions": scr["conditions"],
+        "unsupported": scr["unsupported"],
         "logic": raw,
         "strategy": strategy,
         "strategy_name": {
@@ -266,8 +502,62 @@ EXAMPLES = [
 ]
 
 
+def selfcheck() -> int:
+    """Tier 5 解析自检：覆盖快照字段映射、单位换算、低估值补 >0、unsupported。"""
+    fails = 0
+
+    def has(conds, field, op, value):
+        return any(c["field"] == field and c["op"] == op and c["value"] == value
+                   for c in conds)
+
+    cases = [
+        ("市盈率小于20", [("pe", "lt", 20), ("pe", "gt", 0)]),
+        ("换手率介于3%到15%", [("turnover", "between", [3, 15])]),
+        ("名称包含银行", [("name", "match", "银行")]),
+        ("市值大于100亿", [("total_cap", "gt", 100)]),
+        ("成交额小于1亿", [("amount", "lt", 10000)]),
+        ("价格10到20元", [("price", "between", [10, 20])]),
+        ("沪市", [("market", "eq", "sh")]),
+        ("涨幅大于5%", [("change_pct", "gt", 5)]),
+        ("股票代码等于600519", [("code", "eq", "600519")]),
+        ("市盈率介于10到30", [("pe", "between", [10, 30])]),
+    ]
+    for text, expect in cases:
+        r = parse_screener_conditions(text)
+        conds = r["conditions"]
+        for f, o, v in expect:
+            if not has(conds, f, o, v):
+                print(f"  ✗ {text!r} 期望 {f}/{o}/{v}，实得 {conds}")
+                fails += 1
+
+    # unsupported：技术指标类无法映射
+    r = parse_screener_conditions("RSI小于30且收盘价上穿20日均线")
+    if not r["conditions"] and not r["unsupported"]:
+        print("  ✗ 技术指标类应归入 unsupported")
+        fails += 1
+
+    # 组合语句：3 字段（pe 带 gt0 共 4 条）
+    r = parse_screener_conditions("市盈率小于20，换手率介于3%到15%，名称包含银行")
+    if not (has(r["conditions"], "pe", "lt", 20) and
+            has(r["conditions"], "pe", "gt", 0) and
+            has(r["conditions"], "turnover", "between", [3, 15]) and
+            has(r["conditions"], "name", "match", "银行")):
+        print("  ✗ 组合语句解析不全：", r["conditions"])
+        fails += 1
+
+    # 空输入
+    if parse_screener_conditions("").get("error") is None:
+        print("  ✗ 空输入应返回 error")
+        fails += 1
+
+    print(f"intent.parse_screener_conditions selfcheck: {'OK' if fails == 0 else str(fails) + ' 失败'}")
+    return fails
+
+
 if __name__ == "__main__":
     import json
+    if selfcheck() == 0:
+        print("-" * 40)
     for s in EXAMPLES:
         r = parse_intent(s)
         print("输入:", s)
@@ -278,5 +568,6 @@ if __name__ == "__main__":
             "ind": r["indicators"],
             "sl/tp": (r["params"]["stop_loss"], r["params"]["take_profit"]),
             "conf": r["confidence"],
+            "conds": r["conditions"],
         }, ensure_ascii=False))
         print("     入场:", r["entry"], "| 出场:", r["exit"])

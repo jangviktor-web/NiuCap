@@ -1827,6 +1827,18 @@ td .starbtn{font-size:16px}
             </select>
           </div>
         </div>
+        <!-- 一句话选股（Tier 5）：自然语言 → Tier 1 DSL 条件，解析结果复用 advConds chips -->
+        <div class="filters" id="nlScreenBox" style="margin-top:14px;align-items:flex-end">
+          <div class="fg" style="grid-column:1/-1">
+            <label>🗣 一句话选股（自然语言 → 条件）</label>
+            <div class="row">
+              <input id="nlScreenInput" type="text" placeholder="例：市盈率小于20，换手率介于3%到15%，名称包含银行" style="flex:1">
+              <button class="btn" id="nlScreenParse">解析并选股</button>
+              <button class="btn ghost" id="nlScreenClear">清空</button>
+            </div>
+            <div id="nlScreenNote" style="font-size:12px;color:var(--tx3);min-height:16px;margin-top:6px"></div>
+          </div>
+        </div>
         <!-- 高级筛选（Tier 2）：字段 × 算子，元数据来自 /api/screen/fields。
              与上方旧参数区 AND 叠加；目录拉取失败时本区整体隐藏，旧通路不受影响。 -->
         <div class="filters" id="advBox" style="display:none;margin-top:14px">
@@ -2906,6 +2918,42 @@ function advBind(){
 }
 advLoadMeta();
 advBind();
+
+/* =========================================================================
+   一句话选股（Tier 5）—— 自然语言 → Tier 1 DSL 条件
+   -------------------------------------------------------------------------
+   解析结果直接复用 Tier 2 的 advConds 条件数组与 advRenderChips 渲染：
+   用户看到的 chips、与旧参数 AND 叠加、执行逻辑全部走既有通路，零新渲染代码。
+   降级：解析为空 / 接口异常时不 wipe 已填表单，只在 nlNote 亮提示。
+   ========================================================================= */
+function nlScreenParse(){
+  var t = $('nlScreenInput').value.trim();
+  var note = $('nlScreenNote');
+  if(!t){
+    note.textContent = '请输入一句话，例如：市盈率小于20，换手率介于3%到15%，名称包含银行';
+    return;
+  }
+  note.textContent = '解析中…';
+  api('/api/intent_parse?text=' + encodeURIComponent(t)).then(function(r){
+    var conds = (r && r.conditions) || [];
+    if(!conds.length){
+      var u = (r && r.unsupported && r.unsupported.length) ? ' ' + r.unsupported[0] : '';
+      note.textContent = '未识别到可筛选条件。' + u;
+      return;
+    }
+    advConds = conds;            // 复用 Tier 2 条件数组
+    advRenderChips();           // 复用 Tier 2 chips 渲染
+    var msg = '已解析 ' + conds.length + ' 条条件并自动执行';
+    if(r.unsupported && r.unsupported.length) msg += '；' + r.unsupported[0];
+    note.textContent = msg;
+    runScreen();
+  }).catch(function(e){
+    note.textContent = '解析失败：' + (e && e.message ? e.message : e);
+  });
+}
+$('nlScreenParse').onclick = nlScreenParse;
+$('nlScreenClear').onclick = function(){ $('nlScreenInput').value = ''; $('nlScreenNote').textContent = ''; };
+$('nlScreenInput').addEventListener('keydown', function(e){ if(e.key === 'Enter') nlScreenParse(); });
 
 /* =========================================================================
    个股分析
