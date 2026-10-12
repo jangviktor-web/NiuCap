@@ -313,7 +313,12 @@ def _print_heat(rows: List[Dict[str, Any]]) -> None:
         print(f"{r['sector']:<10}{r['n']:>5}{r['pos']:>4}{r['neg']:>4}"
               f"{r['neu']:>4}{r['net']:>8} {bar}")
         for s in r["samples"]:
-            print(f"           · {s}")
+            # samples 结构化后为 {tone,origin,corrected,text}；兼容旧字符串
+            if isinstance(s, dict):
+                star = "*" if s.get("corrected") else ""
+                print(f"           · [{s.get('tone','neutral')}{star}] {s.get('text','')}")
+            else:
+                print(f"           · {s}")
 
 
 def backtest() -> Dict[str, Any]:

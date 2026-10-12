@@ -330,6 +330,9 @@ def aggregate(items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """把快讯聚到板块。返回 {板块: {n,pos,neg,neu,net,score_sum,bull,bear,
     cat_net,samples,catalyst_samples}}。
 
+    samples 为结构化样本列表：[{tone,origin,corrected,text}]，tone=对本板块
+    的生效方向，origin=词典初判，corrected=方向是否被板块词修正过。
+
     板块归因优先级：先 ticker/公司名 经 stock_sector_map 反查（精确）；
     反查不到（OkSurf/FreeNews 无 stocks、或 ticker 不在种子表）再回落关键词。
 
@@ -372,10 +375,14 @@ def aggregate(items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
                 a["neg"] += 1
             else:
                 a["neu"] += 1
-            # 被板块词修正过方向的，样本加 * 标记（便于回看"为什么读反了"）
-            flag = "*" if (sec_net and eff != tone) else ""
+            # 被板块词修正过方向的，样本记 corrected（便于回看"为什么读反了"）
+            # 结构化而非拼 "[pos*] 文本"：前端正则只认 [pos]/[neg]/[neutral]，
+            # 当年把 * 拼进前缀直接导致徽标错判中性、[pos*] 泄漏进正文（真 bug）。
+            corrected = bool(sec_net) and eff != tone
             if len(a["samples"]) < 3:
-                a["samples"].append(f"[{eff}{flag}] {content[:56]}")
+                a["samples"].append({"tone": eff, "origin": tone,
+                                     "corrected": corrected,
+                                     "text": content[:56]})
             # 催化剂样本：只保留「有利好或利空命中」且样本未满的，便于回看触发词
             if (bull_n or bear_n) and len(a["catalyst_samples"]) < 3:
                 tag = "↑" + "/".join(cats["bull"]) if cats["bull"] else ""
@@ -605,6 +612,14 @@ def selfcheck() -> int:
     ok("aggregate 含 能源.cat_net>0", agg.get("能源", {}).get("cat_net", 0) > 0)
     ok("aggregate 含 医药.cat_net<0", agg.get("医药", {}).get("cat_net", 0) < 0)
     ok("heat_table 含 catalyst_samples", bool(heat_table(agg)[0].get("catalyst_samples")))
+    rows = heat_table(agg)
+    flat = [x for r in rows for x in r["samples"]]
+    ok("samples 为结构化 {tone,origin,corrected,text}",
+       bool(flat) and all(set(x) >= {"tone", "origin", "corrected", "text"} for x in flat))
+    ok("corrected 样本满足 origin!=tone",
+       all(x["origin"] != x["tone"] for x in flat if x["corrected"]))
+    # 防回归：曾因把 "[pos*]" 拼进文本导致前缀泄漏到正文（前端正则不认 *）
+    ok("样本文本不含 [ 前缀", not any(str(x.get("text", "")).startswith("[") for x in flat))
 
     # 4) lexicon 覆盖所有板块
     lex = {x["sector"] for x in catalyst_lexicon()}

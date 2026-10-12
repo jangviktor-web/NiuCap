@@ -923,6 +923,7 @@ td .starbtn{font-size:16px}
 .st-samples{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
 .st-item{display:flex;gap:7px;align-items:flex-start;font-size:12.5px;line-height:1.5}
 .st-txt{color:var(--tx2);flex:1;min-width:0}
+.st-star{color:var(--tx3);font-weight:700;cursor:help;margin-left:1px}
 .st-badge{flex:none;font-size:11px;line-height:1;padding:3px 6px;border-radius:5px;font-weight:600;white-space:nowrap}
 .st-badge.pos{background:rgba(217,52,43,.12);color:var(--up)}
 .st-badge.neg{background:rgba(18,161,92,.12);color:var(--down)}
@@ -5861,12 +5862,27 @@ function loadSectorNews(){
       var posP = Math.round((r.pos||0)/n*100), neuP = Math.round((r.neu||0)/n*100);
       var negP = Math.max(0, 100 - posP - neuP);
       var samples = (r.samples||[]).map(function(s){
-        var m = /^\[(pos|neg|neutral)\]\s*([\s\S]*)$/.exec(s);
-        var t = m ? (m[1]==='pos'?'pos':m[1]==='neg'?'neg':'neu') : 'neu';
-        var txt = m ? m[2] : s;
+        // 新格式为结构化 {tone,origin,corrected,text}；旧字符串兜底含历史 [pos*] 形态
+        var tone, txt, corrected = false, origin = '';
+        if(s && typeof s === 'object'){
+          tone = s.tone || 'neutral'; txt = s.text || '';
+          corrected = !!s.corrected; origin = s.origin || '';
+        }else{
+          var m = /^\[(pos|neg|neutral)(\*?)\]\s*([\s\S]*)$/.exec(String(s));
+          if(m){ tone = m[1]; corrected = !!m[2]; txt = m[3]; }
+          else { tone = 'neutral'; txt = String(s); }
+        }
+        var t = tone==='pos'?'pos':(tone==='neg'?'neg':'neu');
         var lbl = t==='pos'?'偏多':t==='neg'?'偏空':'中性';
+        // 「*」= 方向被板块专属词修正过（词典直觉与该板块业务方向相反），
+        // hover 说明原判与修正后方向，保留诊断价值且不再污染正文
+        var star = '';
+        if(corrected){
+          var oLbl = origin==='pos'?'偏多':(origin==='neg'?'偏空':'中性');
+          star = '<sup class="st-star" title="原判'+oLbl+'，板块词修正为'+lbl+'">*</sup>';
+        }
         return '<li class="st-item"><span class="st-badge '+t+'">'+lbl+'</span>'
-             + '<span class="st-txt">'+esc(txt)+'</span></li>';
+             + '<span class="st-txt">'+esc(txt)+star+'</span></li>';
       }).join('');
       // 板块级催化剂（利好/利空词解析）：cat_net = 利好词数 − 利空词数
       var catNet = (typeof r.cat_net === 'number') ? r.cat_net : 0;
