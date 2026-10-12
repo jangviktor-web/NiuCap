@@ -2177,6 +2177,7 @@ td .starbtn{font-size:16px}
           <button class="btn" data-adm="modules">🧩 模块状态</button>
           <button class="btn" data-adm="services">🧹 缓存管理</button>
           <button class="btn" data-adm="evalcache">🎯 体检缓存</button>
+          <button class="btn" data-adm="sectoraudit">🔍 舆情巡检</button>
           <button class="btn" data-adm="backup">💾 系统备份</button>
           <button class="btn" data-adm="logs">📜 巡检与日志</button>
         </div>
@@ -4175,6 +4176,9 @@ var ADMIN_TABS = [
         '另有<b>每日自动预热</b>（默认 16:30，环境变量可改）：不依赖落库，到点按数据判脏——数据日期变了或缓存为空才真算，周末与落库失败当天自动跳过（单次评估 230 秒，不无脑烧 CPU）。'},
   {key:'backup', name:'系统备份', emo:'💾',
    desc:'一键在线一致备份（SQLite backup() 读穿 WAL，无需停服），落在 data/backups/。清单里可<b>下载</b>到本地、<b>删除</b>腾空间、<b>恢复</b>覆盖当前库——恢复前会自动先快照一份当前库，手滑还能回退；恢复完需重启服务进程。'},
+  {key:'sectoraudit', name:'舆情巡检', emo:'🔍',
+   desc:'板块舆情规则每日自动巡检（默认 21:00，TICK_SECTOR_AUDIT_AT 可改）：把近 24h 快讯按板块聚合，用五条规则找「归类错误 / 利好利空错误」疑点——地缘实体灌水、泛化措辞误判、修正率异常、命中数突增、小样本低置信，落盘人读报告（data/sector_audit/audit_<日期>.md）。' +
+        '<b>只报告，不自动改词表</b>：词表是业务判断，报告给疑点+建议，人确认后改 server/sector_sentiment.py 并跑 selfcheck（内含防回归断言）。'},
   {key:'logs', name:'巡检与日志', emo:'📜',
    desc:'健康巡检状态 / 连续失败次数 / 最近成功失败时间与历史；日志查看器（data/ 下 .log/.json，5 秒自动刷新，目录穿越防护），可<b>下载</b>全文或<b>清空</b>内容（清空保留文件句柄，不会让正在写的日志丢目标）。'}
 ];
@@ -4226,7 +4230,7 @@ function loadAdmin(force){
     userdata: admUserData, newfeat: admNewFeat,
     bars: admBars, database: admDatabase, modules: admModules,
     services: admServices, evalcache: admEvalCache, backup: admBackup, logs: admLogs,
-    access: admAccess
+    access: admAccess, sectoraudit: admSectorAudit
   };
   (fns[admState.cur] || admOverview)(el);
 }
@@ -5100,6 +5104,60 @@ function admEvalCache(el){
         setTimeout(function(){ if(admState.cur === 'evalcache') loadAdmin(true); }, 800);
       }).catch(function(e){ if(msg) msg.textContent = '失败：' + e.message; });
     };
+  }).catch(function(e){ die(el, '读取失败：' + e.message); });
+}
+
+/* ---------- #188 板块舆情规则巡检 ---------- */
+/* 与体检缓存同模式：每日自动跑 + 手动跑 + 状态可见。区别是巡检只读快讯缓存、
+   只产报告，绝不改词表——词表是业务判断，人看报告后自己决定改不改。 */
+function admSectorAudit(el){
+  admApi('/sector-audit').then(function(d){
+    admState.loaded.sectoraudit = 1;
+    var h = '<div class="card"><div class="card-h"><h2>🔍 舆情规则巡检</h2>' +
+            '<div class="meta">每日自动 · 只报告不改词表</div></div><div class="card-b">';
+    h += '<div class="verdict">' +
+      '<div class="vbox"><div class="lb">调度状态</div><div class="vl ' +
+        (d.enabled ? 'up' : 'warn') + '" style="font-size:15px">' +
+        (d.enabled ? '✅ 运行中' : '⚠ 未运行') + '</div><div class="sub">每日 ' +
+        esc(d.at || '—') + '</div></div>' +
+      '<div class="vbox"><div class="lb">下次检查</div><div class="vl" style="font-size:14px">' +
+        esc(d.next || '—') + '</div><div class="sub">休眠会补，不漏不重</div></div>' +
+      '<div class="vbox"><div class="lb">今天已跑</div><div class="vl ' +
+        (d.done_today ? 'up' : 'warn') + '">' + (d.done_today ? '是' : '否') +
+        '</div><div class="sub">' + esc(d.last_ok || '—') + '</div></div>' +
+      '<div class="vbox"><div class="lb">上次结果</div><div class="vl" style="font-size:13px">' +
+        esc(d.last_result || '—') + '</div><div class="sub">meta 表记录</div></div>' +
+      '</div>';
+    h += '<div class="admtip" style="margin-top:12px">五条疑点规则：' +
+      '<b>R1</b> 地缘实体灌水（仅由地缘词触发归类）、' +
+      '<b>R2</b> 泛化措辞误判（增长/上涨/发布/签约…）、' +
+      '<b>R3</b> 修正率异常（板块词覆盖词典方向 &gt;30%）、' +
+      '<b>R4</b> 命中数突增（超近 7 次中位数 2 倍）、' +
+      '<b>R5</b> 小样本低置信（&lt;3 条）。' +
+      '报告落在 <code>data/sector_audit/audit_&lt;日期&gt;.md</code>，' +
+      '确认疑点后改 <code>server/sector_sentiment.py</code> 并跑 selfcheck（含防回归断言）。</div>';
+    h += '<div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+      '<button class="btn pri" id="admAuditRun">▶ 立即巡检（近 24h）</button>' +
+      '<button class="btn" id="admAuditRun72">近 72h</button>' +
+      '<span id="admAuditMsg" style="font-size:12px;color:var(--tx3)"></span></div>';
+    h += '</div></div>';
+    el.innerHTML = h;
+
+    var msg = $('admAuditMsg');
+    function run(hours){
+      if(msg) msg.textContent = '巡检中…';
+      admApi('/sector-audit/run', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({hours:hours})
+      }).then(function(r){
+        if(!r.ok){ if(msg) msg.textContent = '失败'; return; }
+        if(msg) msg.textContent = '✅ ' + r.items + ' 条快讯 / ' + r.sectors +
+          ' 个板块 / ' + r.findings + ' 个疑点（高危 ' + r.high + '）· ' + (r.at || '');
+        setTimeout(function(){ if(admState.cur === 'sectoraudit') loadAdmin(true); }, 1200);
+      }).catch(function(e){ if(msg) msg.textContent = '失败：' + e.message; });
+    }
+    var b1 = $('admAuditRun'); if(b1) b1.onclick = function(){ run(24); };
+    var b2 = $('admAuditRun72'); if(b2) b2.onclick = function(){ run(72); };
   }).catch(function(e){ die(el, '读取失败：' + e.message); });
 }
 

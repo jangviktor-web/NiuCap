@@ -301,6 +301,18 @@ def _save_history_md() -> None:
     try:
         with _lock:
             items = list(_history)
+        # ponytail: 空缓冲绝不覆写非空落盘缓存。
+        # 为什么：模块级 atexit.register(_save_history_md) 意味着任何
+        # import newsfeed 的进程退出时都会保存。standalone 脚本
+        # （maintain/mcp_server/sector_audit）从不调 ensure_history_loaded()，
+        # _history 为空——放任写盘会把服务维护的 24h 快讯缓存清空。
+        # 服务在线时被 60s 周期保存掩盖；服务不在线时跑一次维护脚本
+        # 缓存即永久丢失（曾实测复现：557KB → 115 字节）。
+        if not items and os.path.exists(HISTORY_MD_FILE) \
+                and os.path.getsize(HISTORY_MD_FILE) > 0:
+            print(f"[history-md] 内存缓冲为空，保留磁盘缓存"
+                  f"（{os.path.getsize(HISTORY_MD_FILE)} 字节）不覆写")
+            return
         lines = ["# 快讯缓存（滚动历史 · 24h）", "",
                  "> 自动维护，请勿手动编辑。最近保存：" +
                  _ts_text(int(time.time()), "%Y-%m-%d %H:%M:%S"), ""]

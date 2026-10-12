@@ -388,6 +388,7 @@ curl "http://localhost:8899/api/theme?limit=40"
 - **每日自动同步**：`TICK_SYNC_BARS_AUTO=1` + `TICK_SYNC_BARS_AT=15:30` + `TICK_SYNC_BARS_COUNT=250` + `TICK_SYNC_BARS_SCOPE=all`。
   - 内置**同步守门三重判断**：工作日 15:00 前不跑全量 / 当日已同步标记 / 抽检覆盖率 ≥90% 跳过，避免重复劳动与误触发。
 - **虚拟盘费率**：`TICK_FEE_RATE` / `TICK_STAMP_RATE` 等（仅新用户开户默认值）。
+- **舆情巡检时间**：`TICK_SECTOR_AUDIT_AT=21:00` —— 板块舆情规则每日自动巡检的触发时刻（默认 21:00，脏值回落默认）。
 - **管理员**：`TICK_ADMIN_USERS=用户名1,用户名2` —— 显式配置后仅名单内用户为管理员；**不设则内置默认管理员账号 `admin`**（见下）。
 
 > `.env` 含数据库密码，**已被 `.gitignore` 排除，切勿提交**。
@@ -464,6 +465,8 @@ server/         FastAPI 后端：选股引擎 / 行情 / 龙虎榜 / 快讯 / �
   app.py          主应用（142 个路由，含 /api/limitup /api/theme）
   run.py          启动器（读 $PORT，绑 0.0.0.0）
   newsfeed.py     双源快讯（新浪7x24 + 同花顺，去重 + TTL）
+  sector_sentiment.py  板块舆情聚合：归类/利好/利空三张词表 + 板块词修正词典情绪（含 99 项防回归断言）
+  sector_audit.py      舆情规则每日巡检：五条疑点规则 + markdown 报告 + 调度（只报告，不自动改词表）
   hithink.py      同花顺特色数据：盘前竞价 / 权威日历 / 估值五口径 / 行情备源（#106~#108，含 46 项离线自检）
   sentiment.py    词典情绪（正/负词 + 否定反转 + 程度乘数 + 转折）
   limitup.py      连板梯队 + 6 阶段情绪周期（#100）

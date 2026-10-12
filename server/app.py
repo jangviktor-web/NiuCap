@@ -228,6 +228,14 @@ def startup():
     except Exception as e:
         print(f"[eval-prewarm] 每日调度启动失败（不影响其他功能）：{e}")
 
+    # #188 板块舆情规则每日巡检：只报告不自动改词表（词表是业务判断）。
+    # 与预热同模式：daemon 线程 + 日期字符串比对，休眠/时钟漂移不漏不重。
+    try:
+        import sector_audit as _sa
+        _sa.start_daily_audit()
+    except Exception as e:
+        print(f"[sector-audit] 每日巡检调度启动失败（不影响其他功能）：{e}")
+
     # 服务启动补跑。原来是「今天必须已落库成功才补」——于是白天重启、
     # 或落库失败的次日重启，缓存就一直空着，要等到 16:30 才有数据。
     # 改成按缓存自身状态决定：
@@ -3683,6 +3691,38 @@ def api_admin_eval_cache_clear(request: Request):
     _require_admin(request)
     import strategy_eval as _se
     return _se.clear_cache()
+
+
+# ===========================================================================
+# 板块舆情规则巡检（#188，仅管理员）
+#
+# 每天自动跑一次（默认 21:00，TICK_SECTOR_AUDIT_AT 可调），把 24h 快讯按
+# 板块聚合，用五条规则找「归类错误/利好利空错误」疑点，落盘人读报告
+# （data/sector_audit/audit_<日期>.md）。只报告，不自动改词表——
+# 词表是业务判断，报告给疑点+建议，人决策后改 sector_sentiment.py。
+# ===========================================================================
+
+@app.get("/api/admin/sector-audit")
+def api_admin_sector_audit(request: Request):
+    """巡检调度状态：今天跑过没、上次结果、下次时间。"""
+    _require_admin(request)
+    import sector_audit as _sa
+    return _sa.audit_state()
+
+
+@app.post("/api/admin/sector-audit/run")
+def api_admin_sector_audit_run(request: Request,
+                               payload: Dict[str, Any] = Body(default={})):
+    """手动跑一次巡检（同步执行，几百毫秒级；只读快讯缓存不写业务数据）。"""
+    _require_admin(request)
+    import sector_audit as _sa
+    try:
+        hours = int(payload.get("hours", 24))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "hours 必须是正整数")
+    if hours <= 0 or hours > 168:
+        raise HTTPException(400, "hours(1~168) 超出范围")
+    return {"ok": True, **_sa.run_audit(hours=hours, why="后台手动")}
 
 
 # ===========================================================================
