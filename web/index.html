@@ -170,6 +170,13 @@ tbody tr:hover{background:#f7f9fc}
 .fg .row span{color:var(--tx3);font-size:12px;flex-shrink:0}
 .presets{display:flex;gap:7px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px dashed var(--line)}
 
+/* 高级筛选条件 chips（Tier 2，元数据驱动） */
+.advchips{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;align-items:center}
+.advchip{font-size:11.5px;padding:4px 8px;display:inline-flex;align-items:center;gap:6px;
+  background:#e6f0ff;color:#1677ff;cursor:default}
+.advchip .advx{cursor:pointer;font-weight:700;font-size:13px;line-height:1;opacity:.7}
+.advchip .advx:hover{opacity:1}
+
 /* 图表 */
 .chart{width:100%;height:340px}
 .chart.sm{height:180px}
@@ -1820,6 +1827,28 @@ td .starbtn{font-size:16px}
             </select>
           </div>
         </div>
+        <!-- 高级筛选（Tier 2）：字段 × 算子，元数据来自 /api/screen/fields。
+             与上方旧参数区 AND 叠加；目录拉取失败时本区整体隐藏，旧通路不受影响。 -->
+        <div class="filters" id="advBox" style="display:none;margin-top:14px">
+          <div class="fg">
+            <label>筛选字段</label>
+            <select id="advField" class="sel"></select>
+          </div>
+          <div class="fg">
+            <label>算子</label>
+            <select id="advOp" class="sel"></select>
+          </div>
+          <div class="fg">
+            <label>取值</label>
+            <div class="row" id="advValCtr"></div>
+          </div>
+          <div class="fg" style="justify-content:flex-end">
+            <label>&nbsp;</label>
+            <button class="btn" id="advAdd">＋ 添加条件</button>
+          </div>
+        </div>
+        <div id="advErr" style="font-size:12px;color:#d4380d;min-height:18px;margin-top:6px"></div>
+        <div id="advChips"></div>
         <div class="presets">
           <button class="btn" data-preset="bluechip">🏛️ 低估值蓝筹</button>
           <button class="btn" data-preset="growth">🚀 成长活跃股</button>
@@ -2570,6 +2599,9 @@ function runScreen(){
     amount_min: numOf('f_amt_min'),
     sort: $('f_sort').value, order: 'desc', limit: 200
   };
+  // 高级条件与旧参数 AND 叠加（Tier 2）。advConds 为空时完全不带这个参数，
+  // 请求与改造前逐字节一致 —— 旧通路零影响
+  if(advConds.length) p.filters = JSON.stringify(advConds);
   api('/api/screener?' + qs(p)).then(function(d){
     state.screenRows = d.items;
     batchSel.screen = new Set();
@@ -2676,6 +2708,10 @@ $('f_reset').onclick = function(){
     if($(id)) $(id).value = '';
   });
   $('f_sort').value = 'change_pct';
+  // 高级条件一并清空（Tier 2）；目录没加载成功时无需动作
+  advConds = [];
+  if(advMeta){ advRenderChips(); advRenderValCtr(); }
+  var ae = $('advErr'); if(ae) ae.textContent = '';
   document.querySelectorAll('[data-preset]').forEach(function(x){ x.classList.remove('on'); });
   $('screenBody').innerHTML = '<div class="empty">设置条件后点击「执行选股」</div>';
   $('screenCount').textContent = '—';
@@ -2684,6 +2720,192 @@ $('f_reset').onclick = function(){
  'f_chg_min','f_chg_max','f_tov_min','f_tov_max','f_amt_min'].forEach(function(id){
   if($(id)) $(id).addEventListener('keydown', function(e){ if(e.key === 'Enter') runScreen(); });
 });
+
+/* =========================================================================
+   高级筛选（Tier 2）—— 字段 × 算子，元数据驱动
+   -------------------------------------------------------------------------
+   与旧 *_min/_max 参数区的关系：**AND 叠加**。runScreen 把这里累积的条件
+   序列化成 filters JSON 一并提交，由 server/screen_dsl.py 统一编译求值；
+   advConds 为空时请求与改造前逐字节一致（不带 filters 参数）。
+
+   字段/算子目录来自 GET /api/screen/fields —— 后端在 screen_dsl.FIELDS
+   加一行，这里自动多一个选项，不用改前端。
+
+   降级路径：目录拉取失败（后端未上线/接口异常）时 advBox 整块隐藏，
+   旧参数通路原样可用，不弹错、不阻塞。
+   ========================================================================= */
+var advMeta = null;      // /api/screen/fields 的响应
+var advConds = [];       // 已添加条件 [{field, op, value}]，彼此 AND
+
+var ADV_OP_LABEL = {
+  gt:'大于', gte:'大于等于', lt:'小于', lte:'小于等于',
+  eq:'等于', ne:'不等于', between:'介于', not_between:'不介于',
+  in:'属于', match:'包含'
+};
+// 文本字段只开这 4 个算子；数值字段开目录里除 match 外的全部
+var ADV_TEXT_OPS = ['eq', 'ne', 'in', 'match'];
+// 取值框占位提示（按字段 key 查，没有就用通用文案）
+var ADV_FIELD_HINT = {
+  market: 'sh=沪市，sz=深市，bj=北交所',
+  code: '如 600519 或 sh600519',
+  name: '股票名称关键词，如 茅台'
+};
+
+function advLoadMeta(){
+  api('/api/screen/fields').then(function(m){
+    advMeta = m;
+    advRenderFieldSel();
+    if($('advBox')) $('advBox').style.display = '';
+  }).catch(function(){
+    // 拿不到目录 = 高级区不可用；旧参数通路完全不受影响
+    advMeta = null;
+    advConds = [];
+    if($('advBox')) $('advBox').style.display = 'none';
+    if($('advChips')) $('advChips').innerHTML = '';
+    var e0 = $('advErr'); if(e0) e0.textContent = '';
+  });
+}
+function advCurField(){
+  var k = $('advField').value;
+  for(var i = 0; i < advMeta.fields.length; i++)
+    if(advMeta.fields[i].key === k) return advMeta.fields[i];
+  return advMeta.fields[0];
+}
+function advRenderFieldSel(){
+  // 按 cat 分组渲染 optgroup，分组顺序沿用目录顺序
+  var cats = [];
+  advMeta.fields.forEach(function(f){
+    if(cats.indexOf(f.cat) < 0) cats.push(f.cat);
+  });
+  var h = '';
+  cats.forEach(function(cat){
+    h += '<optgroup label="' + esc(cat) + '">';
+    advMeta.fields.forEach(function(f){
+      if(f.cat !== cat) return;
+      h += '<option value="' + esc(f.key) + '">' + esc(f.label) +
+           (f.unit ? '（' + esc(f.unit) + '）' : '') + '</option>';
+    });
+    h += '</optgroup>';
+  });
+  $('advField').innerHTML = h;
+  advRenderOpSel();
+}
+function advRenderOpSel(){
+  var f = advCurField();
+  // match 只对文本字段开放（后端 compile_condition 同样拒绝数值字段的 match）
+  var ops = advMeta.ops.filter(function(op){
+    return (f.kind === 'text') ? ADV_TEXT_OPS.indexOf(op) >= 0 : op !== 'match';
+  });
+  $('advOp').innerHTML = ops.map(function(op){
+    return '<option value="' + esc(op) + '">' + ADV_OP_LABEL[op] + '</option>';
+  }).join('');
+  advRenderValCtr();
+}
+function advRenderValCtr(){
+  var f = advCurField(), op = $('advOp').value;
+  var arity = advMeta.arity[op];
+  var hint = ADV_FIELD_HINT[f.key] || (f.kind === 'num' ? '数值' : '文本');
+  var h;
+  if(arity === 2){
+    h = '<input id="advV0" type="text" inputmode="decimal" placeholder="下限">' +
+        '<span>~</span>' +
+        '<input id="advV1" type="text" inputmode="decimal" placeholder="上限">';
+  } else if(op === 'in'){
+    h = '<input id="advV0" type="text" placeholder="多个值用逗号分隔' +
+        (f.kind === 'num' ? '（数字）' : '') + '">';
+  } else {
+    h = '<input id="advV0" type="text" placeholder="' + esc(hint) + '">';
+  }
+  $('advValCtr').innerHTML = h;
+}
+function advCollect(){
+  // 读控件 -> {cond:{field,op,value}} 或 {err:'文案'}。
+  // 刻意在提交前就近拦住非法值：等后端 400 时整个结果区被错误文案占掉，
+  // 用户填的半截表单也没了；这里表单保持原样、只亮一行红字。
+  var f = advCurField(), op = $('advOp').value;
+  var arity = advMeta.arity[op];
+  if(arity === 2){
+    var lo = $('advV0').value.trim(), hi = $('advV1').value.trim();
+    if(lo === '' || hi === '') return {err:'「' + f.label + '」区间需要同时填下限和上限'};
+    var nlo = Number(lo), nhi = Number(hi);
+    if(isNaN(nlo) || isNaN(nhi)) return {err:'区间上下限必须是数字'};
+    if(nlo > nhi) return {err:'下限（' + lo + '）不能大于上限（' + hi + '）'};
+    return {cond:{field:f.key, op:op, value:[nlo, nhi]}};
+  }
+  var v = $('advV0').value.trim();
+  if(v === '') return {err:'取值不能为空'};
+  if(op === 'in'){
+    var parts = v.split(/[,，]/).map(function(s){ return s.trim(); })
+                 .filter(function(s){ return s !== ''; });
+    if(!parts.length) return {err:'至少填写一个值'};
+    if(f.kind === 'num'){
+      var nums = parts.map(Number);
+      if(nums.some(function(n){ return isNaN(n); }))
+        return {err:'「' + f.label + '」是数值字段，多选值必须是数字（逗号分隔）'};
+      return {cond:{field:f.key, op:op, value:nums}};
+    }
+    return {cond:{field:f.key, op:op, value:parts}};
+  }
+  if(f.kind === 'num'){
+    var n = Number(v);
+    if(isNaN(n)) return {err:'「' + f.label + '」是数值字段，取值必须是数字'};
+    return {cond:{field:f.key, op:op, value:n}};
+  }
+  return {cond:{field:f.key, op:op, value:v}};
+}
+function advDesc(c){
+  var f = null;
+  for(var i = 0; i < advMeta.fields.length; i++)
+    if(advMeta.fields[i].key === c.field) f = advMeta.fields[i];
+  var lab = f ? f.label : c.field;
+  var sym = ADV_OP_LABEL[c.op] || c.op;
+  var v = c.value;
+  if(Object.prototype.toString.call(v) === '[object Array]'){
+    if(c.op === 'in') v = '{' + v.join('、') + '}';
+    else v = '[' + v[0] + ', ' + v[1] + ']' + (c.op === 'not_between' ? ' 之外' : '');
+  }
+  return lab + ' ' + sym + ' ' + v;
+}
+function advRenderChips(){
+  var box = $('advChips');
+  if(!box) return;
+  if(!advConds.length){ box.innerHTML = ''; return; }
+  var h = '<div class="advchips"><span style="font-size:12px;color:var(--tx3)">高级条件（与上方 AND）：</span>';
+  advConds.forEach(function(c, i){
+    h += '<span class="ktag advchip">' + esc(advDesc(c)) +
+         '<b class="advx" data-i="' + i + '" title="删除该条件">×</b></span>';
+  });
+  h += '<button class="btn sm ghost" id="advClear">清空高级条件</button></div>';
+  box.innerHTML = h;
+  box.querySelectorAll('.advx').forEach(function(x){
+    x.onclick = function(){
+      advConds.splice(Number(x.getAttribute('data-i')), 1);
+      advRenderChips();
+    };
+  });
+  var cl = $('advClear');
+  if(cl) cl.onclick = function(){ advConds = []; advRenderChips(); };
+}
+function advBind(){
+  if(!$('advBox')) return;
+  $('advField').onchange = advRenderOpSel;
+  $('advOp').onchange = advRenderValCtr;
+  $('advAdd').onclick = function(){
+    var r = advCollect();
+    var err = $('advErr');
+    if(r.err){ if(err) err.textContent = '⚠ ' + r.err; return; }
+    if(err) err.textContent = '';
+    advConds.push(r.cond);
+    advRenderChips();
+    advRenderValCtr();   // 清空取值控件，接着加下一条
+  };
+  // 取值控件里按回车 = 点「添加条件」。控件是动态重建的，用事件委托绑定一次
+  $('advValCtr').addEventListener('keydown', function(e){
+    if(e.key === 'Enter'){ e.preventDefault(); $('advAdd').onclick(); }
+  });
+}
+advLoadMeta();
+advBind();
 
 /* =========================================================================
    个股分析
