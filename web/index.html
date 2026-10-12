@@ -2178,6 +2178,7 @@ td .starbtn{font-size:16px}
           <button class="btn" data-adm="services">🧹 缓存管理</button>
           <button class="btn" data-adm="evalcache">🎯 体检缓存</button>
           <button class="btn" data-adm="sectoraudit">🔍 舆情巡检</button>
+          <button class="btn" data-adm="sectorverify">📊 舆情对账</button>
           <button class="btn" data-adm="backup">💾 系统备份</button>
           <button class="btn" data-adm="logs">📜 巡检与日志</button>
         </div>
@@ -4179,6 +4180,10 @@ var ADMIN_TABS = [
   {key:'sectoraudit', name:'舆情巡检', emo:'🔍',
    desc:'板块舆情规则每日自动巡检（默认 21:00，TICK_SECTOR_AUDIT_AT 可改）：把近 24h 快讯按板块聚合，用五条规则找「归类错误 / 利好利空错误」疑点——地缘实体灌水、泛化措辞误判、修正率异常、命中数突增、小样本低置信，落盘人读报告（data/sector_audit/audit_<日期>.md）。' +
         '<b>只报告，不自动改词表</b>：词表是业务判断，报告给疑点+建议，人确认后改 server/sector_sentiment.py 并跑 selfcheck（内含防回归断言）。'},
+  {key:'sectorverify', name:'舆情对账', emo:'📊',
+   desc:'板块舆情收盘对账（默认每个交易日 15:30，TICK_SECTOR_VERIFY_AT 可改）：结合收盘时的板块实际涨跌，对当天 24h 板块舆情做方向对账——准确率多少、错在哪、为什么错（舆情时效 / 利好未兑现 / 跑输大盘 / 利空未发酵 / 冲击有限）、怎么调整。' +
+        '口径三件事：<b>① 用「超额」不用裸涨跌</b>（板块组等权 − 上证，大盘涨 2% 板块涨 1% 其实相对弱）；<b>② 新闻窗口卡今天 15:00</b>（盘后快讯影响的是明天，算进今天等于把「明天的消息」当「今天判错」）；<b>③ 只对账不自动改词表</b>（同舆情巡检，词表是业务判断）。' +
+        '盘前 / 盘中 / 非交易日手动跑只出报告试看格式，不计入当日对账。'},
   {key:'logs', name:'巡检与日志', emo:'📜',
    desc:'健康巡检状态 / 连续失败次数 / 最近成功失败时间与历史；日志查看器（data/ 下 .log/.json，5 秒自动刷新，目录穿越防护），可<b>下载</b>全文或<b>清空</b>内容（清空保留文件句柄，不会让正在写的日志丢目标）。'}
 ];
@@ -4230,7 +4235,7 @@ function loadAdmin(force){
     userdata: admUserData, newfeat: admNewFeat,
     bars: admBars, database: admDatabase, modules: admModules,
     services: admServices, evalcache: admEvalCache, backup: admBackup, logs: admLogs,
-    access: admAccess, sectoraudit: admSectorAudit
+    access: admAccess, sectoraudit: admSectorAudit, sectorverify: admSectorVerify
   };
   (fns[admState.cur] || admOverview)(el);
 }
@@ -5158,6 +5163,86 @@ function admSectorAudit(el){
     }
     var b1 = $('admAuditRun'); if(b1) b1.onclick = function(){ run(24); };
     var b2 = $('admAuditRun72'); if(b2) b2.onclick = function(){ run(72); };
+  }).catch(function(e){ die(el, '读取失败：' + e.message); });
+}
+
+/* #189 板块舆情收盘对账：交易日 15:30 自动跑，用收盘板块涨跌回验当日
+   24h 舆情方向准确率。口径见 ADMIN_TABS 里 sectorverify 的 desc：
+   超额不用裸涨跌、新闻窗口卡 15:00、只对账不改词表。 */
+function admSectorVerify(el){
+  admApi('/sector-verify').then(function(d){
+    admState.loaded.sectorverify = 1;
+    var rc = d.recent || [], last = rc.length ? rc[rc.length - 1] : null;
+    var h = '<div class="card"><div class="card-h"><h2>📊 舆情收盘对账</h2>' +
+            '<div class="meta">每个交易日自动 · 只对账不改词表</div></div><div class="card-b">';
+    h += '<div class="verdict">' +
+      '<div class="vbox"><div class="lb">调度状态</div><div class="vl ' +
+        (d.enabled ? 'up' : 'warn') + '" style="font-size:15px">' +
+        (d.enabled ? '✅ 运行中' : '⚠ 未运行') + '</div><div class="sub">交易日 ' +
+        esc(d.at || '—') + '</div></div>' +
+      '<div class="vbox"><div class="lb">今天已跑</div><div class="vl ' +
+        (d.done_today ? 'up' : 'warn') + '">' + (d.done_today ? '是' : '否') +
+        '</div><div class="sub">' + esc(d.last_ok || '—') + '</div></div>' +
+      '<div class="vbox"><div class="lb">上次结果</div><div class="vl" style="font-size:13px">' +
+        esc(d.last_result || '—') + '</div><div class="sub">meta 表记录</div></div>' +
+      '<div class="vbox"><div class="lb">近期准确率</div><div class="vl ' +
+        (last ? (last.acc >= 0.7 ? 'up' : (last.acc < 0.4 ? 'down' : '')) : '') +
+        '" style="font-size:15px">' +
+        (last ? Math.round(last.acc * 100) + '%' : '—') +
+        '</div><div class="sub">' +
+        (last ? esc(last.date) + ' · ' + last.hits + '/' + last.n_dir + ' 个方向板块' : '暂无对账历史') +
+        '</div></div></div>';
+    h += '<div class="admtip" style="margin-top:12px">口径三件事：' +
+      '<b>① 用超额不用裸涨跌</b>（板块组等权 − 上证指数，超额 ±0.5% 内记「平」）；' +
+      '<b>② 新闻窗口卡今天 15:00</b>（盘后快讯影响的是明天，算进今天等于把「明天的消息」当「今天判错」）；' +
+      '<b>③ 只对账不改词表</b>（同舆情巡检）。' +
+      '报告落在 <code>data/sector_verify/verify_&lt;日期&gt;.md</code>，' +
+      '准确率趋势存 <code>history.json</code>（90 天）。' +
+      '盘前 / 盘中 / 非交易日手动跑只出报告试看格式，<b>不计入当日对账</b>。</div>';
+    if(rc.length){
+      h += '<div style="margin-top:14px"><div style="font-size:12px;color:var(--tx3);margin-bottom:6px">' +
+           '近 ' + rc.length + ' 次对账趋势（按交易日）</div>' +
+           '<table style="width:100%;font-size:12px;border-collapse:collapse">' +
+           '<tr style="color:var(--tx3);text-align:left"><th style="padding:4px 8px">日期</th>' +
+           '<th style="padding:4px 8px">准确率</th>' +
+           '<th style="padding:4px 8px">命中/方向板块</th>' +
+           '<th style="padding:4px 8px">快讯样本</th></tr>';
+      for(var i = rc.length - 1; i >= 0; i--){
+        var r = rc[i];
+        var cls = r.acc >= 0.7 ? 'up' : (r.acc < 0.4 ? 'down' : '');
+        h += '<tr style="border-top:1px solid var(--bd)"><td style="padding:4px 8px">' +
+          esc(r.date) + '</td><td style="padding:4px 8px" class="' + cls + '">' +
+          Math.round(r.acc * 100) + '%</td><td style="padding:4px 8px">' +
+          r.hits + ' / ' + r.n_dir + '</td><td style="padding:4px 8px">' +
+          (r.items || 0) + ' 条</td></tr>';
+      }
+      h += '</table></div>';
+    }
+    h += '<div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">' +
+      '<button class="btn pri" id="admVrfRun">▶ 立即对账（近 24h）</button>' +
+      '<button class="btn" id="admVrfRun72">近 72h</button>' +
+      '<span id="admVrfMsg" style="font-size:12px;color:var(--tx3)"></span></div>';
+    h += '</div></div>';
+    el.innerHTML = h;
+
+    var msg = $('admVrfMsg');
+    function run(hours){
+      if(msg) msg.textContent = '对账中…';
+      admApi('/sector-verify/run', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({hours:hours})
+      }).then(function(r){
+        if(!r.ok){ if(msg) msg.textContent = '失败'; return; }
+        if(msg) msg.textContent = '✅ ' + r.items + ' 条快讯 / ' + r.n_dir +
+          ' 个方向板块 / 命中 ' + r.hits + '（准确率 ' +
+          Math.round((r.acc || 0) * 100) + '%）' +
+          (r.counted ? ' · 已计入当日' : ' · ⚠️ 试跑不计入（需交易日且已过 15:00）') +
+          ' · ' + (r.at || '');
+        setTimeout(function(){ if(admState.cur === 'sectorverify') loadAdmin(true); }, 1200);
+      }).catch(function(e){ if(msg) msg.textContent = '失败：' + e.message; });
+    }
+    var b1 = $('admVrfRun'); if(b1) b1.onclick = function(){ run(24); };
+    var b2 = $('admVrfRun72'); if(b2) b2.onclick = function(){ run(72); };
   }).catch(function(e){ die(el, '读取失败：' + e.message); });
 }
 

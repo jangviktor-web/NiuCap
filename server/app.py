@@ -236,6 +236,15 @@ def startup():
     except Exception as e:
         print(f"[sector-audit] 每日巡检调度启动失败（不影响其他功能）：{e}")
 
+    # #189 板块舆情收盘对账：默认 15:30（仅交易日）。用收盘板块涨跌
+    # 回验当日 24h 舆情方向准确率，产出错因研判+调整建议报告。
+    # 非交易日/盘前不跑（对账没意义：没有当日行情可对）。
+    try:
+        import sector_verify as _sv
+        _sv.start_daily_verify()
+    except Exception as e:
+        print(f"[sector-verify] 每日对账调度启动失败（不影响其他功能）：{e}")
+
     # 服务启动补跑。原来是「今天必须已落库成功才补」——于是白天重启、
     # 或落库失败的次日重启，缓存就一直空着，要等到 16:30 才有数据。
     # 改成按缓存自身状态决定：
@@ -3723,6 +3732,40 @@ def api_admin_sector_audit_run(request: Request,
     if hours <= 0 or hours > 168:
         raise HTTPException(400, "hours(1~168) 超出范围")
     return {"ok": True, **_sa.run_audit(hours=hours, why="后台手动")}
+
+
+# ===========================================================================
+# 板块舆情收盘对账（#189，仅管理员）
+#
+# 每个交易日 15:30（TICK_SECTOR_VERIFY_AT 可调）自动跑一次：结合收盘时的
+# 板块实际涨跌，对当天 24h 板块舆情做方向对账，输出准确率、错因研判
+# （舆情时效/利好未兑现/跑输大盘/利空未发酵/冲击有限）与调整建议，
+# 落盘人读报告（data/sector_verify/verify_<日期>.md）。
+# 与 #188 同一原则：只对账、不自动改词表。
+# 注意：盘前/盘中/非交易日手动跑只出报告（counted=false），不计入当日。
+# ===========================================================================
+
+@app.get("/api/admin/sector-verify")
+def api_admin_sector_verify(request: Request):
+    """对账调度状态：今天跑过没、近期准确率趋势、下次时间。"""
+    _require_admin(request)
+    import sector_verify as _sv
+    return _sv.verify_state()
+
+
+@app.post("/api/admin/sector-verify/run")
+def api_admin_sector_verify_run(request: Request,
+                                payload: Dict[str, Any] = Body(default={})):
+    """手动跑一次对账（交易日收盘后跑才计入当日，其余为试跑）。"""
+    _require_admin(request)
+    import sector_verify as _sv
+    try:
+        hours = int(payload.get("hours", 24))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "hours 必须是正整数")
+    if hours <= 0 or hours > 168:
+        raise HTTPException(400, "hours(1~168) 超出范围")
+    return {"ok": True, **_sv.run_verify(hours=hours, why="后台手动")}
 
 
 # ===========================================================================
