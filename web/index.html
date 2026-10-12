@@ -34,7 +34,10 @@ a{color:var(--accent);text-decoration:none}
 
 /* ---------- 顶栏 ---------- */
 header{background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:100}
-.hd{max-width:1280px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+/* ponytail: .hd 补下边框——nav 挪进 header 后，顶栏与导航条之间的分隔线
+   改由这里提供（header 自身的 border-bottom 现在落在 nav 底部，与 nav 的
+   重叠成一条，视觉上和改动前一致）。 */
+.hd{max-width:1280px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
 .logo{font-size:17px;font-weight:700;letter-spacing:-.2px;display:flex;align-items:center;gap:8px;white-space:nowrap}
 .logo .dot{width:9px;height:9px;border-radius:50%;background:var(--up);box-shadow:0 0 0 3px rgba(217,52,43,.15)}
 .logo small{font-weight:400;color:var(--tx3);font-size:12px}
@@ -259,6 +262,10 @@ tbody tr:hover{background:#f7f9fc}
   .hd{padding:10px 11px;gap:9px}
   .logo{font-size:15px} .logo small{display:none}
   .navinner{padding:0 11px}
+  /* ponytail: 手机端搜索框显式占满第二行（order 排最后）——否则它在
+     190~380px 之间反复横跳：logo 短时塞进第一行，长一点又被挤下去，
+     且和 uarea 抢位。固定为「第一行 ☰+logo+用户，第二行搜索框满宽」。 */
+  .searchbox{order:5;flex:1 1 100%;max-width:none;min-width:0}
   /* 手机端：inline tab 行被 navright 挤压成约 5px 不可点 → 改用汉堡抽屉；
      汉堡上移到顶栏「运行正常」徽章旁（#navToggleM），导航条内原按钮让位 */
   #navToggleM{display:inline-flex !important}
@@ -641,7 +648,9 @@ td .starbtn{font-size:16px}
 .wttoast.show{opacity:1}
 
 /* ---------- 顶部用户区 ---------- */
-.uarea{margin-left:14px;flex-shrink:0;display:flex;align-items:center;gap:8px}
+/* ponytail: 原 margin-left:14px 与父级 .hd 的 gap:14 叠加 → 用户区与左侧
+   元素间距 28px，是其他元素间距的两倍，视觉上 user 区被推远。删掉。 */
+.uarea{flex-shrink:0;display:flex;align-items:center;gap:8px}
 .ubtn{border:1px solid var(--line);background:var(--bg2,#fff);color:var(--tx1);
   font-size:13px;padding:7px 14px;border-radius:8px;cursor:pointer;white-space:nowrap}
 .ubtn:hover{border-color:var(--accent);color:var(--accent)}
@@ -993,13 +1002,15 @@ td .starbtn{font-size:16px}
     <span class="hbadge" id="hBadge" title="巡检告警" style="display:none">🚨 <b id="hBadgeN">0</b></span>
     <div class="uarea" id="uArea">
       <button class="ubtn" id="uLogin">登录 / 注册</button>
-    </div>  </div>
-</header>
-
-<nav>
-  <div class="navinner">
-  <button class="nav-toggle" id="navToggle" aria-label="菜单" aria-expanded="false"><span class="bars">☰</span>菜单</button>
-  <div class="tabs">
+    </div>
+  </div>
+  <!-- ponytail: nav 原在 header 外（仅 header 吸顶）→ 页面一滚动，19 个页签的
+       导航条就滚出视野，切页签必须回滚到顶。现挪进 header 内整体吸顶；
+       JS 只依赖 .tabs button / #navToggle(M)，无 nav 元素级依赖，安全。 -->
+  <nav>
+    <div class="navinner">
+      <button class="nav-toggle" id="navToggle" aria-label="菜单" aria-expanded="false"><span class="bars">☰</span>菜单</button>
+      <div class="tabs">
     <button class="on" data-tab="rank" data-group="watch">📊 市场榜单</button>
     <!-- ponytail: 原「市场热点」「异动监控」两个页签已合并进「市场榜单」工具栏；
          按钮保留但隐藏，避免外部/内联跳转（data-tab="hot" 等）静默失效
@@ -1024,12 +1035,13 @@ td .starbtn{font-size:16px}
     <button data-tab="admin" id="tabBtnAdmin" style="display:none" data-group="mine">⚙️ 后台管理</button>
   </div>
   <div class="navright">
-    <span class="mktclock" id="mktClock" title="沪深交易时段（忽略法定节假日）">—</span>
+    <span class="mktclock" id="mktClock" title="沪深交易时段（北京时间，含法定休市日与调休补班）">—</span>
     <label class="autoref"><input type="checkbox" id="autoRef" checked> 自动刷新</label>
     <span class="reftip" id="refTip">—</span>
   </div>
   </div>
-</nav>
+  </nav>
+</header>
 
 <!-- 手机端汉堡抽屉：复用现有 tab 列表，避免 navright 把标签栏挤压成不可点 -->
 <div class="navdrawer" id="navDrawer" aria-hidden="true">
@@ -10556,8 +10568,13 @@ document.addEventListener('click', function(ev){
     if(M>=690 && M<780)  return {cls:'mc-lunch', line:'午休 · 13:00 开盘'};
     if(M>=780 && M<897)  return {cls:'mc-open',  line:'交易中 · 距收盘 '+fmtSpan(897-M)};
     if(M>=897 && M<900)  return {cls:'mc-call',  line:'尾盘集合 · 15:00 收盘'};
-    var toOpen=(24*60-M)+555;
-    return {cls:'mc-closed', line:'已收盘 · 明日 09:15 集合竞价'};
+    // ponytail: 走到这里的必是工作日（周末/节假日上面已拦）。
+    // 盘前不能说「已收盘」——那是收盘后才有的状态；原实现还有两个错：
+    // ① 06:59 盘前显示「已收盘 · 明日 09:15」，开盘其实是今天 9:15；
+    // ② 周五 15:00 后也显示「明日 09:15」，实际下一个竞价是周一。
+    if(M<555) return {cls:'mc-closed', line:'盘前 · 今日 09:15 集合竞价'};
+    var nextDay = (t.wd === 5) ? '下周一' : '明日';
+    return {cls:'mc-closed', line:'已收盘 · ' + nextDay + ' 09:15 集合竞价'};
   }
   // 虚拟盘可交易判断：连续竞价(mc-open) + 集合竞价(mc-call)；午休/收盘/周末均不可。
   // 仅作前端即时拦截（省一次无效请求），真正硬约束在后端 market_state 守卫。
@@ -10587,7 +10604,7 @@ document.addEventListener('click', function(ev){
     var s=mktSession(new Date());
     clockEl.className='mktclock '+s.cls;
     clockEl.textContent=(s.cls==='mc-open'?'● ':'○ ')+s.line;
-    clockEl.title='沪深交易时段（北京时间，忽略法定节假日）';
+    clockEl.title='沪深交易时段（北京时间，含法定休市日与调休补班）';
     updatePaperTradeLock();
   }
   renderMktClock();
