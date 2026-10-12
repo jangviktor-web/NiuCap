@@ -18,12 +18,40 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "server"))
 
 BASE = "http://127.0.0.1:8899"
 
+# 选股端点已改成「必须登录」，本用例要用带会话的连接。
+# 统一走 Session：注册（已存在则登录）一次，cookie 自动带上，下面所有请求不用各自改。
+SESSION = requests.Session()
+_TEST_USER = os.environ.get("TICK_E2E_USER", "e2e_screen")
+_TEST_PASS = os.environ.get("TICK_E2E_PASS", "E2eScreen123456")
+
+
+def ensure_login():
+    try:
+        r = SESSION.post(BASE + "/api/auth/register",
+                         json={"username": _TEST_USER, "password": _TEST_PASS,
+                               "display": "e2e"}, timeout=15)
+        if r.ok:
+            return True
+    except Exception:
+        pass
+    try:
+        r = SESSION.post(BASE + "/api/auth/login",
+                         json={"username": _TEST_USER, "password": _TEST_PASS},
+                         timeout=15)
+        return r.ok
+    except Exception:
+        return False
+
+
+if not ensure_login():
+    print("⚠ 拿不到登录会话，涉及选股端点的用例会被 401 判失败")
+
 
 def req(method, path, body=None, timeout=150):
     try:
-        r = requests.request(method, BASE + path,
-                             json=body if body is not None else None,
-                             timeout=timeout)
+        r = SESSION.request(method, BASE + path,
+                            json=body if body is not None else None,
+                            timeout=timeout)
         try:
             j = r.json()
         except Exception:
@@ -76,6 +104,15 @@ def main():
     # ---- 2. 选股历史存档 CRUD（直接走 store，确定性） ----
     import store
     store.initialize()
+    # 视野对齐：本用例同时用「进程内 store」和「HTTP 会话」两个视角。
+    # 选股端点要求登录后，HTTP 侧是 e2e_screen；store 侧默认是本地匿名账号，
+    # 两边 user_id 不一致时，明细接口会按归属过滤返回 404 —— 先把 store 切过去。
+    try:
+        _me = SESSION.get(BASE + "/api/auth/me", timeout=10).json().get("user")
+        if _me and _me.get("id"):
+            store.set_current_user(int(_me["id"]))
+    except Exception:
+        pass
     # 注意：list_screen_history 默认 limit=200，而库里真实存量早已超过 200，
     # 因此「before/after 计数 +1」的旧断言会被这个封顶永久击穿（before==after==200）。
     # 改为按 id 回查：既不受封顶影响，也不受并发存档干扰。

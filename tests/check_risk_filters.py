@@ -24,6 +24,34 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 BASE = "http://127.0.0.1:8899"
 results = []
 
+# 选股端点已改成「必须登录」，HTTP 集成用例因此需要一个真实会话。
+# 这里注册一个专用自测账号（已存在会 400，自动回落到登录）—— 幂等，跑多少次都不炸。
+_TEST_USER = os.environ.get("TICK_E2E_USER", "e2e_screen")
+_TEST_PASS = os.environ.get("TICK_E2E_PASS", "E2eScreen123456")
+
+
+def _post_json(path, body):
+    """POST 并返回 Set-Cookie（失败返回空串，交给调用方回落）。"""
+    req = urllib.request.Request(
+        BASE + path, data=json.dumps(body).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.headers.get("Set-Cookie", "")
+    except Exception:
+        return ""
+
+
+def _auth_cookie():
+    body = {"username": _TEST_USER, "password": _TEST_PASS, "display": "e2e"}
+    ck = (_post_json("/api/auth/register", body)
+          or _post_json("/api/auth/login", {"username": _TEST_USER,
+                                            "password": _TEST_PASS}))
+    return ck.split(";")[0] if ck else ""
+
+
+COOKIE = _auth_cookie()
+
 
 def check(name, ok, detail=""):
     results.append((name, ok))
@@ -93,11 +121,16 @@ def unit_tests():
 
 # ============ B. HTTP 集成 ============
 def get(path):
-    with urllib.request.urlopen(BASE + path, timeout=120) as r:
+    # 带会话：不带会被守卫 401（这是守护生效的证据，不是脚本 bug）
+    req = urllib.request.Request(BASE + path, headers={"Cookie": COOKIE})
+    with urllib.request.urlopen(req, timeout=120) as r:
         return json.loads(r.read().decode())
 
 
 def http_tests():
+    if not COOKIE:
+        check("B0 拿到登录会话", False, "注册/登录都失败，后面用例必然 401")
+        return
     d = get("/api/strategy_scan?keys=pullback_ma20&mode=union&limit=500")
     rf = (d.get("diag") or {}).get("risk_filter") or {}
     check("B1 diag.risk_filter 存在", isinstance(rf, dict) and "enabled" in rf,

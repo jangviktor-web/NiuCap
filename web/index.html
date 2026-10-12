@@ -759,6 +759,10 @@ td .starbtn{font-size:16px}
 .mb .fg label{display:block;font-size:12px;color:var(--tx3);margin-bottom:6px}
 .mb .fg .in{width:100%}
 .merr{color:var(--up);font-size:12px;min-height:16px;margin-bottom:8px}
+/* 选股守卫提示：告诉用户「为什么被拦」而不是干瘪一句 401 */
+.needtip{background:rgba(217,52,43,.08);border:1px solid rgba(217,52,43,.28);
+  color:var(--up);font-size:12.5px;line-height:1.55;padding:9px 11px;
+  border-radius:8px;margin-bottom:12px}
 .msub{width:100%;height:40px}
 .msw{text-align:center;font-size:13px;color:var(--tx3);margin-top:14px}
 .msw a{color:var(--accent);text-decoration:none;margin-left:4px}
@@ -2264,6 +2268,59 @@ function api(path, opts){
     return r.json();
   });
 }
+
+/* =========================================================================
+   选股守卫：所有筛选 / 扫描类操作必须登录
+   ------------------------------------------------------------------
+   后端已经在各选股端点上挡了一道 HTTP 401，前端再拦一层不是重复劳动：
+     · 省算力 —— 全市场扫描是最贵的请求，明知会被 401 就别发；
+     · 能续跑 —— 后端 401 只能给一句报错，用户还得自己再点一次按钮；
+       前端拦下来，登录成功后 afterLogin() 把那次操作原样补上。
+   后端那层仍是真正的边界：绕过页面直接打接口照样进不来。
+
+   两条不同的路，别混：
+     · guardScreen(fn, label) —— 用户点的：弹登录框 + 登录后自动续跑；
+     · screenNeedLogin(el)     —— 定时器自动刷新的：只给提示，绝不弹框。
+       理由：自动刷新没经过用户，弹框既烦人又没有额外信息量。
+   ========================================================================= */
+var screenPending = null;   // 被拦下、等登录成功后补跑的一次操作
+
+function isScreenGuardError(e){
+  var m = (e && e.message) ? String(e.message) : '';
+  return m.indexOf('选股功能需要登录') >= 0;
+}
+
+/* 自动刷新路径的静默兜底：在容器里放一句「请登录 + 登录链接」。 */
+function screenNeedLogin(el, label){
+  if(!el) return;
+  el.innerHTML = '<div class="empty" style="padding:26px 18px">🔒 ' +
+    esc(label || '选股') +
+    '需要登录后使用 —— <a href="javascript:void(0)" onclick="openAuth(\'login\')">登录 / 注册</a></div>';
+}
+
+/* 包裹一个选股入口。
+   用法： btn.onclick = guardScreen(runScreen, '条件选股'); */
+function guardScreen(fn, label){
+  return function(){
+    var self = this, args = arguments;
+    function block(){
+      // 记住这次动作；submitAuth() 成功后 afterLogin() 会把它补跑
+      screenPending = { fn: fn, args: args, self: self, label: label || '选股' };
+      openAuth('login');
+      var tip = $('authNeedTip');
+      if(tip){
+        tip.textContent = '「' + (label || '选股') +
+          '」需要登录后使用，登录成功后会自动继续执行。';
+        tip.style.display = '';
+      }
+    }
+    // authState.loaded 为 false 时不能凭空判成未登录：首屏 loadMe() 还没回来，
+    // 这时候弹框会让刚刷新页面的老用户白登录一次。先问一次会话再决定。
+    if(authState.loaded) return authState.user ? fn.apply(self, args) : block();
+    loadMe().then(function(u){ u ? fn.apply(self, args) : block(); });
+  };
+}
+
 function loading(el, txt){
   el.innerHTML = '<div class="load"><span class="spin"></span>' + (txt || '加载中…') + '</div>';
 }
@@ -2631,7 +2688,12 @@ function runScreen(){
     $('screenerMeta').innerHTML = '<span class="ktag ktag-eod">盘后</span> 股票池 ' + d.universe + ' 只 · 时点 ' + (d.updated || '—');
     $('screenCount').textContent = '命中 ' + d.total + ' 只';
     renderScreen();
-  }).catch(function(e){ die(el, '筛选失败：' + e.message); });
+  }).catch(function(e){
+    // 会话过期了但前端还以为登录着：这时后端会回 401，与其说「筛选失败」，
+    // 不如直接让用户重新登录 —— 登录成功后 afterLogin 之外的下一次点击会正常走
+    if(isScreenGuardError(e)){ screenNeedLogin(el, '条件选股'); return; }
+    die(el, '筛选失败：' + e.message);
+  });
 }
 function renderScreen(){
   var el = $('screenBody');
@@ -2724,8 +2786,12 @@ document.querySelectorAll('[data-preset]').forEach(function(b){
     b.classList.add('on');
   };
 });
-$('f_run').onclick = runScreen;
-$('screenRateBtn').onclick = loadScreenRatings;
+// ponytail: 选股是需要登录的功能，入口统一包一层守卫；
+// runScreen 本体保持可直接调用（nlScreenParse 内部、登录续跑都要绕过守卫，
+// 那些路径已经确认过登录态，再判一次没必要）。
+var runScreenGuarded = guardScreen(runScreen, '条件选股');
+$('f_run').onclick = runScreenGuarded;
+$('screenRateBtn').onclick = guardScreen(loadScreenRatings, '加载指标评级');
 function loadScreenRatings(){
   var btn = $('screenRateBtn');
   var rows = state.screenRows || [];
@@ -2740,7 +2806,12 @@ function loadScreenRatings(){
       (d.items || []).forEach(function(it){ if(it && it.code) screenRatings[it.code] = it.rating_summary; });
       renderScreen();
     })
-    .catch(function(e){ wtToast('评级加载失败：' + e.message); })
+    .catch(function(e){
+      // 会话过期：后端 401。评级按钮本身已被守卫拦过，能走到这里说明
+      // 是登录态失效（cookie 过期 / 服务端重启），引导重新登录即可
+      if(isScreenGuardError(e)){ openAuth('login'); return; }
+      wtToast('评级加载失败：' + e.message);
+    })
     .finally(function(){ if(btn){ btn.disabled = false; btn.textContent = '📊 加载指标评级'; } });
 }
 $('f_reset').onclick = function(){
@@ -2759,7 +2830,7 @@ $('f_reset').onclick = function(){
 };
 ['f_pe_min','f_pe_max','f_pb_min','f_pb_max','f_cap_min','f_cap_max',
  'f_chg_min','f_chg_max','f_tov_min','f_tov_max','f_amt_min'].forEach(function(id){
-  if($(id)) $(id).addEventListener('keydown', function(e){ if(e.key === 'Enter') runScreen(); });
+  if($(id)) $(id).addEventListener('keydown', function(e){ if(e.key === 'Enter') runScreenGuarded(); });
 });
 
 /* =========================================================================
@@ -2797,13 +2868,18 @@ function advLoadMeta(){
     advMeta = m;
     advRenderFieldSel();
     if($('advBox')) $('advBox').style.display = '';
-  }).catch(function(){
+  }).catch(function(e){
     // 拿不到目录 = 高级区不可用；旧参数通路完全不受影响
     advMeta = null;
     advConds = [];
     if($('advBox')) $('advBox').style.display = 'none';
     if($('advChips')) $('advChips').innerHTML = '';
     var e0 = $('advErr'); if(e0) e0.textContent = '';
+    // ponytail: 未登录时后端对 /api/screen/fields 也回 401。这时必须写清原因，
+    // 否则用户只看到「高级筛选整块凭空消失」，会当成功能坏了而不是没登录。
+    if(isScreenGuardError(e) && e0){
+      e0.textContent = '🔒 高级条件筛选需要登录后使用（登录 / 注册后刷新页面即可）';
+    }
   });
 }
 function advCurField(){
@@ -2977,12 +3053,14 @@ function nlScreenParse(){
     note.textContent = msg;
     runScreen();
   }).catch(function(e){
+    if(isScreenGuardError(e)){ openAuth('login'); return; }   // 会话过期，重新登录
     note.textContent = '解析失败：' + (e && e.message ? e.message : e);
   });
 }
-$('nlScreenParse').onclick = nlScreenParse;
+var nlScreenParseGuarded = guardScreen(nlScreenParse, '一句话选股');
+$('nlScreenParse').onclick = nlScreenParseGuarded;
 $('nlScreenClear').onclick = function(){ $('nlScreenInput').value = ''; $('nlScreenNote').textContent = ''; };
-$('nlScreenInput').addEventListener('keydown', function(e){ if(e.key === 'Enter') nlScreenParse(); });
+$('nlScreenInput').addEventListener('keydown', function(e){ if(e.key === 'Enter') nlScreenParseGuarded(); });
 
 /* =========================================================================
    个股分析
@@ -3872,6 +3950,7 @@ function runIntradayScan(){
       '<span>数据日期 <b>' + esc(ms.data_date || '—') + '</b></span>';
     renderIntradayScan(d);
   }).catch(function(e){
+    if(isScreenGuardError(e)){ screenNeedLogin(el, '盘中扫描'); return; }
     die(el, '扫描失败：' + e.message);
   });
 }
@@ -3942,7 +4021,10 @@ function renderIntradayScan(d){
     };
   });
 
-  scanBtn.onclick = runIntradayScan;
+  // ponytail: 用户点扫描 → 走守卫；runIntradayScan 本体保持可直接调用，
+// 登录后续跑、以及将来任何自动刷新路径用的都是它，不需要再判一次登录。
+scanBtn.onclick = guardScreen(runIntradayScan, '盘中扫描');
+
 })();
 
 /* =========================================================================
@@ -6472,7 +6554,10 @@ function runStrategyScan(){
     body.innerHTML = rankTable(d.items, true);
     bindRows(body);
     injectStrategyChecks(d.items);
-  }).catch(function(e){ die(body, '选股失败：' + e.message); });
+  }).catch(function(e){
+    if(isScreenGuardError(e)){ screenNeedLogin(body, '策略选股'); return; }
+    die(body, '选股失败：' + e.message);
+  });
 }
 
 /* =========================================================================
@@ -6723,7 +6808,7 @@ document.querySelectorAll('[data-smode]').forEach(function(b){
     b.classList.add('on'); stratState.mode = b.dataset.smode;
   };
 });
-if($('stratRun')) $('stratRun').onclick = runStrategyScan;
+if($('stratRun')) $('stratRun').onclick = guardScreen(runStrategyScan, '策略选股');
 if($('stratClear')) $('stratClear').onclick = function(){
   stratState.picked = [];
   document.querySelectorAll('.stratitem.on').forEach(function(x){ x.classList.remove('on'); });
@@ -9068,7 +9153,7 @@ function renderNewbiePicks(){
   $('nbPicks').innerHTML = h;
 
   Array.prototype.forEach.call($('nbPicks').querySelectorAll('[data-nbpick]'), function(el){
-    el.onclick = function(){ runNewbie(el.dataset.nbpick); };
+    el.onclick = function(){ runNewbieGuarded(el.dataset.nbpick); };
   });
 }
 
@@ -9089,6 +9174,12 @@ function runNewbie(key, force){
 
   fetch(url).then(function(r){ return r.json(); }).then(function(d){
     if(nbState.cur !== key) return;          // 用户已切换，丢弃过期响应
+    // 未登录（定时器自动刷新会走到这里，那条路径不经过守卫、不该弹框）：
+    // 给一句「请登录 + 登录入口」，比渲染成「没有符合条件的结果」诚实
+    if(d && d.detail && String(d.detail).indexOf('登录后使用') >= 0){
+      screenNeedLogin($('nbBody'), '一键选股');
+      return;
+    }
     nbState.data = d;
     renderNewbieResult(d);
 
@@ -9198,17 +9289,24 @@ function goStock(code){
   }catch(e){ /* 静默：跳转失败不影响主流程 */ }
 }
 
+// ponytail: 用户主动点进来的三个入口走守卫；refreshTab() 里的自动刷新仍直接调
+// runNewbie —— 那条路径没经过用户，弹框只会惹人烦，命中 401 时由 runNewbie
+// 自己在结果区放一句「请登录」。
+// 注意：这个包装器必须声明在 IIFE 外面 —— 方案卡片的 onclick 是跨作用域引用它的，
+// 塞进 IIFE 里会得到 "runNewbieGuarded is not defined"（踩过一次）。
+var runNewbieGuarded = guardScreen(runNewbie, '一键选股');
+
 // 初始化绑定
 (function(){
   var lim = $('nbLimit');
   if(lim) lim.onchange = function(){
     nbState.limit = parseInt(lim.value, 10) || 20;
-    if(nbState.cur) runNewbie(nbState.cur);
+    if(nbState.cur) runNewbieGuarded(nbState.cur);
   };
   var rf = $('nbRefresh');
   if(rf) rf.onclick = function(){
     if(!nbState.cur){ alert('请先选一个方案'); return; }
-    runNewbie(nbState.cur, true);
+    runNewbieGuarded(nbState.cur, true);
   };
 })();
 </script>
@@ -9343,11 +9441,19 @@ function openAuth(mode){
   if(u){ u.value = ''; setTimeout(function(){ u.focus(); }, 60); }
   $('authPwd').value = '';
   $('authDisp').value = '';
+  var t = $('authNeedTip');
+  if(t) t.style.display = 'none';    // 每次开框先复位，避免上次的守卫提示残留
   $('authErr').textContent = '';
 }
-function closeAuth(){
+/* byUser=false 表示「登录成功后自动关」，这时必须保留 screenPending ——
+   下面 afterLogin() 还要拿它续跑。踩过一次的坑：早期版本无条件清空，
+   结果 closeAuth 在 submitAuth 里先执行，把待续跑的动作抹掉了。 */
+function closeAuth(byUser){
   var m = $('authModal');
   if(m) m.classList.remove('on');
+  if(byUser !== false) screenPending = null;   // 用户主动关：那次操作就不续跑了
+  var t = $('authNeedTip');
+  if(t) t.style.display = 'none';
 }
 function updateAuthMode(){
   var isReg = authMode === 'register';
@@ -9382,7 +9488,7 @@ function submitAuth(){
       if(!res.ok){ err.textContent = res.j.detail || '操作失败'; return; }
       authState.user = res.j.user;
       renderUserArea();
-      closeAuth();
+      closeAuth(false);       // ← 别清 screenPending，紧跟着的 afterLogin() 要续跑
       wtToast(authMode === 'register' ? '注册成功，已登录' : '登录成功');
       afterLogin();
     }).catch(function(){
@@ -9395,6 +9501,7 @@ function doLogout(){
   fetch('/api/auth/logout', { method:'POST' }).then(function(){
     authState.user = null;
     renderUserArea();
+    screenPending = null;     // 退出登录后不该还有「待续跑」的选股动作
     wtToast('已退出登录');
     afterLogin();
   });
@@ -9409,6 +9516,18 @@ function afterLogin(){
   var t = active && active.dataset.tab;
   if(t === 'watch'){ loadWatch(); }
   else if(t === 'paper'){ loadPaper(); }
+  // 登录成功后重拉高级筛选目录：未登录时它是被 401 挡住、整块隐藏的，
+  // 不重拉的话用户得手动刷新才能见到「高级条件筛选」
+  if(typeof advLoadMeta === 'function'){ advLoadMeta(); }
+  // 选股守卫续跑：登录前被拦下的那次操作，登录成功后原参数补跑一次。
+  // reason: 用户点「执行选股」→ 弹登录框 → 登录完自动出结果，不用再点一次。
+  if(screenPending){
+    var p = screenPending; screenPending = null;
+    setTimeout(function(){
+      try{ p.fn.apply(p.self, p.args); }
+      catch(e){ console.error('[guard] 续跑失败：' + ((e && e.message) || e)); }
+    }, 120);
+  }
 }
 
 /* ---- 绑定 ---- */
@@ -9421,7 +9540,8 @@ function afterLogin(){
     var lg = $('uLogin');
     if(lg) lg.onclick = function(){ openAuth('login'); };
     var cl = $('authClose');
-    if(cl) cl.onclick = closeAuth;
+    // 用户点了关闭：清掉待续跑；reopen 时重新拦一次、重新记一次
+    if(cl) cl.onclick = function(){ closeAuth(true); };
     var sw = $('authSwap');
     if(sw) sw.onclick = function(){ openAuth(authMode === 'login' ? 'register' : 'login'); };
     var sb = $('authSubmit');
@@ -9433,9 +9553,9 @@ function afterLogin(){
       });
     });
     var md = $('authModal');
-    if(md) md.onclick = function(ev){ if(ev.target === md) closeAuth(); };
+    if(md) md.onclick = function(ev){ if(ev.target === md) closeAuth(true); };
     document.addEventListener('keydown', function(ev){
-      if(ev.key === 'Escape') closeAuth();
+      if(ev.key === 'Escape') closeAuth(true);
     });
     loadMe();
     loadHealth();          // 加载巡检告警状态（未跑过巡检则不显示角标）
@@ -9986,6 +10106,7 @@ document.addEventListener('click', function(ev){
       <button class="mclose" id="authClose">✕</button>
     </div>
     <div class="mb">
+      <div class="needtip" id="authNeedTip" style="display:none"></div>
       <div class="fg"><label>用户名</label>
         <input id="authUser" class="in" autocomplete="username" placeholder="2-24 个字符"></div>
       <div class="fg"><label>密码</label>
@@ -10000,7 +10121,8 @@ document.addEventListener('click', function(ev){
         <a href="javascript:void(0)" id="authSwap">立即注册</a>
       </div>
       <div class="mnote">自选股不登录也能用（数据存在本地账号下）；
-        <b>虚拟盘需要登录</b>，数据按账号隔离、可跨设备延续。</div>
+        <b>选股（条件 / 一句话 / 策略 / 盘中 / 一键）与虚拟盘需要登录</b>，
+        数据按账号隔离、可跨设备延续。</div>
     </div>
   </div>
 </div>

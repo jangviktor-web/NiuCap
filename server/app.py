@@ -682,6 +682,32 @@ def api_market(
     }
 
 
+def _require_screen_login(request: Request) -> Dict[str, Any]:
+    """选股守卫：所有筛选 / 扫描类端点必须登录后才能用。
+
+    为什么不像自选股那样允许匿名：
+      1. 选股是**重算型**请求（拉全市场快照 + 逐票算指标），一次「条件选股」
+         在后端等价于上千次行情拉取 + CPU 计算，匿名放开等于把算力送给脚本批量刷；
+      2. 选股结果会落「筛选历史」并做后续业绩跟踪，匿名记录无从归属，认领时
+         会在同一台机器上把别人的历史一并领走；
+      3. 虚拟盘已先行要求登录（``_require_login``），选股与它同属「产出型功能」，
+         边界一致比给每个功能各想一套例外更好解释。
+
+    刻意不动的边界：
+      - ``/api/market``、``/api/rank`` 这类「看一眼」的行情接口仍匿名可用
+        —— 阅读不承担算力成本，拦了会把纯看盘用户挡在外面；
+      - ``/api/screen/history`` 只读也放开 —— 它本来就有「匿名 → 登录」认领链路，
+        拦了反而让老用户此前存的历史查不到。
+
+    体验由前端配合兜住：命中 401 时弹登录框，登录成功自动续跑被拦的那次操作，
+    用户不必再点一次按钮。
+    """
+    u = _current_user(request)
+    if not u:
+        raise HTTPException(401, "选股功能需要登录后使用")
+    return u
+
+
 def _legacy_screen_conditions(
     pe_min, pe_max, pb_min, pb_max, cap_min, cap_max,
     chg_min, chg_max, turnover_min, turnover_max, amount_min,
@@ -736,6 +762,7 @@ def _legacy_screen_conditions(
 
 @app.get("/api/screener")
 def api_screener(
+    request: Request,
     pe_min: Optional[float] = None, pe_max: Optional[float] = None,
     pb_min: Optional[float] = None, pb_max: Optional[float] = None,
     cap_min: Optional[float] = None, cap_max: Optional[float] = None,
@@ -765,6 +792,7 @@ def api_screener(
       ``/api/screener?filters=[{"field":"turnover","op":"between","value":[3,15]},``
       ``{"field":"market","op":"in","value":["sz","sh"]}]``
     """
+    _require_screen_login(request)
     rows = MARKET.ensure()
 
     # filters 是用户手写的 JSON：解析失败要给 400 并说清位置，
@@ -841,12 +869,13 @@ def api_screener(
 
 
 @app.get("/api/screen/fields")
-def api_screen_fields():
+def api_screen_fields(request: Request):
     """列出 /api/screener 的 filters 可用字段与算子。
 
     静态幂等数据，前端据此动态渲染筛选项 —— 加一个可筛字段只需在
     ``screen_dsl.FIELDS`` 加一行，不用改 API 签名也不用改前端。
     """
+    _require_screen_login(request)
     fields = [{"key": k, "label": f.label, "kind": f.kind, "unit": f.unit,
                "cat": f.cat}
               for k, f in sdsl.FIELDS.items()]
@@ -1057,6 +1086,7 @@ def api_kline_intraday(
 
 @app.get("/api/intraday_scan")
 def api_intraday_scan(
+    request: Request,
     period: str = Query("5m", description="1m/5m/15m/30m/60m"),
     preset: str = Query("vol_surge", description="预设条件，见 /api/intraday_presets"),
     limit: int = Query(50, ge=1, le=300),
@@ -1071,6 +1101,7 @@ def api_intraday_scan(
     需要 eltdx 批量源（全市场约 18 秒）。腾讯降级路径下会拒绝执行并
     返回明确原因——逐只跑全市场要 24 分钟，不如直接告诉用户。
     """
+    _require_screen_login(request)
     p = ds.normalize_intraday_period(period)
     if not p:
         raise HTTPException(
@@ -1311,6 +1342,7 @@ def api_strategy_list():
 
 @app.get("/api/strategy_scan")
 def api_strategy_scan(
+    request: Request,
     keys: str = Query(..., description="策略 key，逗号分隔"),
     mode: str = Query("union", description="union/intersect"),
     pool: str = Query("all"),
@@ -1325,6 +1357,7 @@ def api_strategy_scan(
     不传时行为与改造前完全一致。非法 JSON 会被忽略（回落默认参数），
     以免一个坏参数导致整个扫描失败。
     """
+    _require_screen_login(request)
     rows = MARKET.ensure()
     if pool and pool != "all":
         rows = [r for r in rows if pool in (r.get("pools") or [])]
@@ -2095,6 +2128,7 @@ def _rating_for(code, period, count):
 
 @app.get("/api/rating_batch")
 def api_rating_batch(
+    request: Request,
     codes: str = Query(..., description="逗号分隔，最多 100 只，如 sh600000,sz000001"),
     period: str = Query("1d"),
     count: int = Query(250, ge=60, le=800),
@@ -2104,6 +2138,7 @@ def api_rating_batch(
     仅算 rating_summary，不返回全量指标，payload 小。
     用于选股结果列表「加载指标评级」按钮（B1：按需、仅当前页）。
     """
+    _require_screen_login(request)
     raw = [c.strip() for c in codes.split(",") if c.strip()]
     if not raw:
         raise HTTPException(400, "请提供至少一个股票代码")
@@ -2133,6 +2168,7 @@ def api_newbie_presets():
 
 @app.get("/api/newbie_pick")
 def api_newbie_pick(
+    request: Request,
     preset: str = Query("steady", description="steady/rebound/growth/hot"),
     limit: int = Query(20, ge=1, le=50),
     refresh: bool = Query(False, description="强制后台重算（不阻塞，仍返回旧值）"),
@@ -2142,6 +2178,7 @@ def api_newbie_pick(
     走后台预计算缓存，毫秒级返回。若缓存未就绪，会触发后台计算并如实返回
     computing 状态，前端据此显示"正在扫描"，而不是假装有结果。
     """
+    _require_screen_login(request)
     if preset not in nwb.PRESET_BY_KEY:
         raise HTTPException(400, f"未知方案: {preset}")
 
@@ -2875,8 +2912,9 @@ def api_valuation(code: str = Query(..., description="股票代码，如 sh60051
 # ===========================================================================
 
 @app.get("/api/intent_parse")
-def api_intent_parse(text: str = Query(..., min_length=1, description="策略自然语言描述")):
+def api_intent_parse(request: Request, text: str = Query(..., min_length=1, description="策略自然语言描述")):
     """把一句话策略描述解析为结构化意图（指标/类型/风险/止损止盈）。"""
+    _require_screen_login(request)
     return itt.parse_intent(text)
 
 

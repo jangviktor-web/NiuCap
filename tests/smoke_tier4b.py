@@ -2,15 +2,45 @@ from playwright.sync_api import sync_playwright
 import sys
 
 BASE = "http://127.0.0.1:8899"
+# 选股端点（含 rating_batch）已要求登录，本脚本先拿会话再跑。
+# 账号由 ensure_login() 幂等注册/登录，跑多少次都不会炸。
+USER = "e2e_screen"
+PWD = "E2eScreen123456"
 errors = []
+
+
+def ensure_login(pg):
+    """登录并把页面里的 authState 同步过来（guardScreen 依赖它判态）。"""
+    pg.evaluate(
+        """(function(){
+             return fetch('/api/auth/login', {
+               method:'POST', headers:{'Content-Type':'application/json'},
+               body: JSON.stringify({username: '%s', password: '%s'})
+             }).then(function(r){ return r.json(); })
+               .then(function(j){ if(!j.ok) throw new Error(j.detail||'登录失败');
+                                  return loadMe(); });
+           })()""" % (USER, PWD)
+    )
+    pg.wait_for_function("!!authState.user", timeout=20000)
 
 def main():
     with sync_playwright() as p:
         b = p.chromium.launch(headless=True)
         pg = b.new_page(viewport={"width": 1280, "height": 1000})
-        pg.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
+        def on_console(m):
+            if m.type != "error":
+                return
+            # 页面首次加载（未登录）时 /api/screen/fields 会被守卫回 401，
+            # 浏览器必记一条 console error。它是「资源没取到」而非 JS 异常，
+            # 理由在登录守卫里 —— 混进断言会让这里永远红。
+            if "status of 401" in m.text:
+                return
+            errors.append(m.text)
+
+        pg.on("console", on_console)
         pg.on("pageerror", lambda e: errors.append("PAGEERROR: " + str(e)))
         pg.goto(BASE + "/", wait_until="load", timeout=20000)
+        ensure_login(pg)
 
         # ---------- 方案 A：对比页 ----------
         pg.evaluate("""
