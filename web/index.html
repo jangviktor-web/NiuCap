@@ -763,6 +763,8 @@ td .starbtn{font-size:16px}
 .needtip{background:rgba(217,52,43,.08);border:1px solid rgba(217,52,43,.28);
   color:var(--up);font-size:12.5px;line-height:1.55;padding:9px 11px;
   border-radius:8px;margin-bottom:12px}
+.needtip b{font-size:13px}
+.needtip .sm{display:block;margin-top:5px;font-size:11.5px;color:var(--tx2);line-height:1.6}
 .msub{width:100%;height:40px}
 .msw{text-align:center;font-size:13px;color:var(--tx3);margin-top:14px}
 .msw a{color:var(--accent);text-decoration:none;margin-left:4px}
@@ -1222,9 +1224,10 @@ td .starbtn{font-size:16px}
         <div class="ppg">
           <div class="ppgi">🔒</div>
           <h3>虚拟盘需要登录后使用</h3>
-          <p>虚拟盘会产生真实资金与持仓，需要归属到某个账号：数据才能跨设备延续、
-             也才能和别人的账户隔离。</p>
-          <p class="sm">自选股仍然可以不登录使用。</p>
+          <p>虚拟盘的持仓、成交流水与盯盘记录都要长期保存在服务器上，每次刷新还要
+             按持仓逐只取最新价算盈亏 —— 存储与算力都是实打实的开销，
+             所以需要归属到一个账号：既能跨设备延续，也和别人的账户天然隔离。</p>
+          <p class="sm">自选股仍然可以不登录使用（数据存在本地账号下）。</p>
           <button class="btn pri" id="ppGateLogin">登录 / 注册</button>
         </div>
       </div>
@@ -2167,6 +2170,7 @@ td .starbtn{font-size:16px}
           <button class="btn" data-adm="userdata">👁️ 用户数据</button>
           <button class="btn" data-adm="newfeat">🧪 新功能调试</button>
           <button class="btn" data-adm="config">🔧 运行参数</button>
+          <button class="btn" data-adm="access">🔒 登录权限</button>
           <button class="btn" data-adm="bars">🗄️ 数据落库</button>
           <button class="btn" data-adm="database">🛠️ 数据库</button>
           <button class="btn" data-adm="modules">🧩 模块状态</button>
@@ -2270,24 +2274,63 @@ function api(path, opts){
 }
 
 /* =========================================================================
-   选股守卫：所有筛选 / 扫描类操作必须登录
+   登录守卫：哪些模块要登录、怎么拦
    ------------------------------------------------------------------
-   后端已经在各选股端点上挡了一道 HTTP 401，前端再拦一层不是重复劳动：
+   后端是真正的边界（绕过页面直打接口照样 401），前端再拦一层不是为了安全，
+   而是为了两件事：
      · 省算力 —— 全市场扫描是最贵的请求，明知会被 401 就别发；
      · 能续跑 —— 后端 401 只能给一句报错，用户还得自己再点一次按钮；
        前端拦下来，登录成功后 afterLogin() 把那次操作原样补上。
-   后端那层仍是真正的边界：绕过页面直接打接口照样进不来。
+
+   **哪些模块要登录不是写死的**：管理员在后台「登录权限」面板逐个开关
+   （config 里的 TICK_AUTH_REQ_*），本页通过 /api/access 拿当前策略。
+   少了这一步就会出现「后台已经放开、界面还在拦」的假开关——
+   开关两边共用一个来源，是这次改造唯一不能省的地方。
 
    两条不同的路，别混：
-     · guardScreen(fn, label) —— 用户点的：弹登录框 + 登录后自动续跑；
-     · screenNeedLogin(el)     —— 定时器自动刷新的：只给提示，绝不弹框。
+     · guardScreen(fn, label, mod) —— 用户点的：弹登录框 + 登录后自动续跑；
+     · screenNeedLogin(el, label)   —— 定时器自动刷新的：只给提示，绝不弹框。
        理由：自动刷新没经过用户，弹框既烦人又没有额外信息量。
    ========================================================================= */
 var screenPending = null;   // 被拦下、等登录成功后补跑的一次操作
 
+/* 当前开放策略 + 「为什么要登录」的统一说辞（都由 /api/access 下发）。
+   判定口径：只有**显式 false** 表示「这个模块已放开匿名」；
+   字段缺失 / 请求失败一律按上锁处理 —— 多拦一次好过漏拦一次。 */
+var accessState = { rules: {}, reason: '', at: 0, flying: null };
+
+function loadAccess(force){
+  // 单飞 + 15 秒 TTL：页面各处都问同一个问题，没必要每次点击都发一次请求；
+  // 15 秒是为了管理员在后台改完开关，切回来基本能立刻看到效果。
+  if(!force && accessState.flying) return accessState.flying;
+  if(!force && Date.now() - accessState.at < 15000) return Promise.resolve(accessState.rules);
+  var p = fetch('/api/access').then(function(r){ return r.json(); })
+    .then(function(d){
+      accessState.rules = d.require_login || {};
+      accessState.reason = d.reason || '';
+      accessState.at = Date.now();
+      syncAuthNote();          // 一个模块都不锁时，弹窗底部就别再讲算力这笔账了
+      return accessState.rules;
+    }).catch(function(){
+      accessState.rules = {};            // 取不到 = 全上锁（由 needLogin() 的口径兜住）
+      accessState.at = Date.now();
+      return accessState.rules;
+    });
+  accessState.flying = p;
+  p.then(clearFly, clearFly);
+  function clearFly(){ accessState.flying = null; }
+  return p;
+}
+
+/* 该模块是否要求登录。取不到配置时保守返回 true。 */
+function needLogin(mod){ return accessState.rules[mod] !== false; }
+
+/* 后端 401 文案形如「条件选股需要登录后使用」。这里按「需要登录」匹配而不是整句，
+   因为模块名会随后台改名/增删而变；已确认 /api/admin/* 的 401 是「请先登录」，
+   不含这四个字，不会被认成选股拦截。 */
 function isScreenGuardError(e){
   var m = (e && e.message) ? String(e.message) : '';
-  return m.indexOf('选股功能需要登录') >= 0;
+  return m.indexOf('需要登录') >= 0;
 }
 
 /* 自动刷新路径的静默兜底：在容器里放一句「请登录 + 登录链接」。 */
@@ -2298,26 +2341,42 @@ function screenNeedLogin(el, label){
     '需要登录后使用 —— <a href="javascript:void(0)" onclick="openAuth(\'login\')">登录 / 注册</a></div>';
 }
 
-/* 包裹一个选股入口。
-   用法： btn.onclick = guardScreen(runScreen, '条件选股'); */
-function guardScreen(fn, label){
+/* 登录框顶部的红色提示条：先说清楚「为什么」，再说「登录后会自动继续」。
+   老版本只有一句「需要登录后使用，登录成功后会自动继续执行」——被问得最多的是
+   「凭什么要我注册」，所以把算力/存储这笔账放在第一屏就讲完。 */
+function showNeedTip(label){
+  var tip = $('authNeedTip');
+  if(!tip) return;
+  var why = accessState.reason ||
+    '这类功能要在服务器上扫描数千只股票并逐只计算指标，占用较大的算力与存储空间，' +
+    '所以只对已登录账号开放。';
+  tip.innerHTML = '<b>「' + esc(label || '该功能') + '」需要登录后使用</b>' +
+    '<span class="sm">' + esc(why) + '</span>' +
+    '<span class="sm">登录成功后会自动继续执行，不用再点一次。</span>';
+  tip.style.display = '';
+}
+
+/* 包裹一个入口。用法： btn.onclick = guardScreen(runScreen, '条件选股', 'screen');
+   mod 省略时按「要登录」处理 —— 宁可多拦，别因为漏传参数把重算接口放成匿名。 */
+function guardScreen(fn, label, mod){
   return function(){
     var self = this, args = arguments;
+    function run(){ return fn.apply(self, args); }
     function block(){
       // 记住这次动作；submitAuth() 成功后 afterLogin() 会把它补跑
       screenPending = { fn: fn, args: args, self: self, label: label || '选股' };
       openAuth('login');
-      var tip = $('authNeedTip');
-      if(tip){
-        tip.textContent = '「' + (label || '选股') +
-          '」需要登录后使用，登录成功后会自动继续执行。';
-        tip.style.display = '';
-      }
+      showNeedTip(label || '选股');
     }
-    // authState.loaded 为 false 时不能凭空判成未登录：首屏 loadMe() 还没回来，
-    // 这时候弹框会让刚刷新页面的老用户白登录一次。先问一次会话再决定。
-    if(authState.loaded) return authState.user ? fn.apply(self, args) : block();
-    loadMe().then(function(u){ u ? fn.apply(self, args) : block(); });
+    // 要等两件事：这个模块现在上不上锁（/api/access）+ 当前有没有会话（loadMe）。
+    // 两者在首屏都可能还没回来，所以统一走 Promise，别在这里做「猜也要猜一个」。
+    return loadAccess().then(function(){
+      if(!needLogin(mod)) return run();          // 管理员已放开该模块
+      // authState.loaded 为 false 时不能凭空判成未登录：首屏 loadMe() 还没回来，
+      // 这时候弹框会让刚刷新页面的老用户白登录一次。先问一次会话再决定。
+      if(authState.loaded) return authState.user ? run() : block();
+      return loadMe().then(function(u){ return u ? run() : block(); });
+    });
   };
 }
 
@@ -2789,9 +2848,9 @@ document.querySelectorAll('[data-preset]').forEach(function(b){
 // ponytail: 选股是需要登录的功能，入口统一包一层守卫；
 // runScreen 本体保持可直接调用（nlScreenParse 内部、登录续跑都要绕过守卫，
 // 那些路径已经确认过登录态，再判一次没必要）。
-var runScreenGuarded = guardScreen(runScreen, '条件选股');
+var runScreenGuarded = guardScreen(runScreen, '条件选股', 'screen');
 $('f_run').onclick = runScreenGuarded;
-$('screenRateBtn').onclick = guardScreen(loadScreenRatings, '加载指标评级');
+$('screenRateBtn').onclick = guardScreen(loadScreenRatings, '加载指标评级', 'rating');
 function loadScreenRatings(){
   var btn = $('screenRateBtn');
   var rows = state.screenRows || [];
@@ -2878,7 +2937,10 @@ function advLoadMeta(){
     // ponytail: 未登录时后端对 /api/screen/fields 也回 401。这时必须写清原因，
     // 否则用户只看到「高级筛选整块凭空消失」，会当成功能坏了而不是没登录。
     if(isScreenGuardError(e) && e0){
-      e0.textContent = '🔒 高级条件筛选需要登录后使用（登录 / 注册后刷新页面即可）';
+      e0.innerHTML = '🔒 高级条件筛选需要登录后使用 —— ' +
+        '<a href="javascript:void(0)" style="color:var(--accent)" ' +
+        'onclick="openAuth(\'login\')">登录 / 注册</a>' +
+        '<span style="color:var(--tx3)">（登录后自动出现，不用刷新页面）</span>';
     }
   });
 }
@@ -3057,7 +3119,7 @@ function nlScreenParse(){
     note.textContent = '解析失败：' + (e && e.message ? e.message : e);
   });
 }
-var nlScreenParseGuarded = guardScreen(nlScreenParse, '一句话选股');
+var nlScreenParseGuarded = guardScreen(nlScreenParse, '一句话选股', 'nlpick');
 $('nlScreenParse').onclick = nlScreenParseGuarded;
 $('nlScreenClear').onclick = function(){ $('nlScreenInput').value = ''; $('nlScreenNote').textContent = ''; };
 $('nlScreenInput').addEventListener('keydown', function(e){ if(e.key === 'Enter') nlScreenParseGuarded(); });
@@ -4023,7 +4085,7 @@ function renderIntradayScan(d){
 
   // ponytail: 用户点扫描 → 走守卫；runIntradayScan 本体保持可直接调用，
 // 登录后续跑、以及将来任何自动刷新路径用的都是它，不需要再判一次登录。
-scanBtn.onclick = guardScreen(runIntradayScan, '盘中扫描');
+scanBtn.onclick = guardScreen(runIntradayScan, '盘中扫描', 'intraday');
 
 })();
 
@@ -4089,8 +4151,13 @@ var ADMIN_TABS = [
   {key:'newfeat', name:'新功能调试', emo:'🧪',
    desc:'选股历史全量视图（跨账户、带模块分布与未归属统计，可按模块/用户筛选），一键把未归属记录认领到指定用户；' +
         '另有<b>窗口胜率回测</b>调试（自定义代码 / 每只金额 / 回看天数，直接调 /api/sim/window）与<b>入选后表现</b>调试（按记录 ID 调 performance）。'},
+  {key:'access', name:'登录权限', emo:'🔒',
+   desc:'逐个模块决定「是否必须注册登录才能用」：条件选股 / 一键选股 / 一句话选股 / 策略选股 / 盘中扫描 / 指标评级 / 网格交易 / 虚拟盘。' +
+        '默认全部要求登录 —— 这些功能要在服务器上做全市场计算、并把筛选历史与持仓长期存档，匿名放开等于把算力与磁盘送给脚本批量刷。' +
+        '关掉某项即放开匿名访问，<b>改完立即生效、无需重启</b>；每个开关都可一键还原到默认值。'},
   {key:'config', name:'运行参数', emo:'🔧',
-   desc:'可调参数（连接池 / 批量取数 / 缓存时长 / 扫描取样 / 停牌占位 / 新闻 API 密钥等），改完立即生效无需重启；优先级为 管理页设置 &gt; 环境变量 &gt; 内置默认，每项标注来源并可一键还原；写入前过校验器，脏值永不落库。'},
+   desc:'可调参数（连接池 / 批量取数 / 缓存时长 / 扫描取样 / 停牌占位 / 新闻 API 密钥等），改完立即生效无需重启；优先级为 管理页设置 &gt; 环境变量 &gt; 内置默认，每项标注来源并可一键还原；写入前过校验器，脏值永不落库。' +
+        '注意<b>「哪些模块要求登录」不在这里</b>，在旁边的「🔒 登录权限」面板。'},
   {key:'bars', name:'数据落库', emo:'🗄️',
    desc:'日线覆盖率、同步进度、失败清单（含原因，可跳个股）；一键触发全市场补数据（250 根），后台线程跑并实时进度，同一时刻只允许一个任务。'},
   {key:'database', name:'数据库', emo:'🛠️',
@@ -4146,13 +4213,19 @@ function hideAdminTab(){
 function loadAdmin(force){
   var el = $('admBody');
   if(!el) return;
+  // 容器里现在装的不是目标面板时必须重画。
+  // 踩到的坑：原判据只看 admState.loaded 缓存，看不出容器已经被别的面板覆盖过 ——
+  // 「登录权限 → 运行参数 → 再点回登录权限」会停在运行参数的界面上还以为自己点错了。
+  if(el.getAttribute('data-cur') !== admState.cur) force = true;
   if(admState.loaded[admState.cur] && !force){ return; }
+  el.setAttribute('data-cur', admState.cur);
   loading(el, '加载中…');
   var fns = {
     overview: admOverview, users: admUsers, config: admConfig,
     userdata: admUserData, newfeat: admNewFeat,
     bars: admBars, database: admDatabase, modules: admModules,
-    services: admServices, evalcache: admEvalCache, backup: admBackup, logs: admLogs
+    services: admServices, evalcache: admEvalCache, backup: admBackup, logs: admLogs,
+    access: admAccess
   };
   (fns[admState.cur] || admOverview)(el);
 }
@@ -4613,7 +4686,11 @@ function admNfFillRows(items){
 function admConfig(el){
   admApi('/config').then(function(d){
     admState.loaded.config = 1;
-    var its = d.items || [];
+    var its = (d.items || []).filter(function(p){
+      // 「哪些模块要求登录」单独在「🔒 登录权限」面板里开关。
+      // 同一批参数在两个面板出现时，用户永远记不住该改哪一处 —— 所以这里过滤掉。
+      return p.group !== 'access';
+    });
     var h = '<div class="card"><div class="card-h"><h2>运行参数</h2>' +
             '<div class="meta">存 meta 表，优先级：管理页设置 &gt; 环境变量 &gt; 内置默认</div></div>' +
             '<div class="card-b np"><div class="tblw"><table class="tbl"><thead><tr>' +
@@ -4677,6 +4754,94 @@ function admConfig(el){
         var key = b.dataset.cfgr;
         admApi('/config/' + key, {method:'DELETE'})
           .then(function(){ loadAdmin(true); })
+          .catch(function(e){ alert('还原失败：' + e.message); });
+      };
+    });
+  }).catch(function(e){ die(el, '读取失败：' + e.message); });
+}
+
+/* ---------- 登录权限：哪些模块必须注册才能用 ---------- */
+function admAccess(el){
+  // 两边数据各取所需：/api/admin/config 带 group/source/default/value（要身份），
+  // /api/access 带「为什么要登录」的统一文案 + 当前生效值（匿名可读，前端用它判拦）。
+  Promise.all([
+    admApi('/config'),
+    fetch('/api/access').then(function(r){ return r.json(); }).catch(function(){ return {}; })
+  ]).then(function(res){
+    admState.loaded.access = 1;
+    var items = (res[0].items || []).filter(function(p){ return p.group === 'access'; });
+    var reason = res[1].reason || '';
+    var live = res[1].require_login || {};
+    var locked = items.filter(function(p){ return p.value; }).length;
+
+    var h = '<div class="card"><div class="card-h"><h2>🔒 登录权限</h2>' +
+            '<div class="meta">' + locked + ' / ' + items.length + ' 个模块要求登录</div></div>' +
+            '<div class="card-b">';
+    h += '<div class="needtip" style="margin-bottom:14px">' +
+         '<b>为什么要登录</b><span class="sm">' + esc(reason ||
+           '这些功能要在服务器上做全市场计算并长期存档，占用较大的算力与存储空间。') +
+         '</span></div>';
+    if(!items.length){
+      h += '<div class="empty">没有读到模块权限配置，请确认服务已升级到最新版本。</div>';
+    } else {
+      h += '<div class="tblw"><table class="tbl"><thead><tr>' +
+           '<th>模块</th><th style="width:170px">是否要求登录</th>' +
+           '<th style="width:80px">来源</th><th>说明（为什么默认是这个样子）</th>' +
+           '<th class="ctr" style="width:80px">操作</th></tr></thead><tbody>';
+      items.forEach(function(p){
+        var on = !!p.value;
+        var srcTag = p.source === 'meta' ? '<span class="tag z">管理页</span>' :
+                     (p.source === 'env' ? '<span class="tag">环境</span>' : '<span class="tag">默认</span>');
+        h += '<tr><td><b style="font-size:12px">' + esc(p.title.replace('🔒 ', '').replace(' · 要求登录', '')) + '</b>' +
+             '<div style="font-size:11px;color:var(--tx3)"><code>' + esc(p.key) + '</code></div></td>' +
+             '<td><label style="font-size:13px"><input type="checkbox" data-accc="' + p.key + '"' +
+               (on ? ' checked' : '') + '> ' +
+               (on ? '<b class="up">要求登录</b>' : '<span class="down">匿名可用</span>') + '</label>' +
+             '<div style="font-size:11px;color:var(--tx3);margin-top:2px">' +
+               (live[p.key] === undefined ? '生效值：—' :
+                 ('生效值：' + (live[p.key] ? '要求登录' : '匿名可用'))) + '</div></td>' +
+             '<td>' + srcTag + '</td>' +
+             '<td style="font-size:12px;color:var(--tx2);max-width:380px">' + esc(p.desc) + '</td>' +
+             '<td class="ctr"><button class="btn" style="padding:2px 8px;font-size:11px" ' +
+               'data-accr="' + p.key + '">还原</button></td></tr>';
+      });
+      h += '</tbody></table></div>';
+    }
+    h += '<div style="padding:12px 16px;font-size:12px;color:var(--tx3);line-height:1.7">' +
+         '勾选即<b>要求登录</b>，取消勾选即<b>放开匿名访问</b>；改动存进 meta 表，' +
+         '<b>立即生效、无需重启</b>，未登录的用户刷新一下页面就能看到变化。<br>' +
+         '放开的意义：内网自用、只想让人看盘不想让他算、临时演示。放开的代价要自知 —— ' +
+         '一次条件选股约等于上千次行情拉取，匿名接口没有配额，被脚本刷起来会挤占正常用户的取数。<br>' +
+         '优先级同样是 管理页设置 &gt; 环境变量 &gt; 内置默认，配置读取失败时按「要求登录」处理' +
+         '（宁可多拦一次，不放意外开的口子）。' +
+         '</div></div></div>';
+    el.innerHTML = h;
+
+    el.querySelectorAll('[data-accc]').forEach(function(chk){
+      chk.onchange = function(){
+        chk.disabled = true;
+        admApi('/config/' + chk.dataset.accc, {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({value: chk.checked})
+        }).then(function(){
+          // 关键一步：把本页的守卫规则缓存也刷掉。管理员常常是改完就回头去点那个
+          // 入口验证，若前端还按旧规则拦，看起来就像开关没生效。
+          if(typeof loadAccess === 'function') loadAccess(true);
+          wtToast(chk.checked ? '已设为：要求登录' : '已放开：匿名可用');
+          loadAdmin(true);
+        }).catch(function(e){
+          chk.disabled = false; chk.checked = !chk.checked;
+          alert('设置失败：' + e.message);
+        });
+      };
+    });
+    el.querySelectorAll('[data-accr]').forEach(function(b){
+      b.onclick = function(){
+        admApi('/config/' + b.dataset.accr, {method:'DELETE'})
+          .then(function(){
+            if(typeof loadAccess === 'function') loadAccess(true);   // 同上：刷掉本页规则缓存
+            loadAdmin(true);
+          })
           .catch(function(e){ alert('还原失败：' + e.message); });
       };
     });
@@ -6808,7 +6973,7 @@ document.querySelectorAll('[data-smode]').forEach(function(b){
     b.classList.add('on'); stratState.mode = b.dataset.smode;
   };
 });
-if($('stratRun')) $('stratRun').onclick = guardScreen(runStrategyScan, '策略选股');
+if($('stratRun')) $('stratRun').onclick = guardScreen(runStrategyScan, '策略选股', 'strategy');
 if($('stratClear')) $('stratClear').onclick = function(){
   stratState.picked = [];
   document.querySelectorAll('.stratitem.on').forEach(function(x){ x.classList.remove('on'); });
@@ -9294,7 +9459,7 @@ function goStock(code){
 // 自己在结果区放一句「请登录」。
 // 注意：这个包装器必须声明在 IIFE 外面 —— 方案卡片的 onclick 是跨作用域引用它的，
 // 塞进 IIFE 里会得到 "runNewbieGuarded is not defined"（踩过一次）。
-var runNewbieGuarded = guardScreen(runNewbie, '一键选股');
+var runNewbieGuarded = guardScreen(runNewbie, '一键选股', 'newbie');
 
 // 初始化绑定
 (function(){
@@ -9432,6 +9597,18 @@ function loadMe(){
 
 /* ---- 弹层 ---- */
 var authMode = 'login';
+
+/* 弹窗底部说明跟随后台开关：还有模块上锁时才讲「算力 / 存储」这笔账。
+   管理员把全部模块都放开后，这段就不该再挂在弹窗里 —— 否则用户会觉得系统在骗人。 */
+function syncAuthNote(){
+  var lk = $('authNoteLocked');
+  if(!lk) return;
+  var ks = Object.keys(accessState.rules);
+  // 空表是「没取到」而不是「全放开」，所以空表按有锁显示（多说一句好过漏说）
+  var anyLocked = !ks.length || ks.some(function(k){ return accessState.rules[k] !== false; });
+  lk.style.display = anyLocked ? '' : 'none';
+}
+
 function openAuth(mode){
   authMode = mode || 'login';
   updateAuthMode();
@@ -9558,6 +9735,8 @@ function afterLogin(){
       if(ev.key === 'Escape') closeAuth(true);
     });
     loadMe();
+    // 预热开放策略：第一次点选股按钮时不用等这个请求，守卫判断直接命中缓存
+    loadAccess();
     loadHealth();          // 加载巡检告警状态（未跑过巡检则不显示角标）
     // #96 监控中心未读角标：启动取一次，之后每 30 秒轮询（不进该页也可见）
     altPoll();
@@ -9588,9 +9767,12 @@ function ppGate(on){
 }
 
 function loadPaper(){
+  // 虚拟盘要不要登录是后台可配的（TICK_AUTH_REQ_PAPER）：开关放开时不能再摆一块
+  // 「请登录」的遮罩，否则用户看到的就是永不开门的功能。
   if(!authState.user){
-    ppGate(true);
-    return Promise.resolve();
+    // 会话还没回来时先别急着遮：首屏 loadMe() 在飞，这时候判未登录会让老用户闪一下。
+    if(!authState.loaded) return loadMe().then(loadPaper);
+    if(needLogin('paper')){ ppGate(true); return Promise.resolve(); }
   }
   ppGate(false);
   ppState.loaded = true;
@@ -10120,9 +10302,12 @@ document.addEventListener('click', function(ev){
         <span id="authSwapTip">还没有账号？</span>
         <a href="javascript:void(0)" id="authSwap">立即注册</a>
       </div>
-      <div class="mnote">自选股不登录也能用（数据存在本地账号下）；
-        <b>选股（条件 / 一句话 / 策略 / 盘中 / 一键）与虚拟盘需要登录</b>，
-        数据按账号隔离、可跨设备延续。</div>
+      <div class="mnote" id="authNote"><span id="authNoteLocked">
+        选股、虚拟盘、网格交易要在服务器上做全市场计算，并把筛选历史、持仓与计划明细
+        长期存下来 —— 占用较大的<b>算力与存储</b>，所以只对已登录账号开放：
+        既避免匿名请求把机器刷满，<br></span>
+        注册登录后，你的自选股、筛选历史与持仓才会真正归属到你的名下，换设备也不丢。
+        自选股不登录也能用（数据存在本地账号下）。</div>
     </div>
   </div>
 </div>

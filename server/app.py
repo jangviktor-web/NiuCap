@@ -538,6 +538,27 @@ def api_about():
     }
 
 
+@app.get("/api/access")
+def api_access():
+    """当前实例「哪些模块需要登录」——**匿名可读**，刻意不放进 /api/admin/*。
+
+    为什么这么设计：开关是管理员在后台改的，但要连**没登录的访客**也知道
+    「现在这道门上不上锁」，否则会出现「后台开了、界面还拦着」的鬼故事。
+    所以它必须与 /api/admin/config 分开：后者要管理员身份，前者是门牌不是权限 ——
+    回答里只有模块名和 true/false，不涉及任何用户数据。
+
+    前端在守卫入口第一次被点时取一次（15 秒 TTL + 单飞 Promise），见 guardScreen()。
+    """
+    try:
+        import config as _cfg
+        return _cfg.access_rules()
+    except Exception as e:
+        # 读不了就返回空表（而不是全 False）。前端只把**显式 false** 当「已放开」，
+        # 查不到的模块按上锁处理 —— 这样网络抖动或配置损坏时是「多拦」而不是「漏拦」。
+        return {"require_login": {}, "modules": [], "reason": "",
+                "error": f"{type(e).__name__}: {e}"}
+
+
 @app.get("/api/system/health_report")
 def api_health_report(limit: int = Query(20, ge=1, le=50)):
     """巡检脚本写入的健康状态，供页面右上角显示提醒。
@@ -682,30 +703,45 @@ def api_market(
     }
 
 
-def _require_screen_login(request: Request) -> Dict[str, Any]:
-    """选股守卫：所有筛选 / 扫描类端点必须登录后才能用。
+def _require_module_login(request: Request, mod: str) -> Optional[Dict[str, Any]]:
+    """通用登录守卫：``mod`` 取 config.ACCESS_MODULES 里的模块 key。
 
-    为什么不像自选股那样允许匿名：
+    为什么不能直接 raise：**哪些模块要登录已经变成管理员可配的了**（后台
+    「登录权限」面板，`TICK_AUTH_REQ_*`）。所以这里必须先读开关：
+      - 模块要求登录且未登录 → 401；
+      - 模块已放开匿名       → 返回 None，调用方照常往下跑（通常不关心返回值）；
+      - 读开关失败           → 按「要求登录」处理。config.need_login 内部同样保守，
+        两边方向一致：宁可多拦一次，也不能因为配置读不出来把重算接口放成匿名。
+
+    默认上前绑的选项和当初写死时的理由一致（写库还是有这三条，别删）：
       1. 选股是**重算型**请求（拉全市场快照 + 逐票算指标），一次「条件选股」
          在后端等价于上千次行情拉取 + CPU 计算，匿名放开等于把算力送给脚本批量刷；
       2. 选股结果会落「筛选历史」并做后续业绩跟踪，匿名记录无从归属，认领时
          会在同一台机器上把别人的历史一并领走；
-      3. 虚拟盘已先行要求登录（``_require_login``），选股与它同属「产出型功能」，
-         边界一致比给每个功能各想一套例外更好解释。
+      3. 虚拟盘 / 网格要长期存档持仓与计划，同理必须归属到账号。
 
     刻意不动的边界：
-      - ``/api/market``、``/api/rank`` 这类「看一眼」的行情接口仍匿名可用
+      - ``/api/market``、``/api/rank`` 这类「看一眼」的行情接口不在任何受控模块里
         —— 阅读不承担算力成本，拦了会把纯看盘用户挡在外面；
       - ``/api/screen/history`` 只读也放开 —— 它本来就有「匿名 → 登录」认领链路，
         拦了反而让老用户此前存的历史查不到。
 
-    体验由前端配合兜住：命中 401 时弹登录框，登录成功自动续跑被拦的那次操作，
-    用户不必再点一次按钮。
+    体验由前端配合兜住：前端先问 ``/api/access`` 拿当前开放策略，只对「真的上锁」
+    的模块拦 —— 管理员放开某个模块后页面会跟着放行，不会出现在后台开了、界面还拦着
+    的情况。命中 401 时弹登录框，登录成功自动续跑被拦的那次操作，用户不必再点一次。
     """
     u = _current_user(request)
-    if not u:
-        raise HTTPException(401, "选股功能需要登录后使用")
-    return u
+    if u:
+        return u
+    try:
+        import config as _cfg
+        need = _cfg.need_login(mod)
+        name = _cfg.module_name(mod)
+    except Exception:
+        need, name = True, "该功能"
+    if not need:
+        return None
+    raise HTTPException(401, f"{name}需要登录后使用")
 
 
 def _legacy_screen_conditions(
@@ -792,7 +828,7 @@ def api_screener(
       ``/api/screener?filters=[{"field":"turnover","op":"between","value":[3,15]},``
       ``{"field":"market","op":"in","value":["sz","sh"]}]``
     """
-    _require_screen_login(request)
+    _require_module_login(request, "screen")
     rows = MARKET.ensure()
 
     # filters 是用户手写的 JSON：解析失败要给 400 并说清位置，
@@ -875,7 +911,7 @@ def api_screen_fields(request: Request):
     静态幂等数据，前端据此动态渲染筛选项 —— 加一个可筛字段只需在
     ``screen_dsl.FIELDS`` 加一行，不用改 API 签名也不用改前端。
     """
-    _require_screen_login(request)
+    _require_module_login(request, "screen")
     fields = [{"key": k, "label": f.label, "kind": f.kind, "unit": f.unit,
                "cat": f.cat}
               for k, f in sdsl.FIELDS.items()]
@@ -1101,7 +1137,7 @@ def api_intraday_scan(
     需要 eltdx 批量源（全市场约 18 秒）。腾讯降级路径下会拒绝执行并
     返回明确原因——逐只跑全市场要 24 分钟，不如直接告诉用户。
     """
-    _require_screen_login(request)
+    _require_module_login(request, "intraday")
     p = ds.normalize_intraday_period(period)
     if not p:
         raise HTTPException(
@@ -1357,7 +1393,7 @@ def api_strategy_scan(
     不传时行为与改造前完全一致。非法 JSON 会被忽略（回落默认参数），
     以免一个坏参数导致整个扫描失败。
     """
-    _require_screen_login(request)
+    _require_module_login(request, "strategy")
     rows = MARKET.ensure()
     if pool and pool != "all":
         rows = [r for r in rows if pool in (r.get("pools") or [])]
@@ -1490,7 +1526,7 @@ def api_backtest(
 def api_grid_plans(request: Request):
     """我的网格计划 + 每档实时状态（挂在虚拟盘下，需要登录）。"""
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "grid")
     plans = store.list_grids()
     if not plans:
         return {"items": [], "levels_map": {}}
@@ -1538,7 +1574,7 @@ def api_grid_plans(request: Request):
 def api_grid_plan_create(request: Request, payload: Dict[str, Any] = Body(default={})):
     """新建网格计划。"""
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "grid")
     code = ds.normalize(str(payload.get("code") or ""))
     if not code:
         raise HTTPException(400, "标的代码不能为空")
@@ -1561,7 +1597,7 @@ def api_grid_plan_create(request: Request, payload: Dict[str, Any] = Body(defaul
 @app.delete("/api/grid/plans/{gid}")
 def api_grid_plan_delete(request: Request, gid: int):
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "grid")
     if not store.delete_grid(gid):
         raise HTTPException(404, "网格不存在或不属于当前用户")
     return {"ok": True}
@@ -1574,7 +1610,7 @@ def api_grid_plan_fire(request: Request, gid: int, payload: Dict[str, Any] = Bod
     方向由后端按档位下标与基准档的关系判定，不信任前端传的 side。
     """
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "grid")
     _require_tradable()
     idx = int(payload.get("idx"))
     plans = {p["id"]: p for p in store.list_grids()}
@@ -2138,7 +2174,7 @@ def api_rating_batch(
     仅算 rating_summary，不返回全量指标，payload 小。
     用于选股结果列表「加载指标评级」按钮（B1：按需、仅当前页）。
     """
-    _require_screen_login(request)
+    _require_module_login(request, "rating")
     raw = [c.strip() for c in codes.split(",") if c.strip()]
     if not raw:
         raise HTTPException(400, "请提供至少一个股票代码")
@@ -2178,7 +2214,7 @@ def api_newbie_pick(
     走后台预计算缓存，毫秒级返回。若缓存未就绪，会触发后台计算并如实返回
     computing 状态，前端据此显示"正在扫描"，而不是假装有结果。
     """
-    _require_screen_login(request)
+    _require_module_login(request, "newbie")
     if preset not in nwb.PRESET_BY_KEY:
         raise HTTPException(400, f"未知方案: {preset}")
 
@@ -2914,7 +2950,7 @@ def api_valuation(code: str = Query(..., description="股票代码，如 sh60051
 @app.get("/api/intent_parse")
 def api_intent_parse(request: Request, text: str = Query(..., min_length=1, description="策略自然语言描述")):
     """把一句话策略描述解析为结构化意图（指标/类型/风险/止损止盈）。"""
-    _require_screen_login(request)
+    _require_module_login(request, "nlpick")
     return itt.parse_intent(text)
 
 
@@ -3774,18 +3810,9 @@ def api_admin_log_download(request: Request, name: str = Query("")):
 # 所有金额计算在 store 层用事务完成，接口只做校验与行情拼装。
 # ===========================================================================
 
-def _require_login(request: Request) -> Dict[str, Any]:
-    """虚拟盘守卫：必须登录才能用。
-
-    为什么不像自选股那样允许匿名：虚拟盘会凭空产生资金与持仓，
-    匿名数据没法归属、也没法在多设备间延续，认领逻辑会变得不可解释。
-    自选股仍保持匿名可用（单机自用场景不受影响）。
-    """
-    u = _current_user(request)
-    if not u:
-        raise HTTPException(401, "虚拟盘需要登录后使用")
-    return u
-
+# 虚拟盘 / 网格的登录守卫不再各写一份：统一走 _require_module_login(request,
+# "paper" / "grid")，是否要求登录由后台「登录权限」面板的 TICK_AUTH_REQ_* 决定。
+# 理由见 _require_module_login 的 docstring。
 
 def _require_tradable() -> None:
     """虚拟盘交易时段守卫：非交易时段禁止买卖。
@@ -4003,7 +4030,7 @@ def _price_span(now=None):
 def api_positions(request: Request):
     """持仓列表（含实时价与浮动盈亏）。"""
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "paper")
     pos = store.list_positions()
     return {"items": _pos_with_quote(pos)}
 
@@ -4012,7 +4039,7 @@ def api_positions(request: Request):
 def api_trade_summary(request: Request):
     """账户总览：可用资金 / 持仓市值 / 总资产 / 累计盈亏。"""
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "paper")
     s = store.portfolio_summary()
     pos = _pos_with_quote(store.list_positions())
     mv = sum(p["market_value"] or 0 for p in pos)
@@ -4043,7 +4070,7 @@ def api_trade_summary(request: Request):
 def api_trade_fees(request: Request):
     """当前用户的费率设置（含默认值，供"还原"按钮用）。"""
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "paper")
     return {"fees": store.get_fees(), "defaults": dict(store.DEFAULT_FEES),
             "etf_note": "ETF/场内基金免印花税，佣金按 ETF 费率单独计"}
 
@@ -4052,7 +4079,7 @@ def api_trade_fees(request: Request):
 def api_trade_fees_set(request: Request, payload: Dict[str, Any] = Body(...)):
     """改费率。校验失败 400；只认白名单键。"""
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "paper")
     try:
         fees = store.set_fees(payload.get("fees") or payload)
     except ValueError as e:
@@ -4081,7 +4108,11 @@ def api_trade_claim_state(request: Request):
 def api_trade_claim(request: Request):
     """把匿名数据过户到当前账号（搬走制，先到先得）。"""
     store.initialize()
-    u = _require_login(request)
+    u = _require_module_login(request, "paper")
+    # u 为 None 说明管理员把虚拟盘放成了匿名可用：没有目标账号，「过户到当前账号」
+    # 这件事本身无从谈起（匿名数据此刻就属于这台机器，不用搬）。
+    if not u:
+        raise HTTPException(400, "当前未登录，认领匿名数据需要先登录账号")
     try:
         r = store.claim_anon_state(u["id"])
     except ValueError as e:
@@ -4093,7 +4124,7 @@ def api_trade_claim(request: Request):
 def api_trade_buy(request: Request, payload: Dict[str, Any] = Body(...)):
     """模拟买入。price 省略时按当前实时价成交。"""
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "paper")
     _require_tradable()
     code = (payload.get("code") or "").strip()
     if not code:
@@ -4135,7 +4166,7 @@ def api_trade_buy(request: Request, payload: Dict[str, Any] = Body(...)):
 def api_trade_sell(request: Request, payload: Dict[str, Any] = Body(...)):
     """模拟卖出。price 省略时按当前实时价成交。"""
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "paper")
     _require_tradable()
     code = (payload.get("code") or "").strip()
     if not code:
@@ -4172,7 +4203,7 @@ def api_trade_sell(request: Request, payload: Dict[str, Any] = Body(...)):
 def api_trade_history(request: Request, limit: int = Query(100, ge=1, le=500)):
     """成交流水。"""
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "paper")
     return {"items": store.list_trades(limit=limit)}
 
 
@@ -4180,7 +4211,7 @@ def api_trade_history(request: Request, limit: int = Query(100, ge=1, le=500)):
 def api_trade_reset(request: Request, payload: Dict[str, Any] = Body(default={})):
     """清空持仓与流水，资金复位（谨慎操作）。"""
     store.initialize()
-    _require_login(request)
+    _require_module_login(request, "paper")
     try:
         cash = float(payload.get("cash") or store._INITIAL_CASH)
     except (TypeError, ValueError):

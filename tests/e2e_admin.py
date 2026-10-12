@@ -17,7 +17,10 @@ import urllib.parse
 import urllib.request
 
 BASE = "http://127.0.0.1:8899"
-ADMIN = "admin"
+# 用户名同样要能被环境变量改：库里的 admin 常常已被别人改过密码、甚至不存在，
+# 卡在这一个名字上会让人误以为是代码坏了。
+#   TICK_E2E_ADMIN=xxx ADMIN_PASSWORD=yyy python3 tests/e2e_admin.py
+ADMIN = os.environ.get("TICK_E2E_ADMIN", "admin")
 # 真实 admin 密码可能已被改过（默认 test1234），用环境变量覆盖：
 #   ADMIN_PASSWORD=femkerr python3 tests/e2e_admin.py
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "test1234")
@@ -74,12 +77,17 @@ def main():
             with urllib.request.urlopen(r, timeout=30) as resp:
                 return resp.headers.get("Set-Cookie", "").split(";")[0]
         except urllib.error.HTTPError:
-            # 不存在则注册
+            # 不存在则注册；注册也可能失败（用户名已被别人占着）—— 这时返回空串，
+            # 让上面的断言安安静静报 FAIL，而不是整个脚本崩在这一行。
             url = BASE + "/api/auth/register"
             r = urllib.request.Request(url, data=data, method="POST")
             r.add_header("Content-Type", "application/json")
-            with urllib.request.urlopen(r, timeout=30) as resp:
-                return resp.headers.get("Set-Cookie", "").split(";")[0]
+            try:
+                with urllib.request.urlopen(r, timeout=30) as resp:
+                    return resp.headers.get("Set-Cookie", "").split(";")[0]
+            except urllib.error.HTTPError as e2:
+                print(f"  [skip] {u} 登录/注册均失败：{e2.code}（换 TICK_E2E_ADMIN / ADMIN_PASSWORD 重试）")
+                return ""
 
     admin_ck = _login(ADMIN, ADMIN_PASSWORD)
     rec("管理员登录/注册", bool(admin_ck), "cookie已取得" if admin_ck else "失败")
