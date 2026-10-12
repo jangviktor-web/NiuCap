@@ -2027,6 +2027,14 @@ def api_compare(
                         row["boll_pos"] = round((cu - bl) / (bu - bl) * 100, 1)
                 except Exception:
                     pass
+                # 指标多空评级（Tier 4：与个股详情页同源，复用 all_indicators）
+                try:
+                    full = ind.all_indicators(kl)
+                    rs = full.get("rating_summary")
+                    if rs:
+                        row["rating_summary"] = rs
+                except Exception:
+                    pass
         except Exception as e:
             row["indicator_error"] = str(e)[:80]
 
@@ -2052,6 +2060,60 @@ def api_compare(
         "period": period,
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+# ===========================================================================
+# Tier 4 指标评级批量接口（选股结果列表「加载指标评级」按需评级用）
+# ===========================================================================
+
+# 短 TTL 内存缓存：同一只票在选股列表 / 详情 / 对比反复出现时直接命中，
+# 既加速 B1 按需评级，也让全站评级一致且省数据源请求（评级为参考非实时信号）。
+_RATING_CACHE = {}            # key=(code, period, count) -> (ts, rating_summary|None|{"error":..})
+_RATING_TTL = 120            # 秒
+_RATING_CAP = 500            # 超过则整体重置，防止无界增长
+
+
+def _rating_for(code, period, count):
+    """取单只票的指标评级（带缓存 + 异常隔离）。"""
+    key = (code, period, count)
+    now = time.time()
+    hit = _RATING_CACHE.get(key)
+    if hit and (now - hit[0]) < _RATING_TTL:
+        return hit[1]
+    rs = None
+    try:
+        kl = ds.get_kline(code, period, count)
+        if kl and len(kl) >= 30:
+            rs = ind.all_indicators(kl).get("rating_summary")
+    except Exception as e:
+        rs = {"error": str(e)[:80]}
+    if len(_RATING_CACHE) > _RATING_CAP:
+        _RATING_CACHE.clear()
+    _RATING_CACHE[key] = (now, rs)
+    return rs
+
+
+@app.get("/api/rating_batch")
+def api_rating_batch(
+    codes: str = Query(..., description="逗号分隔，最多 100 只，如 sh600000,sz000001"),
+    period: str = Query("1d"),
+    count: int = Query(250, ge=60, le=800),
+):
+    """批量返回多只股票的技术指标多空评级（Tier 4）。
+
+    仅算 rating_summary，不返回全量指标，payload 小。
+    用于选股结果列表「加载指标评级」按钮（B1：按需、仅当前页）。
+    """
+    raw = [c.strip() for c in codes.split(",") if c.strip()]
+    if not raw:
+        raise HTTPException(400, "请提供至少一个股票代码")
+    raw = raw[:100]                       # 安全上限，避免一次性拉爆数据源
+    period = ds.normalize_period(period)
+    codes_n = [ds.normalize(c) for c in raw]
+    items = []
+    for code in codes_n:
+        items.append({"code": code, "rating_summary": _rating_for(code, period, count)})
+    return {"items": items, "period": period}
 
 
 # ===========================================================================

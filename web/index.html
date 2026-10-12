@@ -1882,6 +1882,7 @@ td .starbtn{font-size:16px}
       <div class="card-h">
         <h2>选股结果</h2>
         <div class="meta" id="screenCount">—</div>
+        <button class="btn sm" id="screenRateBtn" style="margin-left:auto">📊 加载指标评级</button>
       </div>
       <div class="card-b np">
         <div class="batchbar" id="screenBatch" style="display:none">
@@ -2606,6 +2607,7 @@ function qs(params){
   });
   return parts.join('&');
 }
+var screenRatings = {};   // 选股列表指标评级缓存（按 code），翻页保留、新选股清空
 function runScreen(){
   var el = $('screenBody');
   loading(el, '筛选中…');
@@ -2625,6 +2627,7 @@ function runScreen(){
     state.screenRows = d.items;
     batchSel.screen = new Set();
     state.screenPage = 1;
+    screenRatings = {};
     $('screenerMeta').innerHTML = '<span class="ktag ktag-eod">盘后</span> 股票池 ' + d.universe + ' 只 · 时点 ' + (d.updated || '—');
     $('screenCount').textContent = '命中 ' + d.total + ' 只';
     renderScreen();
@@ -2643,7 +2646,7 @@ function renderScreen(){
   var page = rows.slice(start, start + size);
 
   var h = '<table><thead><tr><th class="ctr" style="width:34px"><input type="checkbox" class="selallrow" data-mod="screen"></th><th class="ctr" style="width:44px">#</th><th class="ctr" style="width:38px">自选</th><th class="l">股票</th>' +
-    '<th>最新价</th><th>涨跌幅</th><th>PE</th><th>PB</th><th>总市值</th><th>成交额</th><th>换手率</th></tr></thead><tbody>';
+    '<th>最新价</th><th>涨跌幅</th><th>PE</th><th>PB</th><th>总市值</th><th>成交额</th><th>换手率</th><th>评级</th></tr></thead><tbody>';
   page.forEach(function(r, i){
     h += '<tr data-code="' + r.code + '">' +
       '<td class="ctr"><input type="checkbox" class="rowchk" data-batchcode="' + attr(r.code) + '"' + (batchSel.screen.has(r.code) ? ' checked' : '') + '></td>' +
@@ -2657,7 +2660,8 @@ function renderScreen(){
       '<td>' + (r.pb > 0 ? fmt(r.pb) : '—') + '</td>' +
       '<td>' + cap(r.total_cap) + '</td>' +
       '<td>' + big(r.amount) + '</td>' +
-      '<td>' + fmt(r.turnover) + '%</td></tr>';
+      '<td>' + fmt(r.turnover) + '%</td>' +
+      '<td class="ctr">' + ratingBadgeHTML(screenRatings[r.code]) + '</td></tr>';
   });
   h += '</tbody></table>';
   h += '<div class="pager">' +
@@ -2721,6 +2725,24 @@ document.querySelectorAll('[data-preset]').forEach(function(b){
   };
 });
 $('f_run').onclick = runScreen;
+$('screenRateBtn').onclick = loadScreenRatings;
+function loadScreenRatings(){
+  var btn = $('screenRateBtn');
+  var rows = state.screenRows || [];
+  if(!rows.length){ wtToast('请先执行选股'); return; }
+  var size = state.screenSize;
+  var maxPage = Math.max(1, Math.ceil(rows.length / size));
+  var page = rows.slice((state.screenPage - 1) * size, (state.screenPage - 1) * size + size);
+  var codes = page.map(function(r){ return r.code; });
+  if(btn){ btn.disabled = true; btn.textContent = '评级计算中…'; }
+  api('/api/rating_batch?codes=' + encodeURIComponent(codes.join(',')) + '&period=' + (state.stockPeriod || '1d') + '&count=250')
+    .then(function(d){
+      (d.items || []).forEach(function(it){ if(it && it.code) screenRatings[it.code] = it.rating_summary; });
+      renderScreen();
+    })
+    .catch(function(e){ wtToast('评级加载失败：' + e.message); })
+    .finally(function(){ if(btn){ btn.disabled = false; btn.textContent = '📊 加载指标评级'; } });
+}
 $('f_reset').onclick = function(){
   ['f_pe_min','f_pe_max','f_pb_min','f_pb_max','f_cap_min','f_cap_max',
    'f_chg_min','f_chg_max','f_tov_min','f_tov_max','f_amt_min'].forEach(function(id){
@@ -6537,6 +6559,14 @@ function runCompare(label){
   });
 }
 
+// 指标评级徽标（Tier 4：与个股详情页同源，复用 .rtag 样式）
+function ratingBadgeHTML(rs){
+  if(!rs || !rs.rating) return '—';
+  var cls = rs.rating === 'BUY' ? 'r-buy' : (rs.rating === 'SELL' ? 'r-sell' : 'r-neutral');
+  var txt = rs.rating === 'BUY' ? '买' : (rs.rating === 'SELL' ? '卖' : '中');
+  return '<span class="rtag ' + cls + '">' + txt + '</span>';
+}
+
 function renderCompare(d){
   var out = $('cmpOutput');
   var items = d.items || [];
@@ -6545,6 +6575,7 @@ function renderCompare(d){
 
   // 列定义：key, 标题, 渲染函数, 是否参与排名
   var cols = [
+    { k: 'rating_summary', t: '评级', r: function(v){ return ratingBadgeHTML(v); }, rank: false },
     { k: 'price',      t: '最新价',   r: function(v){ return fmt(v); },                      rank: false },
     { k: 'change_pct', t: '涨跌幅',   r: function(v){ return '<span class="' + cls(v) + '">' + sign(v) + '%</span>'; }, rank: true },
     { k: 'rsi14',      t: 'RSI14',    r: function(v){ return fmt(v, 1); },                    rank: true },
@@ -6578,11 +6609,13 @@ function renderCompare(d){
         if(ranks[c.k].best === i) cellCls = 'best';
         else if(ranks[c.k].worst === i && items.length > 2) cellCls = 'worst';
       }
-      if(v === null || v === undefined || isNaN(v)){
-        h += '<td class="' + cellCls + '">—</td>';
-      } else {
-        h += '<td class="' + cellCls + '">' + c.r(v) + '</td>';
-      }
+      // ponytail: 原判空是 isNaN(v)，对数字列成立；但 rating_summary 是对象(dict)，
+      // isNaN(对象) 恒为 true（对象转 Number -> NaN），会被误判成缺数据显示「—」。
+      // 故仅对数值类型做 NaN 检查，对象列按「非 null/undefined 即渲染」处理。
+      var missing = (v === null || v === undefined ||
+                     (typeof v === 'number' && isNaN(v)));
+      h += missing ? '<td class="' + cellCls + '">—</td>'
+                   : '<td class="' + cellCls + '">' + c.r(v) + '</td>';
     });
     h += '</tr>';
   });
@@ -6600,8 +6633,12 @@ function renderCompare(d){
   }).sort(function(a, b){ return b.score - a.score; });
 
   var topScore = bulls.length ? bulls[0].score : 0;
+  // 指标评级汇总（Tier 4）
+  var rb = { BUY: 0, SELL: 0, NEUTRAL: 0, none: 0 };
+  items.forEach(function(it){ var r = it.rating_summary; if(r && r.rating){ rb[r.rating]++; } else { rb.none++; } });
+  var rsumTxt = '<span class="rate-buy">买 ' + rb.BUY + '</span> / <span class="rate-neutral">中 ' + rb.NEUTRAL + '</span> / <span class="rate-sell">卖 ' + rb.SELL + '</span>';
   h += '<div class="card"><div class="card-h"><h2>强弱速览</h2>' +
-    '<div class="meta">按 5 项偏强信号计数（涨跌幅/RSI14/MACD/KDJ-J/量比）</div></div><div class="card-b">' +
+    '<div class="meta">按 5 项偏强信号计数（涨跌幅/RSI14/MACD/KDJ-J/量比）· 指标评级：' + rsumTxt + '</div></div><div class="card-b">' +
     '<div class="siglist">' + bulls.map(function(b, idx){
       // 绝对等级：>=4 强势 / 2-3 中性 / <2 弱势
       var absLvl = b.score >= 4 ? '强势' : (b.score >= 2 ? '中性' : '弱势');
