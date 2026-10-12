@@ -840,6 +840,23 @@ def all_indicators(klines):
     else:
         verdict, vdir = "技术面中性", "neutral"
 
+    # ---------- Tier 4：指标多空评级（BUY/SELL/NEUTRAL）----------
+    # 与上面的事件型 signals/verdict 并存独立：signals 看「金叉/死叉/突破」事件，
+    # rating 看「各指标当前所处区间」的多空倾向，二者可能不同，均为参考。
+    rating_summary = None
+    try:
+        import indicator_rating as ir
+        ctx = {
+            "DIF": _scalar(dif)[0], "DEA": _scalar(dea)[0],
+            "TRIX": _scalar(trix_v)[0], "TRMA": _scalar(trma_v)[0],
+            "PDI": pdi_v, "MDI": mdi_v,
+            "cur": cur,
+        }
+        ir.rate_groups(groups, ctx)
+        rating_summary = ir.aggregate_rating(groups)
+    except Exception:
+        rating_summary = None
+
     return {
         "groups": groups,
         "signals": signals,
@@ -858,4 +875,5 @@ def all_indicators(klines):
         "bear_count": bear,
         "neutral_count": neutral,
         "indicator_count": sum(len(g["items"]) for g in groups),
+        "rating_summary": rating_summary,
     }

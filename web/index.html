@@ -464,6 +464,13 @@ tbody tr:hover{background:#f7f9fc}
 .indcell .ik{font-size:11px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .indcell .iv{font-size:14px;font-weight:600;font-variant-numeric:tabular-nums;margin-top:2px}
 .indcell .iv.up{color:var(--up)} .indcell .iv.down{color:var(--down)}
+/* Tier 4：指标多空评级徽标（买入=红/卖出=绿，复用 --up/--down，不照搬西式配色） */
+.indcell{position:relative}
+.rtag{display:inline-block;font-size:11px;font-weight:700;line-height:1;padding:1px 6px;border-radius:6px;margin-left:6px;vertical-align:middle}
+.rtag.r-buy{background:rgba(217,52,43,.12);color:var(--up)}
+.rtag.r-sell{background:rgba(18,161,92,.12);color:var(--down)}
+.rtag.r-neutral{background:rgba(139,147,161,.15);color:var(--tx3)}
+.rate-buy{color:var(--up)} .rate-sell{color:var(--down)} .rate-neutral{color:var(--tx3)}
 
 /* 多股对比 */
 .cmptbl{font-size:12.5px}
@@ -3182,11 +3189,18 @@ function renderStock(d){
   // 全套技术指标（借鉴 Klang info：30+ 指标一屏总览）
   if(d._full && d._full.groups){
     var F = d._full;
+    var RS = F.rating_summary || null;
+    var ratePill = '';
+    if(RS){
+      var rcls = RS.rating === 'BUY' ? 'rate-buy' : (RS.rating === 'SELL' ? 'rate-sell' : 'rate-neutral');
+      ratePill = ' · 指标评级：<b class="' + rcls + '">' + esc(RS.label) + '</b>' +
+        ' <span style="font-size:11px;color:var(--tx3)">(强度' + RS.score + '·买' + RS.buy + '/卖' + RS.sell + ')</span>';
+    }
     h += '<div class="card"><div class="card-h"><h2>全套技术指标</h2>' +
       '<div class="meta">' + F.indicator_count + ' 项指标 · ' +
       '多 ' + F.bull_count + ' / 空 ' + F.bear_count + ' / 中 ' + F.neutral_count +
       ' · <b class="' + (F.verdict_dir === 'bull' ? 'up' : (F.verdict_dir === 'bear' ? 'down' : 'flat')) + '">' +
-      esc(F.verdict) + '</b></div></div><div class="card-b">';
+      esc(F.verdict) + '</b>' + ratePill + '</div></div><div class="card-b">';
 
     // 区间统计
     var S = F.stats || {};
@@ -3211,14 +3225,18 @@ function renderStock(d){
         if(typeof v === 'number' && typeof it.prev === 'number'){
           dirCls = v > it.prev ? 'up' : (v < it.prev ? 'down' : '');
         }
+        var rtg = it.rating ? '<span class="rtag r-' + it.rating.toLowerCase() + '">' +
+          (it.rating === 'BUY' ? '买' : (it.rating === 'SELL' ? '卖' : '中')) + '</span>' : '';
         h += '<div class="indcell"><div class="ik">' + esc(it.name) + '</div>' +
-          '<div class="iv ' + dirCls + '">' + show + '</div></div>';
+          '<div class="iv ' + dirCls + '">' + show + rtg + '</div></div>';
       });
       h += '</div></div>';
     });
 
     h += '<div style="margin-top:14px;font-size:11.5px;color:var(--tx3)">' +
-      '数值颜色表示与前一交易日相比的升降（绿升红降），并非买卖方向。' +
+      '数值颜色表示与前一交易日相比的升降（绿升红降），并非买卖方向；' +
+      '指标右侧的「买 / 卖」徽标为基于阈值的多空评级（<span class="rate-buy">买入=红</span> / <span class="rate-sell">卖出=绿</span>），' +
+      '与上方「技术面结论（信号事件）」相互独立，仅供参考、不预测未来。' +
       '指标涵盖均线 / 趋势 / 震荡 / 通道 / 量能 / 情绪 / 波动率七大类，全部由 MyTT 指标库实时计算。' +
       '</div></div></div>';
   }
