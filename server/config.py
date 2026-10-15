@@ -104,6 +104,10 @@ ACCESS_MODULES: List[Tuple[str, str, str, bool]] = [
      "每次分析都要把个股行情、技术面、板块舆情与近期快讯汇总后请求大模型（LLM），"
      "有真实的 Token 成本与响应耗时。除登录外还按账号限制每日次数"
      "（默认 10 次，后台「AI 用量」面板可调）。", True),
+    ("newbieai", "小白选股 AI 讲解",
+     "每次讲解要把小白选股结果（方案说明/机器理由/行情数据）发给大模型，"
+     "翻译成大白话并提示注意事项，有真实的 Token 成本。与「AI 深度分析」"
+     "共用同一配额池（默认 10 次/天，后台「AI 用量」面板可调）。", True),
 ]
 
 _MOD_KEY = {m[0]: "TICK_AUTH_REQ_" + m[0].upper() for m in ACCESS_MODULES}

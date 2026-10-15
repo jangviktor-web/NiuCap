@@ -4,7 +4,7 @@
   1. 未登录点「开始分析」→ 弹登录框（guardScreen 复用选股守卫范式）
   2. 登录成功 → 自动续跑被拦的那次分析，结果区出现「今日配额」行
   3. 后台「📈 AI 用量」面板：渲染每账号已用/配额、改配额保存即生效
-  4. 前端 /api/access 已含 stockai 开关（9 模块）
+  4. 前端 /api/access 已含 stockai / newbieai 开关（10 模块，#224 起）
   5. 全程 JS 零报错；截图留档（后台 AI 用量面板）
 
 用法：python3.11 tests/e2e_ai_quota.py
@@ -102,7 +102,8 @@ def main():
         rules = pg.evaluate("async()=>{ let d=await (await fetch('/api/access')).json(); "
                             "return d.require_login; }")
         check("/api/access 含 stockai 且默认上锁", rules.get("stockai") is True, rules.get("stockai"))
-        check("开放策略共 9 个模块", len(rules) == 9, len(rules))
+        check("/api/access 含 newbieai 且默认上锁（#224）", rules.get("newbieai") is True, rules.get("newbieai"))
+        check("开放策略共 10 个模块", len(rules) == 10, len(rules))
 
         # 进个股页（rank 抽屉 → 点第一行），等 AI 卡片出现
         pg.click('#navToggle')
@@ -202,7 +203,14 @@ def main():
         used_now = pg.evaluate("async(u)=>{ let d=await (await fetch('/api/admin/ai_usage')).json(); "
                                "let m=(d.items||[]).find(x=>x.username===u); return m.used; }", USER)
         pg.evaluate("document.querySelector('#stockAiBtn').click();")
-        pg.wait_for_timeout(4000)
+        # 等终态再断言：成功渲染（今日配额行）/ 429（已用完）/ 失败。
+        # 旧写法固定 sleep 4s——LLM 慢一点就读到「AI 分析中…」而误判
+        # （#224 回归实测踩到，非功能问题，是测试自身时序脆弱）。
+        pg.wait_for_function(
+            """() => { let t = (document.getElementById('stockAiOut')||{}).textContent || '';
+              return t.indexOf('今日配额') >= 0 || t.indexOf('已用完') >= 0
+                  || t.indexOf('次数') >= 0 || t.indexOf('失败') >= 0; }""",
+            timeout=60000)
         out_txt = pg.locator("#stockAiOut").inner_text()
         if used_now >= 3:
             check("超额时前端友好提示（含 429 文案）", "已用完" in out_txt or "次数" in out_txt,

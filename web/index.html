@@ -599,6 +599,19 @@ tbody tr:hover{background:#f7f9fc}
 .nbempty{text-align:center;padding:36px 20px;color:var(--tx3);font-size:13px;line-height:1.7}
 .nbnote{background:var(--warn-bg);border:1px solid rgba(224,140,26,.3);color:#8a5a10;
   border-radius:8px;padding:10px 13px;font-size:12.5px;line-height:1.6;margin-top:12px}
+/* #224 小白选股 AI 讲解卡片（结果行内展开） */
+.nbai{margin-top:10px;border:1px solid var(--accent);border-radius:9px;
+  background:var(--accent-bg);padding:11px 13px}
+.nbai-h{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:650;
+  color:var(--accent)}
+.nbai-ex{font-size:13px;line-height:1.75;color:var(--tx);margin-top:7px}
+.nbai-wt{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+.nbai-wt li{list-style:none;font-size:12.5px;line-height:1.6;color:var(--tx2);
+  padding-left:18px;position:relative;margin-bottom:3px}
+.nbai-wt li::before{content:'⚠';position:absolute;left:0;color:#e08e1a}
+.nbai-st{padding:1px 8px;border-radius:20px;font-size:11px;font-weight:700;
+  background:var(--accent);color:#fff;margin-left:auto}
+.nbai-q{margin-top:7px;font-size:11.5px;color:var(--tx3)}
 
 /* ===== 我的自选 ===== */
 .wtlayout{display:grid;grid-template-columns:212px 1fr;gap:16px;align-items:start}
@@ -10320,6 +10333,7 @@ function _renderNewbieResult(d){
     h += '</div>';
 
     h += '<div class="nbgo">' + starHtml(it.code, it.name) +
+         '<button class="btn sm ghost" data-nbai="' + attr(it.code) + '">✨ AI 讲解</button>' +
          '<button class="btn" data-nbgo="' + attr(it.code) + '">看详情 →</button></div>';
     h += '</div>';
   });
@@ -10339,7 +10353,60 @@ function _renderNewbieResult(d){
       fillBatchCount('newbie');
     };
   });
+  // #224 AI 讲解按钮（同 data-nbgo 模式，但走登录守卫 + 配额）
+  Array.prototype.forEach.call($('nbBody').querySelectorAll('[data-nbai]'), function(el){
+    el.onclick = function(){ runNewbieAiGuarded(el.getAttribute('data-nbai')); };
+  });
   fillBatchCount('newbie');
+}
+
+/* #224 小白选股 AI 讲解：把机器理由翻译成大白话 + 买前注意点。
+   数据全部来自前端已持有的结果项，POST 给后端过 LLM（后端不重算）。
+   登录守卫 + 配额同个股分析（共用配额池）；再点一次同一按钮 = 收起。
+   注意：结果刷新会整块重渲染 nbBody，加载中的卡片随行消失——then 里
+   先查盒子还在不在，别对着 null 渲染。 */
+function runNewbieAi(code){
+  var d = nbState.data || {};
+  var it = null;
+  (d.items || []).forEach(function(x){ if(x.code === code) it = x; });
+  var row = document.querySelector('.nbrow[data-nbcode="' + attr(code) + '"]');
+  if(!it || !row) return;
+  var old = row.querySelector('.nbai');
+  if(old){ old.remove(); return; }               // 已展开 → 再点收起
+  row.insertAdjacentHTML('beforeend',
+    '<div class="nbai"><div class="load"><span class="spin"></span> AI 讲解中…</div></div>');
+  api('/api/newbie/explain', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({item: it, preset: d.preset || {}})}).then(function(r){
+    var box = row.querySelector('.nbai');
+    if(!box) return;                              // 行已被刷新掉，丢弃
+    if(!r || !r.ok){ die(box, (r && r.reason) || '讲解失败'); return; }
+    renderNewbieAi(r, box);
+  }).catch(function(e){
+    var box = row.querySelector('.nbai');
+    if(box) die(box, '讲解失败：' + (e && e.message ? e.message : e));
+  });
+}
+var runNewbieAiGuarded = guardScreen(runNewbieAi, 'AI 讲解', 'newbieai');
+function renderNewbieAi(r, out){
+  var L = r.llm;
+  var h = '<div class="nbai-h">✨ AI 讲解';
+  if(L && L.style) h += '<span class="nbai-st">' + esc(L.style) + '</span>';
+  h += '</div>';
+  if(L){
+    h += '<div class="nbai-ex">' + esc(L.explain) + '</div>';
+    if(L.watch && L.watch.length)
+      h += '<ul class="nbai-wt">' +
+           L.watch.map(function(x){ return '<li>' + esc(x) + '</li>'; }).join('') + '</ul>';
+    h += '<div class="nbai-q">✨ AI 生成 · 仅供参考，非投资建议</div>';
+  } else {
+    h += '<div class="empty" style="padding:6px 0">AI 模型未启用或暂不可用，上方机器理由仅供参考。</div>';
+  }
+  if(r.ai_quota)
+    h += '<div class="nbai-q">今日配额：已用 <b>' + r.ai_quota.used + '</b> / ' + r.ai_quota.quota + ' 次' +
+         (r.ai_quota.remaining > 0 ? '（剩余 ' + r.ai_quota.remaining + ' 次）'
+                                   : '（已用完，明日 0 点恢复）') + '</div>';
+  out.innerHTML = h;
 }
 
 // 跳到个股分析页。

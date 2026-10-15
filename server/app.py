@@ -2261,6 +2261,36 @@ def api_newbie_pick(
     return out
 
 
+@app.post("/api/newbie/explain")
+def api_newbie_explain(request: Request, body: Dict[str, Any] = Body(...)):
+    """#224 小白选股 AI 讲解：把机器理由翻译成大白话 + 买前注意点（只读 LLM）。
+
+    输入 {item, preset} 全部来自前端已持有的 newbie_pick 结果，后端不重算。
+    登录与配额同 #216：模块开关默认要求登录（TICK_AUTH_REQ_NEWBIEAI），
+    登录用户每次扣 1 次当日配额（与「AI 深度分析」共用配额池，默认 10 次/天，
+    后台「AI 用量」面板可调），先扣后调、失败不退款；超额返回 429。
+    LLM 不可用/输出不过 schema → llm=None，前端降级展示纯机器理由（不报错）。
+    """
+    import store as _store
+    u = _require_module_login(request, "newbieai")
+    quota_info = None
+    if u:
+        ok, used, quota = _store.ai_quota_consume(u["id"])
+        if not ok:
+            raise HTTPException(
+                429,
+                f"今日 AI 讲解次数已用完（每账号每日 {quota} 次），"
+                f"次日 0 点自动恢复；如需调整可让管理员在后台「AI 用量」面板修改配额")
+        quota_info = {"used": used, "quota": quota,
+                      "remaining": max(quota - used, 0)}
+    import newbie_ai
+    try:
+        res = newbie_ai.explain(body.get("item") or {}, body.get("preset") or {})
+    except Exception:
+        res = None                          # LLM 不可用是常态路径，降级不 500
+    return {"ok": True, "llm": res, "ai_quota": quota_info}
+
+
 # ===========================================================================
 # 选股历史自动存档（小白 / 策略 / 条件 每次执行后落库，便于过后回看胜率）
 # ===========================================================================
