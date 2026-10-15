@@ -54,6 +54,20 @@ _REGISTRY: List[Tuple[str, str, str, Any, str]] = [
     ("FREENEWS_API_KEY", "新闻 API · FreeNews 密钥", "secret", "",
      "Free News API 密钥（api.freenewsapi.io，5000 次/天免费）。英文为主、无情绪，"
      "用本地词典补情绪；留空则跳过。也可在 .env 用同名校验变量配置。"),
+
+    # ── AI 模型（LLM）配置：后台「AI 模型」面板填写，Agnes 默认免费 ──
+    # 走 OpenAI 兼容接口（/v1/chat/completions），换提供方只改 base_url + model 两个字段。
+    # 优先级同样是 meta > env > 默认；llm_client 读取顺序：config.get → 环境变量 → 内置默认。
+    ("LLM_ENABLED", "启用 AI 模型（LLM）", "bool", False,
+     "打开后面板可用 LLM 能力（如 AI 个股分析、舆情复核）。需先填好下方 API 配置并通过「测试连接」。"),
+    ("LLM_BASE_URL", "API Base URL", "str", "https://apihub.agnes-ai.com/v1",
+     "OpenAI 兼容端点。Agnes 默认填这个；换 DeepSeek 改 https://api.deepseek.com/v1，"
+     "换本地 Ollama 改 http://localhost:11434/v1。"),
+    ("LLM_API_KEY", "API 密钥", "secret", "",
+     "提供方后台申请的 Key。Agnes 邮箱注册即得、不绑卡；本地 Ollama 可留空。前端以密码框渲染，不回显。"),
+    ("LLM_MODEL", "模型名", "str", "agnes-2.5-flash",
+     "Agnes 免费档可用 agnes-2.5-flash / agnes-3.0-flash / agnes-2.5-pro-beta（支持图片输入、1M 上下文）。"
+     "换提供方同步改模型名，如 deepseek-v4-flash。"),
 ]
 
 # ------------------------------------------------- 模块登录权限
@@ -86,6 +100,10 @@ ACCESS_MODULES: List[Tuple[str, str, str, bool]] = [
      "计划要长期保存、由后台线程定时检查触发，必须归属到某个账号才有意义。", True),
     ("paper", "虚拟盘",
      "持仓 / 成交流水 / 费率设置长期存在服务端数据库，匿名数据无法跨设备延续。", True),
+    ("stockai", "AI 深度分析",
+     "每次分析都要把个股行情、技术面、板块舆情与近期快讯汇总后请求大模型（LLM），"
+     "有真实的 Token 成本与响应耗时。除登录外还按账号限制每日次数"
+     "（默认 10 次，后台「AI 用量」面板可调）。", True),
 ]
 
 _MOD_KEY = {m[0]: "TICK_AUTH_REQ_" + m[0].upper() for m in ACCESS_MODULES}
@@ -111,6 +129,13 @@ _BY_KEY = {r[0]: r for r in _REGISTRY}
 # 参数分组：access 组的开关在后台「登录权限」面板单独渲染，
 # 「运行参数」面板按 group 过滤掉它们 —— 否则同一批开关在两处出现，改哪儿都说不清。
 _GROUP: Dict[str, str] = {_MOD_KEY[m[0]]: "access" for m in ACCESS_MODULES}
+# LLM 配置单独归到 llm 组：后台「AI 模型」面板渲染，且从「运行参数」面板过滤掉避免重复。
+_GROUP.update({
+    "LLM_ENABLED": "llm",
+    "LLM_BASE_URL": "llm",
+    "LLM_API_KEY": "llm",
+    "LLM_MODEL": "llm",
+})
 
 _META_PREFIX = "cfg."
 _CACHE: Dict[str, Tuple[float, Any]] = {}

@@ -156,25 +156,29 @@ def _load_news(hours: int = 24) -> List[Dict[str, Any]]:
 
 def _sector_stats(items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """复刻 sector_sentiment.aggregate 的归因逻辑（ticker 反查优先、关键词回落、
-    板块词修正词典方向），但按板块收集对账需要的明细。
+    板块词修正词典方向、时效衰减加权），但按板块收集对账需要的明细。
 
     为什么不用 aggregate 直接出数：它的 samples 每板块只留 3 条且不带 pub_ts，
     对账要算「旧闻占比」「被修正占比」，得自己走一遍同样的原语——
-    与 #188 巡检同做法，口径与面板严格一致。
+    与 #188 巡检同做法，口径与面板严格一致（衰减权重也复用 ss.age_weight）。
     """
     import sector_sentiment as ss
     import stock_sector_map as ssm
 
     per: Dict[str, Dict[str, Any]] = collections.defaultdict(lambda: {
         "n": 0, "pos": 0, "neg": 0, "neu": 0, "corrected": 0, "old": 0,
+        "wsum": 0.0, "pos_w": 0.0, "neg_w": 0.0,
         "samples": [], "pubs": []})
     now = _dt.datetime.now()
     prev_close = int(_dt.datetime(now.year, now.month, now.day,
                                   CLOSE_HOUR, CLOSE_MIN).timestamp()) - 24 * 3600
+    # 时效参考时刻与面板一致：窗口内最新快讯的 pub_ts（纯函数，不读墙钟）
+    ref = max((int(it.get("pub_ts") or 0) for it in items), default=0)
     for it in items:
         content = it.get("content", "") or ""
         tone = (it.get("sentiment") or {}).get("tone", "neutral")
         pub = int(it.get("pub_ts") or 0)
+        w = ss.age_weight(pub, ref)
         secs = ssm.sectors_for_stocks(it.get("stocks")) or ss.map_sectors(content)
         if not secs:
             continue
@@ -188,10 +192,13 @@ def _sector_stats(items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         for s in secs:
             a = per[s]
             a["n"] += 1
+            a["wsum"] += w
             if eff == "pos":
                 a["pos"] += 1
+                a["pos_w"] += w
             elif eff == "neg":
                 a["neg"] += 1
+                a["neg_w"] += w
             else:
                 a["neu"] += 1
             if sec_net and eff != tone:
@@ -236,11 +243,24 @@ def _benchmark(fallback_eq: float) -> Tuple[float, str]:
 # ───────────────────────── 判定逻辑 ─────────────────────────
 
 def _dir_of(a: Dict[str, Any]) -> str:
-    """样本数够 + 净情绪占比过阈值才给方向，否则中性（样本不足单列）。"""
+    """样本数够 + 净情绪占比过阈值才给方向，否则中性（样本不足单列）。
+
+    ponytail: 时效衰减口径（#189 对账驱动）——带 wsum 时按衰减加权净情绪判定
+    （旧闻降权，与面板 heat_table 严格一致）；wsum 缺失（自检探针/旧调用）
+    回落原始计数口径，两套口径阈值同为 NET_RATIO。
+    """
     n = a["n"]
-    net = a["pos"] - a["neg"]
     if n < MIN_N:
         return "样本不足"
+    wsum = a.get("wsum") or 0.0
+    if wsum > 0:
+        net_w = (a.get("pos_w", 0.0) - a.get("neg_w", 0.0))
+        if net_w > 0 and net_w / wsum >= NET_RATIO:
+            return "偏多"
+        if net_w < 0 and -net_w / wsum >= NET_RATIO:
+            return "偏空"
+        return "中性"
+    net = a["pos"] - a["neg"]
     if net > 0 and net / n >= NET_RATIO:
         return "偏多"
     if net < 0 and -net / n >= NET_RATIO:
@@ -317,7 +337,9 @@ def run_verify(hours: int = 24, why: str = "手动") -> Dict[str, Any]:
     rows: List[Dict[str, Any]] = []
     for sec, board_names in SECTOR_BOARDS.items():
         a = per.get(sec) or {"n": 0, "pos": 0, "neg": 0, "neu": 0,
-                             "corrected": 0, "old": 0, "samples": [], "pubs": []}
+                             "corrected": 0, "old": 0,
+                             "wsum": 0.0, "pos_w": 0.0, "neg_w": 0.0,
+                             "samples": [], "pubs": []}
         net = a["pos"] - a["neg"]
         sdir = _dir_of(a)
         conf = "高" if a["n"] >= CONF_N else ("中" if a["n"] >= MIN_N else "低")
@@ -360,6 +382,10 @@ def run_verify(hours: int = 24, why: str = "手动") -> Dict[str, Any]:
                "counted": counts, "is_trading_day": is_td,
                "n_dir": len(denom), "hits": len(hits),
                "acc": acc, "acc_hi": acc_hi, "n_hi": len(hi)}
+    # 调整建议：与 md 报告同源（_suggestions），随 API 返回让前端直给结论，
+    # 不改词表——人看建议后自己回 sector_sentiment.py 改（#188/#189 原则）。
+    wrong = [r for r in rows if r["result"] == "错失"]
+    suggestions = _suggestions(summary, rows, wrong)
     report_path = _write_report(today, summary, rows)
 
     import store as _st
@@ -375,7 +401,8 @@ def run_verify(hours: int = 24, why: str = "手动") -> Dict[str, Any]:
         _st.meta_set(K_VRF_RESULT,
                      f"{_now_text()} 试跑（{note or '不计入'}）：{len(items)} 条 / "
                      f"{len(denom)} 个方向板块，命中 {len(hits)}")
-    return {"ok": True, "summary": summary, "rows": rows, "report": report_path}
+    return {"ok": True, "summary": summary, "rows": rows,
+            "suggestions": suggestions, "report": report_path}
 
 
 def _write_report(today: str, summary: Dict[str, Any],
@@ -646,6 +673,13 @@ def selfcheck() -> int:
     ok("偏空对称判定", _dir_of({"n": 7, "pos": 2, "neg": 5}) == "偏空")
     ok("样本不足单列（n<3 不给方向）",
        _dir_of({"n": 2, "pos": 2, "neg": 0}) == "样本不足")
+    # ponytail: 时效衰减口径（wsum 存在走加权；探针无 wsum 仍走原始计数口径）
+    ok("衰减口径：旧闻降权后净情绪不过阈 → 中性",
+       _dir_of({"n": 4, "pos": 3, "neg": 1, "wsum": 1.75, "pos_w": 0.75, "neg_w": 1.0}) == "中性")
+    ok("衰减口径：新鲜利好主导 → 偏多",
+       _dir_of({"n": 4, "pos": 3, "neg": 1, "wsum": 1.75, "pos_w": 1.0, "neg_w": 0.25}) == "偏多")
+    ok("衰减口径：样本不足仍优先（n<3 即使带权重）",
+       _dir_of({"n": 2, "pos": 2, "neg": 0, "wsum": 2.0, "pos_w": 2.0, "neg_w": 0.0}) == "样本不足")
     # 超额死区探针
     ok("超额 ±0.5% 内记平",
        _actual_dir(0.4) == "平" and _actual_dir(-0.5) == "平"

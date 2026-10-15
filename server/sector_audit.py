@@ -373,6 +373,18 @@ def start_daily_audit(hours: int = 24) -> bool:
                         if r.get("ok"):
                             _st.meta_set(K_AUDIT_OK, today)
                         print(f"[sector-audit] 完成：{r.get('summary', {})}")
+                        # P2：巡检落听后顺手跑 AI 优化提议——只落待审文件，人工勾选才应用。
+                        # 独立 try：LLM 未启用/网络错都不能让巡检状态陪葬。
+                        try:
+                            import sentiment_optimizer as _so
+                            pr = _so.run_daily(hours=hours)
+                            if pr.get("empty"):
+                                print(f"[sentiment-opt] 每日提议：{pr.get('msg')}")
+                            else:
+                                print(f"[sentiment-opt] 每日提议完成：{pr.get('n_pass', 0)} 条通过护栏 / "
+                                      f"{pr.get('n_fail', 0)} 条被拒（待人工勾选，见后台「AI 模型」卡片）")
+                        except Exception as e:
+                            print(f"[sentiment-opt] 每日提议失败（不影响巡检）：{e}")
             except Exception as e:
                 print(f"[sector-audit] 巡检异常（不影响其他功能）：{e}")
             _audit_stop.wait(60)

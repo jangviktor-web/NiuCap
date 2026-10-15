@@ -84,6 +84,20 @@ _STRATEGY_HINTS = [
 _CN_NUM = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5,
            "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 
+# 键 → 中文名映射（提成模块级常量：规则版 parse_intent 与 LLM 增强版
+# intent_llm 共用，避免两处各写一份查表走偏）
+_STRATEGY_NAMES = {
+    "ma_cross": "均线交叉", "macd": "MACD信号", "rsi": "RSI超买超卖",
+    "boll": "布林带突破", "kdj": "KDJ交叉", "ensemble": "多因子共振",
+    "buy_hold": "买入持有",
+}
+_TYPE_NAMES = {
+    "trend_following": "趋势跟随", "mean_reversion": "均值回归",
+    "breakout": "突破", "reversal": "反转", "momentum": "动量",
+    "grid": "网格/区间",
+}
+_RISK_NAMES = {"aggressive": "激进", "balanced": "平衡", "conservative": "保守"}
+
 
 def _hit(text: str, keys: List[str]) -> bool:
     """关键词命中判断。ASCII 关键词按词边界匹配，中文关键词直接包含匹配。"""
@@ -465,22 +479,12 @@ def parse_intent(text: str) -> Dict[str, Any]:
         "unsupported": scr["unsupported"],
         "logic": raw,
         "strategy": strategy,
-        "strategy_name": {
-            "ma_cross": "均线交叉", "macd": "MACD信号", "rsi": "RSI超买超卖",
-            "boll": "布林带突破", "kdj": "KDJ交叉", "ensemble": "多因子共振",
-            "buy_hold": "买入持有",
-        }.get(strategy, "未匹配到内置策略"),
+        "strategy_name": _STRATEGY_NAMES.get(strategy, "未匹配到内置策略"),
         "indicators": indicators,
         "strategy_type": strategy_type,
-        "strategy_type_name": {
-            "trend_following": "趋势跟随", "mean_reversion": "均值回归",
-            "breakout": "突破", "reversal": "反转", "momentum": "动量",
-            "grid": "网格/区间",
-        }.get(strategy_type, strategy_type),
+        "strategy_type_name": _TYPE_NAMES.get(strategy_type, strategy_type),
         "risk_profile": risk_profile,
-        "risk_profile_name": {
-            "aggressive": "激进", "balanced": "平衡", "conservative": "保守",
-        }.get(risk_profile, risk_profile),
+        "risk_profile_name": _RISK_NAMES.get(risk_profile, risk_profile),
         "entry": entry,
         "exit": exit_rule,
         "params": {

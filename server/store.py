@@ -32,7 +32,7 @@ import os
 import re
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 # ------------------------------------------------------------------ 路径
 
@@ -91,6 +91,8 @@ _MIGRATIONS = {
         ("stamp_rate", "REAL NOT NULL DEFAULT 0.0005"),
         ("etf_fee_rate", "REAL NOT NULL DEFAULT 0.00025"),
         ("etf_fee_min", "REAL NOT NULL DEFAULT 5.0"),
+        # AI 深度分析每日配额（次/天）：老库补列回落默认 10，与新建账号一致。
+        ("ai_quota", "INTEGER NOT NULL DEFAULT 10"),
     ],
     "trades": [
         # 成交价来源：实时 / 收盘 / 昨收 / 手填。老库补空串（前端显示为「—」）。
@@ -108,6 +110,7 @@ _MIGRATIONS_MYSQL = {
         ("stamp_rate", "DOUBLE NOT NULL DEFAULT 0.0005"),
         ("etf_fee_rate", "DOUBLE NOT NULL DEFAULT 0.00025"),
         ("etf_fee_min", "DOUBLE NOT NULL DEFAULT 5.0"),
+        ("ai_quota", "INT NOT NULL DEFAULT 10"),
     ],
     "trades": [
         ("pspan", "VARCHAR(16) NOT NULL DEFAULT ''"),
@@ -397,6 +400,7 @@ CREATE TABLE IF NOT EXISTS users (
     stamp_rate    REAL NOT NULL DEFAULT 0.0005,
     etf_fee_rate  REAL NOT NULL DEFAULT 0.00025,
     etf_fee_min   REAL NOT NULL DEFAULT 5.0,
+    ai_quota      INTEGER NOT NULL DEFAULT 10,
     created_at  REAL    NOT NULL
 );
 
@@ -523,6 +527,17 @@ CREATE TABLE IF NOT EXISTS meta (
     v TEXT NOT NULL
 );
 
+-- AI 深度分析每日用量：(user_id, 当天日期) 一行，cnt 为当日已用次数。
+-- 主键用 (user_id, day) 而非自增 id：天然去重，重复扣减幂等；
+-- 跟 users 级联删除 —— 账号没了，用量记录不该留下。
+CREATE TABLE IF NOT EXISTS ai_usage (
+    user_id  INTEGER NOT NULL,
+    day      TEXT    NOT NULL,          -- YYYY-MM-DD（本地日期，0 点自动换天）
+    cnt      INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(user_id, day),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+);
+
 -- 日线历史行情（供选股/回测做真历史计算，避免每次请求实时拉取）
 -- 主键用 (code, date) 而非自增 id：天然去重，重复入库幂等
 CREATE TABLE IF NOT EXISTS daily_bars (
@@ -581,6 +596,7 @@ CREATE TABLE IF NOT EXISTS users (
     stamp_rate    DOUBLE NOT NULL DEFAULT 0.0005,
     etf_fee_rate  DOUBLE NOT NULL DEFAULT 0.00025,
     etf_fee_min   DOUBLE NOT NULL DEFAULT 5.0,
+    ai_quota      INT NOT NULL DEFAULT 10,
     created_at  DOUBLE NOT NULL,
     UNIQUE KEY uk_users_username(username)
 );
@@ -704,6 +720,15 @@ CREATE TABLE IF NOT EXISTS grids (
 CREATE TABLE IF NOT EXISTS meta (
     k VARCHAR(64) PRIMARY KEY,
     v VARCHAR(64) NOT NULL
+);
+
+-- AI 深度分析每日用量：与 SQLite 版同构；(user_id, day) 主键保证并发扣减幂等
+CREATE TABLE IF NOT EXISTS ai_usage (
+    user_id  BIGINT NOT NULL,
+    day      VARCHAR(10) NOT NULL,
+    cnt      INT NOT NULL DEFAULT 0,
+    PRIMARY KEY(user_id, day),
+    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
 -- 日线历史行情；主键 (code, date) 保证重复入库幂等
@@ -1663,6 +1688,114 @@ def set_fees(fees: Dict[str, Any], user_id: Optional[int] = None) -> Dict[str, f
     return cur
 
 
+# ------------------------------------------------ AI 深度分析配额（#216 需求）
+# 每个账号每日可用次数，默认 10 次/天；管理员在后台「AI 用量」面板按账号调整，
+# 改成 0 即停用该账号。用量按「本地日期」计，0 点自动换天。
+
+_AI_QUOTA_DEFAULT = 10
+_AI_QUOTA_MAX = 1000
+
+
+def _today() -> str:
+    """本地日期键（YYYY-MM-DD）。用 time 不用 datetime：store 顶部只 import time。"""
+    return time.strftime("%Y-%m-%d")
+
+
+def get_ai_quota(user_id: int) -> int:
+    """取该账号的每日 AI 分析配额；库里缺失（老行/异常）时回落默认 10。"""
+    try:
+        c = _conn()
+        r = c.execute("SELECT ai_quota FROM users WHERE id=?",
+                      (int(user_id),)).fetchone()
+        if not r or "ai_quota" not in r.keys():
+            return _AI_QUOTA_DEFAULT
+        return int(r["ai_quota"])
+    except Exception:
+        return _AI_QUOTA_DEFAULT
+
+
+def set_ai_quota(user_id: int, quota: Any) -> int:
+    """设置每日配额。0 = 停用该账号的 AI 深度分析；上界 1000 防手滑写成天文数字。"""
+    try:
+        n = int(quota)
+    except (TypeError, ValueError):
+        raise ValueError("配额应为整数")
+    if not (0 <= n <= _AI_QUOTA_MAX):
+        raise ValueError(f"配额应在 0 ~ {_AI_QUOTA_MAX} 之间，收到 {n}")
+    c = _conn()
+    c.execute("UPDATE users SET ai_quota=? WHERE id=?", (n, int(user_id)))
+    c.commit()
+    return n
+
+
+def ai_usage_today(user_id: int) -> int:
+    """当日已用次数（没有记录 = 0）。"""
+    c = _conn()
+    r = c.execute("SELECT cnt FROM ai_usage WHERE user_id=? AND day=?",
+                  (int(user_id), _today())).fetchone()
+    return int(r["cnt"]) if r else 0
+
+
+def ai_quota_consume(user_id: int) -> Tuple[bool, int, int]:
+    """原子扣减一次 AI 分析额度。返回 (是否放行, 今日已用, 配额)。
+
+    为什么把「未超额才 +1」压进数据库单条语句：先查后扣（check-then-bump）
+    在并发下有经典竞态 —— 两个请求同时看到 used=9 都放行，实际跑了 11 次。
+    两条 UPSERT 各自把比较逻辑交给数据库单线程执行，从根上没这个窗口：
+
+      SQLite: INSERT ... ON CONFLICT(user_id,day)
+              DO UPDATE SET cnt=cnt+1 WHERE cnt < ?
+      MySQL:  INSERT ... ON DUPLICATE KEY UPDATE
+              cnt = IF(cnt < ?, cnt+1, cnt)
+
+    放行判定用「扣减前后对比」而不是阈值比较：并发下第二个请求执行时
+    WHERE 已经不成立（cnt 已被第一个请求推到位），它的前后值相等即拒绝。
+    阈值比较会误判 —— used==quota==10 时，被拒的请求留下的 used 仍是 10，
+    `used <= quota` 会把拒绝当成放行。
+    """
+    uid = int(user_id)
+    quota = get_ai_quota(uid)
+    if quota <= 0:                       # 管理员停用：直接拒，不写用量行
+        return False, ai_usage_today(uid), quota
+    day = _today()
+    before = ai_usage_today(uid)
+    c = _conn()
+    if IS_MYSQL:
+        c.execute(
+            "INSERT INTO ai_usage(user_id,day,cnt) VALUES(?,?,1) "
+            "ON DUPLICATE KEY UPDATE cnt = IF(cnt < ?, cnt+1, cnt)",
+            (uid, day, quota))
+    else:
+        c.execute(
+            "INSERT INTO ai_usage(user_id,day,cnt) VALUES(?,?,1) "
+            "ON CONFLICT(user_id,day) DO UPDATE SET cnt=cnt+1 WHERE cnt < ?",
+            (uid, day, quota))
+    c.commit()
+    used = ai_usage_today(uid)
+    return (used > before), used, quota
+
+
+def ai_usage_report() -> Dict[str, Any]:
+    """管理端统计：每账号当日已用次数 / 每日配额 / 总计，一次查齐。"""
+    day = _today()
+    c = _conn()
+    rows = c.execute(
+        """SELECT u.id, u.username, u.display,
+                  COALESCE(a.cnt, 0)      AS used,
+                  COALESCE(u.ai_quota, ?) AS quota
+             FROM users u
+             LEFT JOIN ai_usage a ON a.user_id = u.id AND a.day = ?
+            ORDER BY u.id""", (_AI_QUOTA_DEFAULT, day)).fetchall()
+    items = [dict(r) for r in rows]
+    for it in items:
+        it["id"] = int(it["id"])
+        it["used"] = int(it["used"])
+        it["quota"] = int(it["quota"])
+    return {"day": day, "items": items,
+            "total_used": sum(it["used"] for it in items),
+            "default_quota": _AI_QUOTA_DEFAULT}
+
+
 def _calc_fee(amount: float, side: str, fees: Optional[Dict[str, float]] = None,
               etf: bool = False) -> float:
     """佣金（有最低值）+ 卖出印花税。
@@ -2353,6 +2486,52 @@ def selfcheck() -> Dict[str, Any]:
         out["steps"].append("非法费率拒绝 OK")
         set_fees(DEFAULT_FEES, u["id"])           # 还原
 
+        # ---------- AI 深度分析配额：默认 10 次/天，超额拒绝，可调 ----------
+        # 先清当日记录：自检可重复跑，不能依赖「今天恰好没用过」。
+        _cc = _conn()
+        _cc.execute("DELETE FROM ai_usage WHERE user_id=?", (u["id"],))
+        _cc.commit()
+        assert get_ai_quota(u["id"]) == _AI_QUOTA_DEFAULT, \
+            f"新账号默认配额应为 {_AI_QUOTA_DEFAULT}"
+        for i in range(_AI_QUOTA_DEFAULT):
+            ok, used, quota = ai_quota_consume(u["id"])
+            assert ok and quota == _AI_QUOTA_DEFAULT, f"第 {i+1} 次应放行"
+        assert ai_usage_today(u["id"]) == _AI_QUOTA_DEFAULT
+        ok, used, quota = ai_quota_consume(u["id"])
+        assert not ok, f"第 {_AI_QUOTA_DEFAULT + 1} 次必须拒绝"
+        out["steps"].append(f"AI 配额默认 {_AI_QUOTA_DEFAULT} 次 + 超额拒绝 OK")
+
+        # 调大立即放行；调到 0 = 停用（先清记录，否则旧 cnt 会挡住新配额）
+        _cc.execute("DELETE FROM ai_usage WHERE user_id=?", (u["id"],))
+        _cc.commit()
+        set_ai_quota(u["id"], 2)
+        assert ai_quota_consume(u["id"])[0] and ai_quota_consume(u["id"])[0]
+        assert not ai_quota_consume(u["id"])[0], "调到 2 后第 3 次应拒绝"
+        _cc.execute("DELETE FROM ai_usage WHERE user_id=?", (u["id"],))
+        _cc.commit()
+        set_ai_quota(u["id"], 0)
+        ok, used, quota = ai_quota_consume(u["id"])
+        assert not ok and quota == 0, "配额 0 应停用且不写用量行"
+        out["steps"].append("set_ai_quota 生效 OK（0 = 停用）")
+
+        for bad in ("abc", -1, 99999):
+            try:
+                set_ai_quota(u["id"], bad)
+                raise AssertionError(f"非法配额 {bad} 应被拒绝")
+            except ValueError:
+                pass
+        out["steps"].append("非法配额拒绝 OK")
+
+        rep = ai_usage_report()
+        me = [x for x in rep["items"] if x["id"] == u["id"]]
+        assert me and me[0]["quota"] == 0, "报表应读到改后的配额"
+        assert rep["day"] == _today() and rep["default_quota"] == _AI_QUOTA_DEFAULT
+        out["steps"].append("ai_usage_report 汇总 OK")
+
+        set_ai_quota(u["id"], _AI_QUOTA_DEFAULT)   # 还原（用户随后被删，双保险）
+        _cc.execute("DELETE FROM ai_usage WHERE user_id=?", (u["id"],))
+        _cc.commit()
+
         # ETF 是按代码段判的，不联网
         assert is_etf("sh510300") and is_etf("sz159915") and is_etf("sh588000")
         assert not is_etf("sh600519") and not is_etf("sz000858")
@@ -2455,8 +2634,11 @@ def selfcheck() -> Dict[str, Any]:
         cc.execute("DELETE FROM users WHERE id=?", (u2["id"],))
         cc.commit()
 
-        assert len(list_trades(u["id"])) == 3
-        out["steps"].append("trades 流水 OK（3 笔）")
+        # seed_test_position 会清掉该 (user, code) 的既有买入流水再插昨日仓，
+        # 所以剩下的是「seed 买入 1 笔 + 卖出 1 笔」共 2 笔（曾经断言 3 笔，
+        # 早于 seed 删除买入流水的实现，已过期）。
+        assert len(list_trades(u["id"])) == 2
+        out["steps"].append("trades 流水 OK（2 笔）")
 
         # ---------- 匿名数据认领（搬走制）----------
         # 用一个临时"匿名账号"模拟守卫之前的数据，验证搬走语义：

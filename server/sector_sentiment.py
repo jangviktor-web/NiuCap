@@ -18,9 +18,16 @@
     医药个股/通信铁塔/宏观金融），回填关键词覆盖主要漏网来源；
   · 新建 SECTOR_BULLISH / SECTOR_BEARISH 板块级利空利好词表（基于公开研报与
     行业共识联网核实），并与全局词合并，接入 aggregate 打分（catalyst 信号）。
+
+2026-10 扩展层双轨（#189 对账 + AI 优化闭环 P1）：SECTOR_BULLISH/BEARISH 为
+基础层（selfcheck 锁死、不可运行期删改）；data/sector_lexicon_extra.json 为
+扩展层（运行期增删、反极性覆盖基础层同名词），是 sentiment_optimizer 的 AI
+优化建议唯一允许的写入口——AI 只写扩展层，动不了基础层，改错可一键回滚。
 """
 from __future__ import annotations
 import collections
+import json
+import os
 import re
 from typing import Any, Dict, List, Tuple
 
@@ -284,6 +291,138 @@ GLOBAL_BEARISH: List[str] = ["利空", "大跌", "下调", "制裁", "调查", "
                             "砍单", "下挫", "跳水"]
 
 
+# ───────────────────────── 扩展层（AI 优化建议落点，双轨制） ─────────────────────────
+# ponytail: 板块词表走「硬编码基础层 + data/sector_lexicon_extra.json 扩展层」双轨
+# （照 sentiment.py 模式）。基础层由 selfcheck 锁死；扩展层运行期增删、可回滚，
+# 是 AI 舆情优化器（sentiment_optimizer）唯一允许的写入口。
+# 覆盖语义：扩展层词按极性「反噬」基础层同名词——扩展层 bear 含「医保」时，
+# 合并表从基础层 bull 剔除「医保」、bear 收录「医保」（#189 实证：「医保」被
+# 基础层列为医药利好词，导致「国家医保局强化医药价格管理」这类控费利空被
+# sec_net=1 强推看涨）。基础层词本身不可删（remove_word 只作用于扩展层），
+# 需要覆盖某基础层词时，加一条反极性扩展词即可。
+
+EXTRA_PATH = os.path.join(os.path.dirname(__file__), "..", "data",
+                          "sector_lexicon_extra.json")
+
+
+def _load_extra() -> Dict[str, Dict[str, List[str]]]:
+    """读扩展层 {板块: {bull:[...], bear:[...]}}；文件缺失/损坏返回 {}。"""
+    try:
+        with open(EXTRA_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:
+        return {}
+    if not isinstance(d, dict):
+        return {}
+    out: Dict[str, Dict[str, List[str]]] = {}
+    for sec, pol in d.items():
+        if not isinstance(pol, dict):
+            continue
+        bull = [w for w in (pol.get("bull") or []) if isinstance(w, str) and w.strip()]
+        bear = [w for w in (pol.get("bear") or []) if isinstance(w, str) and w.strip()]
+        if bull or bear:
+            out[sec] = {"bull": bull, "bear": bear}
+    return out
+
+
+def _save_extra(d: Dict[str, Dict[str, List[str]]]) -> None:
+    os.makedirs(os.path.dirname(EXTRA_PATH), exist_ok=True)
+    with open(EXTRA_PATH, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+
+
+def _tables(extra=None):
+    """合并基础层 + 扩展层 → (bull, bear)。扩展层反极性词覆盖基础层同名词。
+
+    只认 SECTOR_KEYWORDS 里已有的板块（手改 JSON 也注入不了新板块）；
+    同词若同时出现在扩展层两侧（add_word 已阻止，手改 JSON 才会出现），
+    两侧都收录、sec_net 互相抵消为中性，不制造方向。
+    """
+    bull = {s: list(v) for s, v in SECTOR_BULLISH.items()}
+    bear = {s: list(v) for s, v in SECTOR_BEARISH.items()}
+    for sec, pol in (extra or {}).items():
+        if sec not in SECTOR_KEYWORDS:
+            continue
+        ex_b = [w for w in (pol.get("bull") or []) if w not in bull.get(sec, [])]
+        ex_d = [w for w in (pol.get("bear") or []) if w not in bear.get(sec, [])]
+        for w in ex_d:                    # 反极性覆盖：从对侧基础层剔除同名词
+            if w in bull.get(sec, []):
+                bull[sec].remove(w)
+        for w in ex_b:
+            if w in bear.get(sec, []):
+                bear[sec].remove(w)
+        bull[sec] = bull.get(sec, []) + ex_b
+        bear[sec] = bear.get(sec, []) + ex_d
+    return bull, bear
+
+
+def rebuild(extra=None):
+    """重建进程级合并词表 _BULL/_BEAR。extra=None 时从磁盘读扩展层。"""
+    global _BULL, _BEAR
+    _BULL, _BEAR = _tables(extra if extra is not None else _load_extra())
+
+
+_BULL, _BEAR = _tables(_load_extra())   # 初始合并表（rebuild 会覆盖）
+
+
+def list_extra():
+    """扩展层现状（只读，不含基础层）。"""
+    return _load_extra()
+
+
+def add_word(sector, polarity, word):
+    """扩展层新增一个板块催化剂词。polarity∈{'bull','bear'}。
+
+    · sector 必须在 SECTOR_KEYWORDS；词非空且 ≤12 字（长词匹配不到正文，
+      防止手滑/程序bug 往词表灌脏数据）
+    · 同名词只保留一侧：先移除对侧扩展层的同名词
+    · 基础层同极性已有该词 → 拒绝（纯重复）；基础层反极性有该词 → 允许，
+      这正是「反极性覆盖」的合法路径（如给基础层利好词「医保」加一条 bear）
+    返回更新后的 list_extra()。
+    """
+    sector = (sector or "").strip()
+    word = (word or "").strip()
+    if sector not in SECTOR_KEYWORDS:
+        raise ValueError(f"未知板块：{sector!r}（须在 SECTOR_KEYWORDS 内）")
+    if polarity not in ("bull", "bear"):
+        raise ValueError("极性必须是 bull 或 bear")
+    if not word:
+        raise ValueError("词不能为空")
+    if len(word) > 12:
+        raise ValueError("词长超 12 字，拒绝")
+    base_same = SECTOR_BULLISH if polarity == "bull" else SECTOR_BEARISH
+    if word in base_same.get(sector, []):
+        raise ValueError(f"基础层{polarity}词已有「{word}」，无需重复添加")
+    other = "bear" if polarity == "bull" else "bull"
+    d = _load_extra()
+    d.setdefault(sector, {"bull": [], "bear": []})
+    d[sector][other] = [w for w in d[sector].get(other, []) if w != word]
+    if word not in d[sector][polarity]:
+        d[sector][polarity].append(word)
+    _save_extra(d)
+    rebuild()
+    return d
+
+
+def remove_word(sector, word):
+    """删除扩展层词（基础层不可删）。返回 (removed, 更新后的 list_extra())。"""
+    sector = (sector or "").strip()
+    word = (word or "").strip()
+    d = _load_extra()
+    removed = False
+    if sector in d:
+        for pol in ("bull", "bear"):
+            if word in d[sector][pol]:
+                d[sector][pol] = [w for w in d[sector][pol] if w != word]
+                removed = True
+        if not d[sector].get("bull") and not d[sector].get("bear"):
+            d.pop(sector)
+    if removed:
+        _save_extra(d)
+        rebuild()
+    return removed, d
+
+
 def _match_terms(content: str, terms: List[str]) -> List[str]:
     """在文本中匹配词表，返回命中项（保持词表顺序）。中文子串 / 英文词边界。"""
     text = content or ""
@@ -315,8 +454,9 @@ def detect_catalysts(content: str, sectors: List[str] = None) -> Dict[str, Any]:
     bear = _match_terms(content, GLOBAL_BEARISH)
     sec_bull, sec_bear = [], []
     for s in sectors:
-        b = _match_terms(content, SECTOR_BULLISH.get(s, []))
-        d = _match_terms(content, SECTOR_BEARISH.get(s, []))
+        # ponytail: 读合并表（基础层 + 扩展层覆盖），扩展层反极性词在此生效
+        b = _match_terms(content, _BULL.get(s, []))
+        d = _match_terms(content, _BEAR.get(s, []))
         sec_bull += b
         sec_bear += d
         bull += b
@@ -379,9 +519,43 @@ def map_sectors(content: str) -> List[str]:
     return hit
 
 
+# ───────────────────────── 时效衰减（#189 对账驱动） ─────────────────────────
+# 对账发现 3/3 方向错失都由「主导新闻发布于前一日收盘前、市场已提前反映」驱动：
+# 24h 窗口内旧闻与今日消息等权累加，会把已消化的利好重复计成当日偏多。
+# 给每条快讯按 pub_ts 乘衰减权重（越新权重越高），昨日旧闻自然降权。
+# ponytail: 参考时刻取「窗口内最新快讯的 pub_ts」而非墙钟——aggregate 保持
+# 纯函数可离线自检，面板与对账（sector_verify）两端口径天然一致。
+DECAY_HALF_LIFE_H = 12.0   # 半衰期：12h 前的快讯权重减半（24h 前 ≈0.25）
+LOW_CONF_N = 3             # 样本数低于此值 → 面板标注低置信（与对账 MIN_N 一致）
+
+
+def age_weight(pub_ts, ref_ts, half_life_h: float = DECAY_HALF_LIFE_H) -> float:
+    """快讯时效权重 = 0.5 ** (距参考时刻小时数 / 半衰期)，∈(0, 1]。
+
+    pub_ts 缺失/0/异常记 1.0（无发布时间信息不惩罚，宁可不少算）；
+    ref_ts <= pub_ts（时钟回拨/未来戳）同样记 1.0。ref_ts 由调用方给
+    （面板=窗口内最新 pub_ts），本函数不读墙钟，保证可测。
+
+    踩坑记录（P1 自检抓出）：早年写成 `int(pub_ts or 0)` 后直接算 age，
+    缺失/0 被当成「Unix 元年发布」→ age 巨大 → 权重≈0，把无时间戳的旧缓存
+    条目静默清零（与文档意图正相反）。现显式判 `not pub` 提前返回 1.0。
+    """
+    try:
+        pub = int(pub_ts or 0)
+        age = (ref_ts - pub) / 3600.0
+    except (TypeError, ValueError):
+        return 1.0
+    if not pub or age <= 0 or half_life_h <= 0:
+        return 1.0
+    return 0.5 ** (age / half_life_h)
+
+
 def aggregate(items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-    """把快讯聚到板块。返回 {板块: {n,pos,neg,neu,net,score_sum,bull,bear,
-    cat_net,samples,catalyst_samples}}。
+    """把快讯聚到板块。返回 {板块: {n,pos,neg,neu,score_sum,bull,bear,
+    wsum,pos_w,neg_w,cat_net,samples,catalyst_samples}}。
+
+    wsum/pos_w/neg_w 为时效衰减后的权重和（net 的加权口径）；n/pos/neg/neu
+    仍是原始计数（面板展示、巡检阈值用）。
 
     samples 为结构化样本列表：[{tone,origin,corrected,text}]，tone=对本板块
     的生效方向，origin=词典初判，corrected=方向是否被板块词修正过。
@@ -396,11 +570,15 @@ def aggregate(items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     agg: Dict[str, Dict[str, Any]] = collections.defaultdict(
         lambda: {"n": 0, "pos": 0, "neg": 0, "neu": 0,
                  "score_sum": 0.0, "bull": 0, "bear": 0,
+                 "wsum": 0.0, "pos_w": 0.0, "neg_w": 0.0,
                  "samples": [], "catalyst_samples": []})
+    # 时效参考时刻 = 窗口内最新快讯的 pub_ts（纯函数，不读墙钟）
+    ref = max((int(it.get("pub_ts") or 0) for it in items), default=0)
     for it in items:
         content = it.get("content", "") or ""
         tone = (it.get("sentiment") or {}).get("tone", "neutral")
         score = float((it.get("sentiment") or {}).get("score", 0.0) or 0.0)
+        w = age_weight(it.get("pub_ts"), ref)
         # ponytail: ticker 反查优先，关键词作回落——避免一篇多板块的噪声放大
         secs = _ssm.sectors_for_stocks(it.get("stocks")) or map_sectors(content)
         if not secs:
@@ -411,7 +589,8 @@ def aggregate(items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         for s in secs:
             a = agg[s]
             a["n"] += 1
-            a["score_sum"] += score
+            a["wsum"] += w
+            a["score_sum"] += score * w
             a["bull"] += bull_n
             a["bear"] += bear_n
             # ponytail: 板块专属词方向由业务定义，可能与词典直觉相反
@@ -424,8 +603,10 @@ def aggregate(items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
                 eff = "neg"
             if eff == "pos":
                 a["pos"] += 1
+                a["pos_w"] += w
             elif eff == "neg":
                 a["neg"] += 1
+                a["neg_w"] += w
             else:
                 a["neu"] += 1
             # 被板块词修正过方向的，样本记 corrected（便于回看"为什么读反了"）
@@ -452,8 +633,10 @@ def heat_table(agg: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
     """按净情绪分排序的热度表（含催化剂信号列）。"""
     rows = []
     for sec, a in agg.items():
-        # 净情绪：看涨占比 - 看跌占比（[-1,1]），再乘样本量做置信加权
-        net = (a["pos"] - a["neg"]) / a["n"] if a["n"] else 0.0
+        # ponytail: 净情绪走时效衰减后的加权占比（#189 对账口径），
+        # 旧闻降权后不再把「已消化的利好」重复计成当日偏多
+        wsum = a.get("wsum") or 0.0
+        net = ((a.get("pos_w", 0.0) - a.get("neg_w", 0.0)) / wsum) if wsum else 0.0
         cat_net = a["bull"] - a["bear"]
         rows.append({"sector": sec, "n": a["n"], "pos": a["pos"],
                      "neg": a["neg"], "neu": a["neu"],
@@ -461,6 +644,7 @@ def heat_table(agg: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
                      "score_sum": round(a["score_sum"], 2),
                      "bull": a["bull"], "bear": a["bear"],
                      "cat_net": cat_net,
+                     "low_conf": a["n"] < LOW_CONF_N,
                      "samples": a["samples"],
                      "catalyst_samples": a["catalyst_samples"]})
     rows.sort(key=lambda r: (r["net"], r["cat_net"], r["score_sum"]), reverse=True)
@@ -468,13 +652,22 @@ def heat_table(agg: Dict[str, Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def catalyst_lexicon() -> List[Dict[str, Any]]:
-    """板块级利空利好词表（解析报告数据源）。返回每个板块的利好/利空词清单。"""
+    """板块级利空利好词表（解析报告数据源）。
+
+    返回生效中的**合并表**（基础层 + 扩展层，扩展层覆盖已反映），并附每板块
+    扩展层词清单（extra_bull/extra_bear），便于前端区分「哪些词是 AI/用户
+    后来加的、可删除」与「基础层硬编码、不可删」。
+    """
+    extra = _load_extra()
     out = []
     for sec in SECTOR_KEYWORDS:
+        ex = extra.get(sec, {})
         out.append({
             "sector": sec,
-            "bullish": SECTOR_BULLISH.get(sec, []),
-            "bearish": SECTOR_BEARISH.get(sec, []),
+            "bullish": _BULL.get(sec, []),
+            "bearish": _BEAR.get(sec, []),
+            "extra_bull": ex.get("bull", []),
+            "extra_bear": ex.get("bear", []),
         })
     return out
 
@@ -683,6 +876,39 @@ def selfcheck() -> int:
     # 防回归：曾因把 "[pos*]" 拼进文本导致前缀泄漏到正文（前端正则不认 *）
     ok("样本文本不含 [ 前缀", not any(str(x.get("text", "")).startswith("[") for x in flat))
 
+    # ── 时效衰减（#189 对账驱动）────────────────────────────────────────
+    # 固定参考基准（不读墙钟，纯函数可测）；内容只带板块归类词、不带任何
+    # 催化剂词，确保 sec_net=0、eff=词典 tone，单独检验衰减本身。
+    _BASE = 2_000_000_000
+    ok("age_weight：同时刻=1.0", age_weight(_BASE, _BASE) == 1.0)
+    ok("age_weight：半衰期前≈0.5", abs(age_weight(_BASE - 12 * 3600, _BASE) - 0.5) < 1e-9)
+    ok("age_weight：缺失 pub_ts=1.0（不惩罚）", age_weight(0, _BASE) == 1.0)
+    ok("age_weight：未来戳=1.0（时钟回拨）", age_weight(_BASE + 3600, _BASE) == 1.0)
+
+    def _dec_net(items):
+        r = {x["sector"]: x for x in heat_table(aggregate(items))}
+        return r.get("新能源", {})
+
+    _old_pos = {"content": "光伏板块快讯", "sentiment": {"tone": "pos", "score": 2.0},
+                "stocks": [], "pub_ts": _BASE - 20 * 3600}
+    _fresh_neg = {"content": "风电板块快讯", "sentiment": {"tone": "neg", "score": -2.0},
+                  "stocks": [], "pub_ts": _BASE - 3600}
+    _fresh_pos = {"content": "光伏板块快讯", "sentiment": {"tone": "pos", "score": 2.0},
+                  "stocks": [], "pub_ts": _BASE - 3600}
+    # 等权下 1 旧看多 + 1 新看跌 = 中性；衰减后旧闻权重≈0.21，净情绪应转负
+    _r = _dec_net([_old_pos, _fresh_neg])
+    ok("衰减：旧看多+新看跌 → 净情绪转负（等权本为中性）", _r.get("net", 0) < 0)
+    ok("衰减：旧看多+新看跌 → 判低置信（n=2）", _r.get("low_conf") is True)
+    # 反向：旧看跌 + 新看多 → 净情绪转正（衰减对称，不制造方向偏置）
+    _r2 = _dec_net([dict(_fresh_neg, pub_ts=_BASE - 20 * 3600), _fresh_pos])
+    ok("衰减：旧看跌+新看多 → 净情绪转正", _r2.get("net", 0) > 0)
+    # 全新鲜样本不受影响（权重都=1，与旧口径一致）
+    _r3 = _dec_net([_fresh_pos, _fresh_pos, dict(_fresh_neg, pub_ts=0)])
+    ok("衰减：全新鲜/无 pub_ts → 权重=1 口径不变", _r3.get("net", 0) > 0 and not _r3.get("low_conf"))
+    # 旧口径行为不回归：无 pub_ts 的全部样本，net 仍等于原始计数占比
+    _r4 = _dec_net([_fresh_pos, _fresh_pos, _fresh_pos, _fresh_neg])
+    ok("衰减：4 条无衰减扰动时 net 仍=原始占比(0.5)", abs(_r4.get("net", 0) - 0.5) < 1e-9)
+
     # 4) lexicon 覆盖所有板块
     lex = {x["sector"] for x in catalyst_lexicon()}
     ok("catalyst_lexicon 覆盖全部板块", lex == set(SECTOR_KEYWORDS.keys()))
@@ -759,6 +985,62 @@ def selfcheck() -> int:
     ok("汽车 出海欧洲市场→仍判利好(出海保留)", _c8["sec_net"] > 0)
     _c9 = detect_catalysts("中国军贸订单落地，装备出口额创新高", ["军工"])
     ok("军工 军贸订单→仍判利好", _c9["sec_net"] > 0)
+
+    # ── 扩展层双轨（AI 优化建议落点）────────────────────────────────────
+    # 覆盖语义：扩展层反极性词覆盖基础层同名词。#189 实证：「医保」被基础层
+    # 列为医药利好词，导致「国家医保局强化医药价格管理」（控费利空）被强推
+    # 看涨；扩展层 bear 收录「医保」后，合并表须读成利空。
+    _orig_extra = _load_extra()
+    try:
+        rebuild({"医药": {"bear": ["医保"]}})
+        c_ex = detect_catalysts("国家医保局强化医药价格管理，控费力度加大", ["医药"])
+        ok("扩展层覆盖：医保 改判医药利空",
+           "医保" in c_ex["sec_bear"] and "医保" not in c_ex["sec_bull"] and c_ex["sec_net"] < 0)
+        ok("扩展层覆盖：同板块基础层其他词不动",
+           "集采" in _BEAR.get("医药", []) and "创新药" in _BULL.get("医药", []))
+        ok("扩展层覆盖：其他板块不受影响", "医保" not in _BULL.get("消费", []))
+        # add/remove roundtrip（写真实文件，finally 还原）
+        add_word("医药", "bear", "自检临时词")
+        ok("add_word：扩展层可见", "自检临时词" in list_extra().get("医药", {}).get("bear", []))
+        ok("add_word：合并表生效", "自检临时词" in _BEAR.get("医药", []))
+        _rt = detect_catalysts("某品种自检临时词落地，市场关注度上升", ["医药"])
+        ok("add_word：命中即判利空", _rt["sec_net"] < 0 and "自检临时词" in _rt["sec_bear"])
+        # 同名词只保留一侧：改加到 bull 后，bear 侧应消失
+        add_word("医药", "bull", "自检临时词")
+        ok("add_word：同词只保留一侧(转bull)",
+           "自检临时词" in _BULL.get("医药", []) and "自检临时词" not in _BEAR.get("医药", []))
+        _rm, _ex_after = remove_word("医药", "自检临时词")
+        ok("remove_word：删除并生效", _rm and "自检临时词" not in _BULL.get("医药", []))
+        # 护栏：未知板块/坏极性/超长词/基础层同极性重复词 一律拒绝
+        def _raises(fn, label):
+            try:
+                fn()
+                ok(label, False)
+            except ValueError:
+                ok(label, True)
+            except Exception:
+                ok(label, False)
+        _raises(lambda: add_word("不存在的板块", "bull", "词"), "add_word：拒绝未知板块")
+        _raises(lambda: add_word("医药", "sideways", "词"), "add_word：拒绝坏极性")
+        _raises(lambda: add_word("医药", "bull", "一二三四五六七八九十十一十二十三"),
+                "add_word：拒绝超长词(>12字)")
+        _raises(lambda: add_word("医药", "bull", "创新药"), "add_word：拒绝基础层同极性重复")
+        # 反极性覆盖基础层词合法（「医保」就在基础层 bull，加 bear 是允许路径）
+        add_word("医药", "bear", "医保")
+        ok("add_word：允许反极性覆盖基础层词",
+           "医保" in _BEAR.get("医药", []) and "医保" not in _BULL.get("医药", []))
+        remove_word("医药", "医保")
+        # 手改 JSON 注入未知板块：_tables 忽略，不扩散
+        rebuild({"火星": {"bull": ["陨石"]}})
+        ok("扩展层：未知板块被忽略", "火星" not in _BULL and "陨石" not in _match_terms("陨石", _BULL.get("医药", [])))
+    finally:
+        _save_extra(_orig_extra)
+        rebuild(_orig_extra)
+    # ponytail: 还原断言对齐「重载 _orig_extra 后的应有状态」，不预设扩展层为空
+    # （否则真实扩展层里若已有「医保」反极性覆盖，自检会假失败——P1 调试实测踩到）
+    ok("finally 还原：扩展层恢复原状",
+       _load_extra() == _orig_extra
+       and _BULL == _tables(_orig_extra)[0] and _BEAR == _tables(_orig_extra)[1])
 
     return fails
 

@@ -3,9 +3,9 @@
 这次改造最关键的一条：**管理员在后台关掉某个模块的开关后，前端必须跟着放行**。
 后台改了、界面还拦着，等于功能是坏的 —— 所以脚本要把这条链路真正走一遍：
 
-  1. /api/access 匿名可读，8 个模块默认全锁
+  1. /api/access 匿名可读，9 个模块默认全锁
   2. 未登录点选股入口 → 弹登录框，提示条里讲清算力/存储这笔账
-  3. 管理员登录 → 后台「🔒 登录权限」面板渲染 8 个开关 + 来源标记
+  3. 管理员登录 → 后台「🔒 登录权限」面板渲染 9 个开关 + 来源标记
   4. 「运行参数」面板不再重复出现这批开关（两处都能改 = 记不住改哪儿）
   5. 面板上取消「指标评级」开关 → /api/access 立即变「匿名可用」
   6. 匿名浏览器里点同一个按钮 → 不再弹框，接口真的通了
@@ -13,15 +13,18 @@
   8. 全程 JS 零报错
 
 用法：python3 tests/smoke_module_access.py
-（服务需以管理员白名单启动：cd server && TICK_ADMIN_USERS=guardadmin python3 run.py）
+（需管理员账号：export E2E_ADMIN_USER=xxx E2E_ADMIN_PWD=xxx，
+  并确保服务以 TICK_ADMIN_USERS=$E2E_ADMIN_USER 启动；账号不存在会自动注册）
 """
 from playwright.sync_api import sync_playwright
+import os
 import sys
 
 BASE = "http://127.0.0.1:8899"
-USER = "guardadmin"
-PWD = "GuardAdmin123456"
-MODS = ["screen", "newbie", "nlpick", "strategy", "intraday", "rating", "grid", "paper"]
+USER = os.environ.get("E2E_ADMIN_USER", "")
+PWD = os.environ.get("E2E_ADMIN_PWD", "")
+MODS = ["screen", "newbie", "nlpick", "strategy", "intraday", "rating", "grid",
+        "paper", "stockai"]
 
 errors = []
 checks = []
@@ -80,6 +83,13 @@ def watch(pg):
     pg.on("pageerror", lambda e: errors.append("PAGEERROR: " + str(e)))
 
 
+def mask_names(pg):
+    """截图前把顶栏真实用户名中性化（#185 惯例，不暴露测试/真实账号名）。"""
+    pg.evaluate(
+        """() => { let un = document.querySelector('#uArea .uname b');
+          if(un) un.textContent = '演示用户'; }""")
+
+
 def open_access_panel(pg):
     act_tab(pg, "admin")
     pg.click('#admTabs button[data-adm="access"]')
@@ -87,6 +97,10 @@ def open_access_panel(pg):
 
 
 def main():
+    if not USER or not PWD:
+        print("请先设置环境变量 E2E_ADMIN_USER / E2E_ADMIN_PWD（管理员账号），"
+              "并确保服务以 TICK_ADMIN_USERS=$E2E_ADMIN_USER 启动")
+        sys.exit(2)
     with sync_playwright() as p:
         b = p.chromium.launch(headless=True)
 
@@ -108,9 +122,9 @@ def main():
         pg.reload(wait_until="load", timeout=25000)
         pg.wait_for_function(
             "async()=>{ let d=await (await fetch('/api/access')).json(); "
-            "return Object.keys(d.require_login).length===8 && "
+            "return Object.keys(d.require_login).length===9 && "
             "Object.values(d.require_login).every(v=>v===true); }", timeout=25000)
-        check("8 个开关都已复位到默认（全要求登录）", True)
+        check("9 个开关都已复位到默认（全要求登录）", True)
 
         # ---------- 1. 匿名：开放策略可读、入口被拦 ----------
         print("\n=== 1. 匿名：/api/access + 拦截文案 ===")
@@ -118,8 +132,8 @@ def main():
 
         rules = pg.evaluate("async()=>{ let r=await fetch('/api/access'); "
                             "let d=await r.json(); return d.require_login; }")
-        check("匿名可读开放策略", isinstance(rules, dict) and len(rules) == 8, str(rules))
-        check("默认 8 个模块全部要求登录",
+        check("匿名可读开放策略", isinstance(rules, dict) and len(rules) == 9, str(rules))
+        check("默认 9 个模块全部要求登录",
               all(rules.get(m) is True for m in MODS),
               [m for m in MODS if rules.get(m) is not True])
         reason = pg.evaluate("async()=>{ let d=await (await fetch('/api/access')).json(); "
@@ -142,12 +156,13 @@ def main():
         check("拿到管理员身份", is_admin)
         open_access_panel(pg)
         rows = pg.locator("[data-accc]").count()
-        check("面板渲染 8 个模块开关", rows == 8, "%d 行" % rows)
+        check("面板渲染 9 个模块开关", rows == 9, "%d 行" % rows)
         head = pg.locator("#admBody .card-h .meta").first.inner_text()
-        check("标题条显示上锁数量", "/ 8" in head, head)
+        check("标题条显示上锁数量", "/ 9" in head, head)
         body_txt = pg.locator("#admBody").inner_text()
         check("面板写明了放开代价与生效方式", "放开的代价" in body_txt and "无需重启" in body_txt,
               body_txt[-80:].replace("\n", " / "))
+        mask_names(pg)
         pg.screenshot(path="shots/admin_access_panel.png", full_page=False)
 
         print("\n=== 3. 「运行参数」面板不重复这批开关 ===")

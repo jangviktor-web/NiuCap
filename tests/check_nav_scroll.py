@@ -15,9 +15,13 @@ def req(method, path, body=None):
     return r.status_code, j, r.cookies.get("tick_sid")
 
 def main():
-    # 登录拿 admin（让「后台管理」显示，标签最多）；token 在 cookie 里
-    st, d, sid = req("POST", "/api/auth/login", {"username": "admin", "password": "femkerr"})
-    print(f"登录: {st} cookie={'有' if sid else '无'}")
+    # 自注册一个一次性测试账号（不依赖任何真实账号密码；匿名也能测滚动，
+    # 登录只为让标签条尽可能满——普通用户没有「后台管理」页签）
+    import secrets
+    u = "nav_" + secrets.token_hex(4)
+    st, d, sid = req("POST", "/api/auth/register",
+                     {"username": u, "password": "test1234", "display": u})
+    print(f"注册测试账号: {st} cookie={'有' if sid else '无'}")
 
     results, fails = [], 0
     def rec(name, ok, detail=""):
@@ -36,48 +40,50 @@ def main():
         pg.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
         pg.on("pageerror", lambda e: errors.append(str(e)))
         pg.goto(BASE + "/", wait_until="networkidle")
-        pg.wait_for_selector(".tabs button", timeout=15000)
+        # #190 起桌面端也走「☰ 菜单」抽屉：.tabs 容器默认 display:none，
+        # 先等汉堡按钮可见，点开抽屉再断言（原「横排标签滚动」场景已不存在）
+        pg.wait_for_selector("#navToggle", timeout=15000)
 
-        # 1) 全部可见标签数量（后台管理应显示）
-        vis = pg.eval_on_selector_all(".tabs button",
+        # 1) 抽屉导航项数量（普通用户 16 项：跳过隐藏 hot/moves + 仅管理员的 admin）
+        pg.click("#navToggle")
+        pg.wait_for_selector(".navdrawer.open .nd-item", timeout=10000)
+        pg.wait_for_timeout(400)
+        vis = pg.eval_on_selector_all(".navdrawer .nd-item",
             "els => els.filter(e => e.offsetParent !== null).map(e => e.dataset.tab)")
-        rec("标签数量=14(含后台管理，热/异动刻意隐藏)",
-            len(vis) == 14 and "admin" in vis,
-            f"可见 {len(vis)} 个: {vis[-2:]}")
+        rec("抽屉导航项=16(普通用户；后台管理仅管理员可见)",
+            len(vis) == 16 and "admin" not in vis,
+            f"可见 {len(vis)} 项: {vis}")
 
-        # 2) tabs 容器横向可滚动（内容宽 > 可视宽）
-        info = pg.evaluate("""() => {
-            const t = document.querySelector('.tabs');
-            const ni = document.querySelector('.navinner');
-            return {scroll:t.scrollWidth, client:t.clientWidth,
-                    niw:ni.getBoundingClientRect().width,
-                    vw:window.innerWidth};
-        }""")
-        rec("标签条可横向滚动(scrollWidth>clientWidth)",
-            info["scroll"] > info["client"], f"{info}")
+        # 2) 点抽屉项能切页（验证 #190 抽屉 JS 绑定未坏）
+        pg.click('.nd-item[data-tab="newbie"]')
+        pg.wait_for_timeout(600)
+        on_ok = pg.evaluate(
+            "() => document.getElementById('tab-newbie').classList.contains('on')")
+        rec("点抽屉项切页生效(小白选股)", on_ok)
+        # 抽屉点项后自动关闭
+        closed = pg.evaluate(
+            "() => !document.getElementById('navDrawer').classList.contains('open')")
+        rec("点项后抽屉自动关闭", closed)
 
-        # 3) 滚动到最右后，末尾标签进入可视区（之前被切掉）
-        pg.evaluate("document.querySelector('.tabs').scrollLeft = 99999")
-        time.sleep(0.3)
-        last_ok = pg.evaluate("""() => {
-            const btns=[...document.querySelectorAll('.tabs button')].filter(e=>e.offsetParent!==null);
-            const last=btns[btns.length-1].getBoundingClientRect();
-            const tabs=document.querySelector('.tabs').getBoundingClientRect();
-            return {right:last.right, tabsRight:tabs.right, visible:last.right<=tabs.right+1 && last.left>=tabs.left-1};
-        }""")
-        rec("滚动后末尾标签进入可视区", last_ok["visible"], f"{last_ok}")
-
-        # 4) 右侧交易时钟与标签同处一行（不被挤到第二行）
+        # 3) 顶栏时钟与汉堡同处 header 一行（#190 吸顶布局不被挤走）
         same = pg.evaluate("""() => {
-            const t=document.querySelector('.tabs').getBoundingClientRect();
-            const c=document.getElementById('mktClock').getBoundingClientRect();
-            const a=document.querySelector('.tabs button').getBoundingClientRect();
-            // 同处一行 = 时钟顶部位在「标签行」带内（允许垂直居中的高度差）
-            const bandBottom = t.top + a.height + 4;
-            return {tabsTop:t.top, clockTop:c.top, btnTop:a.top, btnH:a.height,
-                    sameRow: c.top >= t.top - 2 && c.top <= bandBottom};
+            const c = document.getElementById('mktClock').getBoundingClientRect();
+            const t = document.getElementById('navToggle').getBoundingClientRect();
+            const h = document.querySelector('header').getBoundingClientRect();
+            return {clockTop:c.top, toggleTop:t.top, headerBottom:h.bottom,
+                    sameRow: c.top >= h.top - 2 && c.bottom <= h.bottom + 2 &&
+                            Math.abs(c.top - t.top) < 40};
         }""")
-        rec("交易时钟与标签同处一行", same["sameRow"], f"{same}")
+        rec("交易时钟与菜单按钮同处顶栏一行", same["sameRow"], f"{same}")
+
+        # 4) 页面滚动后 header 吸顶、时钟仍在视口内
+        pg.evaluate("window.scrollTo(0, 600)")
+        pg.wait_for_timeout(400)
+        stuck = pg.evaluate("""() => {
+            const c = document.getElementById('mktClock').getBoundingClientRect();
+            return {clockTop:c.top, inView: c.top >= 0 && c.top < 120};
+        }""")
+        rec("滚动后时钟仍吸顶可见", stuck["inView"], f"{stuck}")
 
         # 5) 控制台无报错
         rec("页面无 JS 报错", not errors, "; ".join(errors[:2])[:160])

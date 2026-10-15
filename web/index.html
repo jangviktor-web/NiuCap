@@ -161,6 +161,13 @@ tbody tr:hover{background:#f7f9fc}
 .btn.pri:hover{background:#1a52bd}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 
+/* 后台管理：页签分组导航（纯样式，不改交互；
+   点击仍走全局 [data-adm] 委托，admTabs 的 id 在 JS 中无引用） */
+.admnav{display:flex;flex-wrap:wrap;gap:16px 26px;align-items:flex-start}
+.admgrp{display:flex;flex-direction:column;gap:8px}
+.admgrp-h{font-size:11px;color:var(--tx3);font-weight:600;letter-spacing:.4px}
+.admgrp .btnrow{display:flex;flex-wrap:wrap;gap:7px}
+
 /* 筛选器 */
 .filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(168px,1fr));gap:14px}
 .fg{display:flex;flex-direction:column;gap:6px}
@@ -172,6 +179,12 @@ tbody tr:hover{background:#f7f9fc}
   box-shadow:0 0 0 3px rgba(31,95,214,.09)}
 .fg .row span{color:var(--tx3);font-size:12px;flex-shrink:0}
 .presets{display:flex;gap:7px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px dashed var(--line)}
+/* 条件选股筛选卡：基础指标/一句话/高级条件 三段之间的分区线
+   （其余页签的 .filters 互不相邻，不受影响） */
+.filters + .filters{padding-top:15px;border-top:1px dashed var(--line)}
+/* 区段小标题；高级条件控件不横向铺满整卡（4 个控件拉满太散） */
+.slabel{font-size:11.5px;color:var(--tx3);font-weight:600;margin:0 0 8px;letter-spacing:.3px}
+#advBox{grid-template-columns:repeat(auto-fit,minmax(168px,240px));justify-content:start}
 
 /* 高级筛选条件 chips（Tier 2，元数据驱动） */
 .advchips{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px;align-items:center}
@@ -933,6 +946,7 @@ td .starbtn{font-size:16px}
 .st-item{display:flex;gap:7px;align-items:flex-start;font-size:12.5px;line-height:1.5}
 .st-txt{color:var(--tx2);flex:1;min-width:0}
 .st-star{color:var(--tx3);font-weight:700;cursor:help;margin-left:1px}
+.st-lowc{flex:none;font-size:10.5px;line-height:1;padding:3px 6px;border-radius:5px;font-weight:600;white-space:nowrap;background:rgba(139,147,161,.16);color:var(--tx3);cursor:help}
 .st-badge{flex:none;font-size:11px;line-height:1;padding:3px 6px;border-radius:5px;font-weight:600;white-space:nowrap}
 .st-badge.pos{background:rgba(217,52,43,.12);color:var(--up)}
 .st-badge.neg{background:rgba(18,161,92,.12);color:var(--down)}
@@ -1163,6 +1177,7 @@ td .starbtn{font-size:16px}
           每只股票都会用大白话告诉你为什么选它。<br>
           <span class="dim">结果仅供参考，不构成投资建议。股市有风险，买入前请自己再确认一遍。</span>
         </div>
+        <div class="slabel" style="margin-bottom:10px">选择方案</div>
         <div class="nbpicks" id="nbPicks"><div class="load"><span class="spin"></span>加载方案中…</div></div>
         <div class="nbresult-head" id="nbResultHead" style="display:none">
           <div class="nbrh-l">
@@ -1399,6 +1414,7 @@ td .starbtn{font-size:16px}
             <option value="932000">中证2000</option>
           </select>
         </div>
+        <div class="slabel" style="margin-bottom:10px">选择策略（点选，可多选）</div>
         <div id="stratCats"><div class="load"><span class="spin"></span>加载策略…</div></div>
         <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <button class="btn pri" id="stratRun">▶ 执行选股</button>
@@ -1702,9 +1718,12 @@ td .starbtn{font-size:16px}
             <input id="nlText" class="in" placeholder="如：均线金叉并且放量，突破20日新高买入，跌破10日线止损，激进风格">
           </div>
         </div>
-        <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+        <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap;align-items:center">
           <button class="btn pri" id="nlParse">🔎 解析策略</button>
           <button class="btn" id="nlRun">▶ 解析并回测</button>
+          <label style="margin-left:auto;font-size:12px;color:var(--tx3);cursor:pointer;user-select:none" title="AI 增强理解复杂策略描述；可筛选条件仍由规则版产出，AI 未启用时自动回落规则版">
+            <input type="checkbox" id="nlLLM" style="vertical-align:middle;width:auto;margin:0 4px 0 0"> ✨ AI 增强解析
+          </label>
         </div>
         <div class="presets" id="nlExamples" style="margin-top:10px"></div>
         <div id="nlResult" style="margin-top:12px"></div>
@@ -1869,6 +1888,7 @@ td .starbtn{font-size:16px}
         <!-- 高级筛选（Tier 2）：字段 × 算子，元数据来自 /api/screen/fields。
              与上方旧参数区 AND 叠加；目录拉取失败时本区整体隐藏，旧通路不受影响。 -->
         <div class="filters" id="advBox" style="display:none;margin-top:14px">
+          <div class="slabel" style="grid-column:1/-1">高级条件（字段 × 算子，与上方条件叠加生效）</div>
           <div class="fg">
             <label>筛选字段</label>
             <select id="advField" class="sel"></select>
@@ -2177,22 +2197,36 @@ td .starbtn{font-size:16px}
         <div class="meta" id="admMeta">—</div>
       </div>
       <div class="card-b">
-        <div class="btnrow" id="admTabs">
-          <button class="btn on" data-adm="overview">📊 系统概览</button>
-          <button class="btn" data-adm="users">👥 用户管理</button>
-          <button class="btn" data-adm="userdata">👁️ 用户数据</button>
-          <button class="btn" data-adm="newfeat">🧪 新功能调试</button>
-          <button class="btn" data-adm="config">🔧 运行参数</button>
-          <button class="btn" data-adm="access">🔒 登录权限</button>
-          <button class="btn" data-adm="bars">🗄️ 数据落库</button>
-          <button class="btn" data-adm="database">🛠️ 数据库</button>
-          <button class="btn" data-adm="modules">🧩 模块状态</button>
-          <button class="btn" data-adm="services">🧹 缓存管理</button>
-          <button class="btn" data-adm="evalcache">🎯 体检缓存</button>
-          <button class="btn" data-adm="sectoraudit">🔍 舆情巡检</button>
-          <button class="btn" data-adm="sectorverify">📊 舆情对账</button>
-          <button class="btn" data-adm="backup">💾 系统备份</button>
-          <button class="btn" data-adm="logs">📜 巡检与日志</button>
+        <div class="admnav" id="admTabs">
+          <div class="admgrp"><span class="admgrp-h">概览与用户</span>
+            <div class="btnrow">
+              <button class="btn on" data-adm="overview">📊 系统概览</button>
+              <button class="btn" data-adm="users">👥 用户管理</button>
+              <button class="btn" data-adm="userdata">👁️ 用户数据</button>
+              <button class="btn" data-adm="newfeat">🧪 新功能调试</button>
+            </div>
+          </div>
+          <div class="admgrp"><span class="admgrp-h">系统配置</span>
+            <div class="btnrow">
+              <button class="btn" data-adm="config">🔧 运行参数</button>
+              <button class="btn" data-adm="llm">🤖 AI 模型</button>
+              <button class="btn" data-adm="aiusage">📈 AI 用量</button>
+              <button class="btn" data-adm="access">🔒 登录权限</button>
+              <button class="btn" data-adm="bars">🗄️ 数据落库</button>
+              <button class="btn" data-adm="database">🛠️ 数据库</button>
+              <button class="btn" data-adm="modules">🧩 模块状态</button>
+              <button class="btn" data-adm="services">🧹 缓存管理</button>
+              <button class="btn" data-adm="evalcache">🎯 体检缓存</button>
+            </div>
+          </div>
+          <div class="admgrp"><span class="admgrp-h">数据运维</span>
+            <div class="btnrow">
+              <button class="btn" data-adm="sectoraudit">🔍 舆情巡检</button>
+              <button class="btn" data-adm="sectorverify">📊 舆情对账</button>
+              <button class="btn" data-adm="backup">💾 系统备份</button>
+              <button class="btn" data-adm="logs">📜 巡检与日志</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -2741,6 +2775,7 @@ function qs(params){
 var screenRatings = {};   // 选股列表指标评级缓存（按 code），翻页保留、新选股清空
 function runScreen(){
   var el = $('screenBody');
+  var btn = $('f_run'); if(btn) btn.disabled = true;   // 防连点重复提交，finally 恢复
   loading(el, '筛选中…');
   var p = {
     pe_min: numOf('f_pe_min'), pe_max: numOf('f_pe_max'),
@@ -2767,7 +2802,7 @@ function runScreen(){
     // 不如直接让用户重新登录 —— 登录成功后 afterLogin 之外的下一次点击会正常走
     if(isScreenGuardError(e)){ screenNeedLogin(el, '条件选股'); return; }
     die(el, '筛选失败：' + e.message);
-  });
+  }).finally(function(){ if(btn) btn.disabled = false; });
 }
 function renderScreen(){
   var el = $('screenBody');
@@ -2844,10 +2879,12 @@ var PRESETS = {
   smallcap: { cap_min:30, cap_max:200, tov_min:5, amt_min:10000 },
   value:    { pe_min:0, pe_max:12, pb_min:0, pb_max:2, cap_min:100 }
 };
+// ponytail: 基础条件输入框 id 清单 —— preset 清空 / f_reset / 回车绑定 三处共用
+var F_INPUT_IDS = ['f_pe_min','f_pe_max','f_pb_min','f_pb_max','f_cap_min','f_cap_max',
+  'f_chg_min','f_chg_max','f_tov_min','f_tov_max','f_amt_min'];
 document.querySelectorAll('[data-preset]').forEach(function(b){
   b.onclick = function(){
-    ['f_pe_min','f_pe_max','f_pb_min','f_pb_max','f_cap_min','f_cap_max',
-     'f_chg_min','f_chg_max','f_tov_min','f_tov_max','f_amt_min'].forEach(function(id){
+    F_INPUT_IDS.forEach(function(id){
       if($(id)) $(id).value = '';
     });
     var cfg = PRESETS[b.dataset.preset] || {};
@@ -2859,6 +2896,16 @@ document.querySelectorAll('[data-preset]').forEach(function(b){
     document.querySelectorAll('[data-preset]').forEach(function(x){ x.classList.remove('on'); });
     b.classList.add('on');
   };
+});
+// 基础条件回车直接执行选股（免去找按钮）；手动改动任一条件时预设高亮失效
+F_INPUT_IDS.forEach(function(id){
+  var el = $(id); if(!el) return;
+  el.addEventListener('keydown', function(e){
+    if(e.key === 'Enter'){ e.preventDefault(); runScreenGuarded(); }
+  });
+  el.addEventListener('input', function(){
+    document.querySelectorAll('[data-preset]').forEach(function(x){ x.classList.remove('on'); });
+  });
 });
 // ponytail: 选股是需要登录的功能，入口统一包一层守卫；
 // runScreen 本体保持可直接调用（nlScreenParse 内部、登录续跑都要绕过守卫，
@@ -2889,8 +2936,7 @@ function loadScreenRatings(){
     .finally(function(){ if(btn){ btn.disabled = false; btn.textContent = '📊 加载指标评级'; } });
 }
 $('f_reset').onclick = function(){
-  ['f_pe_min','f_pe_max','f_pb_min','f_pb_max','f_cap_min','f_cap_max',
-   'f_chg_min','f_chg_max','f_tov_min','f_tov_max','f_amt_min'].forEach(function(id){
+  F_INPUT_IDS.forEach(function(id){
     if($(id)) $(id).value = '';
   });
   $('f_sort').value = 'change_pct';
@@ -3203,8 +3249,82 @@ function loadStock(code){
     if(res[2]) d._full = res[2];
     if(res[3] && res[3].valuation) d._valuation = res[3].valuation;
     renderStock(d);
+    appendStockAiCard();
     loadStockExtra(code);
   }).catch(function(e){ die(el, '个股数据加载失败：' + e.message); });
+}
+/* #93 AI 深度分析卡片：renderStock 后动态追加（stockWrap 被 renderStock 整体覆盖，
+   故不能静态写死）；防重复插入。点击 runStockAi 调 /api/stock/analyze（只读）。
+   #216 起该功能要求登录（后台「🔒 登录权限」可放开）+ 每账号每日配额
+   （默认 10 次，后台「📈 AI 用量」可调），按钮走 guardScreen 统一拦截续跑。 */
+function appendStockAiCard(){
+  var wrap = $('stockWrap');
+  if(!wrap || $('stockAiCard')) return;
+  wrap.insertAdjacentHTML('beforeend',
+    '<div class="card" id="stockAiCard" style="margin-top:12px">' +
+    '  <div class="card-h"><h2>✨ AI 深度分析</h2>' +
+    '    <div class="meta">综合行情/技术面/板块舆情/近期快讯，AI 客观解读（仅供参考，非投资建议）</div>' +
+    '    <div style="margin-left:auto"><button class="btn pri sm" id="stockAiBtn" onclick="runStockAiGuarded()">开始分析</button></div>' +
+    '  </div>' +
+    '  <div class="card-b" id="stockAiOut"><div class="empty">点击「开始分析」，AI 综合当前个股数据给出解读；未配置 AI 模型时展示纯数据摘要。</div></div>' +
+    '</div>');
+}
+function runStockAi(){
+  var code = state.stockCode;
+  var out = $('stockAiOut');
+  if(!out) return;
+  if(!code){ out.innerHTML = '<div class="empty">请先选择个股</div>'; return; }
+  loading(out, 'AI 分析中…');
+  api('/api/stock/analyze?code=' + encodeURIComponent(code)).then(function(r){
+    if(!r || !r.ok){ die(out, (r && r.reason) || '分析失败'); return; }
+    renderStockAi(r, out);
+  }).catch(function(e){ die(out, '分析失败：' + (e && e.message ? e.message : e)); });
+}
+/* #216：AI 深度分析改为「登录后可用」（后台开关可放开匿名）。
+   复用 guardScreen：未登录先弹框，登录成功自动补跑这次分析，用户不必再点一次。 */
+var runStockAiGuarded = guardScreen(runStockAi, 'AI 深度分析', 'stockai');
+function renderStockAi(r, out){
+  var ctx = r.ctx || {};
+  var h = '';
+  if(r.llm){
+    var L = r.llm;
+    h += '<div class="row"><span class="lbl">综合概述</span><span>' + esc(L.summary || '—') + '</span></div>';
+    h += '<div class="row"><span class="lbl">数据评分</span><b style="font-size:20px">' +
+         (L.score != null ? L.score : '—') + '</b>' +
+         '<span style="color:var(--tx3);font-size:12px;margin-left:8px">' + esc(L.score_note || '') + '</span></div>';
+    if(L.strengths && L.strengths.length)
+      h += '<div class="row" style="align-items:flex-start"><span class="lbl">亮点</span><span style="text-align:left">' +
+           L.strengths.map(function(x){ return '✅ ' + esc(x); }).join('<br>') + '</span></div>';
+    if(L.risks && L.risks.length)
+      h += '<div class="row" style="align-items:flex-start"><span class="lbl">风险</span><span style="text-align:left">' +
+           L.risks.map(function(x){ return '⚠️ ' + esc(x); }).join('<br>') + '</span></div>';
+    h += '<div class="meta" style="margin-top:8px;font-size:12px;color:var(--tx3)">✨ AI 增强解读 · 仅供参考，非投资建议</div>';
+  } else {
+    h += '<div class="empty">AI 模型未启用或暂不可用，以下为纯数据摘要。</div>';
+  }
+  // #216 配额回显：让用户知道今天还能点几次（超额时后端 429，这里根本渲染不到）
+  if(r.ai_quota)
+    h += '<div class="row" style="margin-top:8px"><span class="lbl">今日配额</span><span>已用 <b>' +
+         r.ai_quota.used + '</b> / ' + r.ai_quota.quota + ' 次' +
+         (r.ai_quota.remaining > 0
+           ? '（剩余 ' + r.ai_quota.remaining + ' 次）'
+           : '（已用完，明日 0 点恢复）') + '</span></div>';
+  var t = ctx.tech || {};
+  if(t.verdict)
+    h += '<div class="row" style="margin-top:8px"><span class="lbl">技术面</span><span>' + esc(t.verdict || '') +
+         '（多' + (t.bull || 0) + ' / 空' + (t.bear || 0) + ' / 中' + (t.neutral || 0) + '）</span></div>';
+  if(ctx.sectors && ctx.sectors.length)
+    h += '<div class="row"><span class="lbl">所属板块</span><span>' +
+         ctx.sectors.map(function(x){ return esc(x); }).join('、') + '</span></div>';
+  var news = ctx.news || [];
+  if(news.length)
+    h += '<div class="row" style="align-items:flex-start"><span class="lbl">近期快讯</span><span style="text-align:left">' +
+         news.map(function(n){ var tag = n.tone === 'pos' ? '📈' : (n.tone === 'neg' ? '📉' : '➖'); return tag + ' ' + esc(n.text); }).join('<br>') +
+         '</span></div>';
+  if(ctx.missing && ctx.missing.length)
+    h += '<div class="meta" style="margin-top:6px;font-size:12px;color:var(--tx3)">缺失维度：' +
+         ctx.missing.map(function(x){ return esc(x); }).join('、') + '</div>';
+  out.innerHTML = '<div class="intentbox">' + h + '</div>';
 }
 function renderStock(d){
   var q = d.quote || {};
@@ -4197,7 +4317,13 @@ var ADMIN_TABS = [
         '口径三件事：<b>① 用「超额」不用裸涨跌</b>（板块组等权 − 上证，大盘涨 2% 板块涨 1% 其实相对弱）；<b>② 新闻窗口卡今天 15:00</b>（盘后快讯影响的是明天，算进今天等于把「明天的消息」当「今天判错」）；<b>③ 只对账不自动改词表</b>（同舆情巡检，词表是业务判断）。' +
         '盘前 / 盘中 / 非交易日手动跑只出报告试看格式，不计入当日对账。'},
   {key:'logs', name:'巡检与日志', emo:'📜',
-   desc:'健康巡检状态 / 连续失败次数 / 最近成功失败时间与历史；日志查看器（data/ 下 .log/.json，5 秒自动刷新，目录穿越防护），可<b>下载</b>全文或<b>清空</b>内容（清空保留文件句柄，不会让正在写的日志丢目标）。'}
+   desc:'健康巡检状态 / 连续失败次数 / 最近成功失败时间与历史；日志查看器（data/ 下 .log/.json，5 秒自动刷新，目录穿越防护），可<b>下载</b>全文或<b>清空</b>内容（清空保留文件句柄，不会让正在写的日志丢目标）。'},
+  {key:'llm', name:'AI 模型', emo:'🤖',
+   desc:'LLM（大模型）接入配置：OpenAI 兼容接口，默认用 Agnes 免费档（无限期、不绑卡）。填 API 密钥后「测试连接」验证，通过再开「启用 AI 模型」开关即可在面板里用 LLM 能力（如 AI 个股分析、舆情复核）。' +
+        '换 DeepSeek 把 Base URL 改成 https://api.deepseek.com/v1、模型改 deepseek-v4-flash；换本地 Ollama 改 http://localhost:11434/v1 且密钥留空。所有项存 meta 表、前端密码框渲染不回显。'},
+  {key:'aiusage', name:'AI 用量', emo:'📈',
+   desc:'✨ AI 深度分析的用量管控：每个账号每日可用次数（新账号默认 10 次/天，可改，<b>改成 0 即停用</b>该账号），当日已用次数与全站合计一目了然。' +
+        '计费口径为「点一次分析扣一次」（LLM 调用有真实 Token 成本，失败不退款），每日 0 点按本地日期自动重置。'}
 ];
 
 function admApi(path, opt){
@@ -4244,7 +4370,7 @@ function loadAdmin(force){
   loading(el, '加载中…');
   var fns = {
     overview: admOverview, users: admUsers, config: admConfig,
-    userdata: admUserData, newfeat: admNewFeat,
+    llm: admLlm, aiusage: admAiUsage, userdata: admUserData, newfeat: admNewFeat,
     bars: admBars, database: admDatabase, modules: admModules,
     services: admServices, evalcache: admEvalCache, backup: admBackup, logs: admLogs,
     access: admAccess, sectoraudit: admSectorAudit, sectorverify: admSectorVerify
@@ -4709,9 +4835,10 @@ function admConfig(el){
   admApi('/config').then(function(d){
     admState.loaded.config = 1;
     var its = (d.items || []).filter(function(p){
-      // 「哪些模块要求登录」单独在「🔒 登录权限」面板里开关。
+      // 「哪些模块要求登录」单独在「🔒 登录权限」面板里开关；
+      // 「AI 模型」配置单独在「🤖 AI 模型」面板里填。
       // 同一批参数在两个面板出现时，用户永远记不住该改哪一处 —— 所以这里过滤掉。
-      return p.group !== 'access';
+      return p.group !== 'access' && p.group !== 'llm';
     });
     var h = '<div class="card"><div class="card-h"><h2>运行参数</h2>' +
             '<div class="meta">存 meta 表，优先级：管理页设置 &gt; 环境变量 &gt; 内置默认</div></div>' +
@@ -4777,6 +4904,507 @@ function admConfig(el){
         admApi('/config/' + key, {method:'DELETE'})
           .then(function(){ loadAdmin(true); })
           .catch(function(e){ alert('还原失败：' + e.message); });
+      };
+    });
+  }).catch(function(e){ die(el, '读取失败：' + e.message); });
+}
+
+/* ---------- AI 模型（LLM）配置 ---------- */
+function admLlm(el){
+  admApi('/config').then(function(d){
+    admState.loaded.llm = 1;
+    var its = (d.items || []).filter(function(p){ return p.group === 'llm'; });
+    var h = '<div class="card"><div class="card-h"><h2>🤖 AI 模型（LLM）</h2>' +
+            '<div class="meta">OpenAI 兼容接口 · Agnes 默认免费 · 切 DeepSeek / 本地 Ollama 改 Base URL + 模型名</div></div>' +
+            '<div class="card-b"><div style="padding:10px 16px;font-size:12px;color:var(--tx3)">' +
+            '填好 API 密钥后点「测试连接」验证；通过后再打开「启用 AI 模型」开关，面板即可用 LLM 能力。' +
+            '密钥存 meta 表、前端密码框渲染不回显。优先级：管理页设置 &gt; 环境变量 &gt; 内置默认。</div>' +
+            '<div class="tblw"><table class="tbl"><thead><tr>' +
+            '<th>参数</th><th style="width:240px">当前值</th><th style="width:60px">来源</th>' +
+            '<th style="width:90px">默认</th><th>说明</th><th class="ctr" style="width:120px">操作</th>' +
+            '</tr></thead><tbody>';
+    its.forEach(function(p){
+      var cell;
+      if(p.type === 'bool'){
+        cell = '<label style="font-size:13px"><input type="checkbox" data-cfgc="' + p.key + '"' +
+               (p.value ? ' checked' : '') + '> ' + (p.value ? '开启' : '关闭') + '</label>';
+      } else if(p.type === 'secret'){
+        // 密钥类：密码框掩码，不在页面明文回显
+        cell = '<input class="in" style="width:240px;padding:3px 6px" data-cfgi="' + p.key +
+               '" type="password" autocomplete="off" placeholder="留空=不修改/跳过" value="' + attr(p.value) + '">';
+      } else {
+        cell = '<input class="in" style="width:240px;padding:3px 6px" data-cfgi="' + p.key +
+               '" type="text" value="' + attr(p.value) + '">';
+      }
+      var srcTag = p.source === 'meta' ? '<span class="tag z">管理页</span>' :
+                   (p.source === 'env' ? '<span class="tag">环境</span>' : '<span class="tag">默认</span>');
+      h += '<tr><td><b style="font-size:12px">' + esc(p.title) + '</b>' +
+           '<div style="font-size:11px;color:var(--tx3)"><code>' + esc(p.key) + '</code></div></td>' +
+           '<td data-cfgv="' + p.key + '">' + cell + '</td>' +
+           '<td>' + srcTag + '</td>' +
+           '<td style="font-size:12px">' + esc(String(p.default)) + '</td>' +
+           '<td style="font-size:12px;color:var(--tx2);max-width:340px">' + esc(p.desc) + '</td>' +
+           '<td class="ctr" style="white-space:nowrap">' +
+           '<button class="btn" style="padding:2px 8px;font-size:11px" data-cfgs="' + p.key + '">保存</button> ' +
+           '<button class="btn" style="padding:2px 8px;font-size:11px" data-cfgr="' + p.key + '">还原</button>' +
+           '</td></tr>';
+    });
+    h += '</tbody></table></div>' +
+         '<div style="padding:12px 16px;display:flex;gap:10px;align-items:center">'
+         + '<button class="btn pri" id="llmTestBtn">▶ 测试连接</button>' +
+         '<span id="llmTestMsg" style="font-size:12px;color:var(--tx3)">填好密钥后点此验证连通性</span>'
+         + '<button class="btn" id="llmLexiconBtn" style="margin-left:auto">🤖 AI 词表体检</button></div>' +
+         '<div id="llmLexiconBox" style="display:none;padding:0 16px 16px">'
+         + '<pre id="llmLexiconOut" style="white-space:pre-wrap;word-break:break-word;'
+         + 'background:var(--bg2,#1a1d24);color:var(--tx2);font-size:12px;line-height:1.6;'
+         + 'border:1px solid var(--bd,#2a2e38);border-radius:8px;padding:12px;'
+         + 'max-height:440px;overflow:auto;margin:0"></pre>'
+         + '<div id="llmLexiconSug" style="display:none;padding-top:10px;font-size:12px;color:var(--tx3)">'
+         + '建议词（点一下即加入词典）：<div id="llmLexiconChips" '
+         + 'style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px"></div></div>'
+         + '</div></div>';
+    // 情绪词典（用户扩展层）：运行时增删词，不改源码 / 不动 selfcheck
+    var hlx = '<div class="card"><div class="card-h"><h2>📖 情绪词典（用户扩展层）</h2>'
+      + '<div class="meta">运行时增删词 · 基础层 70 词照常生效 · 基础层硬编码词需改 sentiment.py</div></div>'
+      + '<div class="card-b"><div style="padding:10px 16px;font-size:12px;color:var(--tx3)">'
+      + '先跑上方「🤖 AI 词表体检」拿建议，再点报告里的建议词或下方手动添加即可实时生效。'
+      + '权重参考：涨停/暴跌 3.0，利好/利空 2.5，普通词 1.5~2.0。</div>'
+      + '<div style="padding:0 16px 8px"><table class="tbl"><thead><tr>'
+      + '<th>词</th><th style="width:90px">极性</th><th style="width:90px">权重</th>'
+      + '<th class="ctr" style="width:80px">操作</th></tr></thead><tbody id="lexTbody">'
+      + '<tr><td colspan="4" style="color:var(--tx3)">加载中…</td></tr></tbody></table></div>'
+      + '<div style="padding:8px 16px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+      + '<input class="in" id="lexWord" placeholder="词，如 跌停 / 贴水" style="width:160px;padding:3px 6px">'
+      + '<select id="lexPol" class="in" style="padding:3px 6px"><option value="pos">看涨</option><option value="neg">看跌</option></select>'
+      + '<input class="in" id="lexWt" type="number" min="1" max="3" step="0.1" value="2.0" style="width:70px;padding:3px 6px">'
+      + '<button class="btn pri" id="lexAddBtn">＋ 添加</button>'
+      + '<span id="lexMsg" style="font-size:12px;color:var(--tx3)"></span></div></div></div>';
+    // 板块词表扩展层 · AI 舆情优化（P1）：双轨制的扩展层 + AI 补丁护栏 + 人工勾选应用
+    var hso = '<div class="card"><div class="card-h"><h2>🧬 板块词表扩展层 · AI 舆情优化</h2>' +
+      '<div class="meta">双轨制：基础层 selfcheck 锁死 · 扩展层运行期增删可回滚 · AI 建议须过代码护栏</div></div>' +
+      '<div class="card-b"><div style="padding:10px 16px;font-size:12px;color:var(--tx3)">' +
+      '每日对账/巡检信号（板块词修正率异常 / 小样本低置信 / 词表利好利空失衡）自动挑出问题板块，' +
+      'AI 基于真实快讯样本产出词表补丁；每条补丁须过代码护栏（证据逐字取自样本 · A/B 方向翻转 · ' +
+      '基础层自检零回归 · 单批≤10条），通过的才允许勾选应用。只写扩展层，次日对账准确率即验收效果。</div>' +
+      '<h3 style="padding:10px 16px 4px;font-size:13px">当前扩展层词（可删除；基础层词不在此列、删不动）</h3>' +
+      '<div class="tblw" style="padding:0 16px"><table class="tbl"><thead><tr>' +
+      '<th>板块</th><th style="width:80px">极性</th><th>词</th><th class="ctr" style="width:70px">操作</th>' +
+      '</tr></thead><tbody id="soTbody"><tr><td colspan="4" style="color:var(--tx3)">加载中…</td></tr></tbody></table></div>' +
+      '<div style="padding:10px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
+      '<select id="soSec" class="in" style="padding:3px 6px"></select>' +
+      '<select id="soPol" class="in" style="padding:3px 6px"><option value="bull">利好</option><option value="bear">利空</option></select>' +
+      '<input class="in" id="soWord" placeholder="词，如 医保 / 骗保" style="width:180px;padding:3px 6px">' +
+      '<button class="btn pri" id="soAddBtn">＋ 加入扩展层</button>' +
+      '<span id="soAddMsg" style="font-size:12px;color:var(--tx3)"></span></div>' +
+      '<div style="padding:6px 16px;display:flex;gap:10px;align-items:center">' +
+      '<button class="btn pri" id="soRunBtn">🚀 AI 舆情优化</button>' +
+      '<span id="soRunMsg" style="font-size:12px;color:var(--tx3)">从当前 24h 快讯窗口挑问题板块，AI 产出补丁（只提议，不落盘）</span></div>' +
+      '<div id="soAutoMsg" style="padding:0 16px 6px;font-size:12px;color:var(--tx3)"></div>' +
+      '<div id="soFlagBox" style="display:none;padding:8px 16px 0;font-size:12px"></div>' +
+      '<pre id="soReport" style="display:none;white-space:pre-wrap;word-break:break-word;margin:10px 16px 0;' +
+      'background:var(--bg2,#1a1d24);color:var(--tx2);font-size:12px;line-height:1.6;' +
+      'border:1px solid var(--bd,#2a2e38);border-radius:8px;padding:12px;max-height:300px;overflow:auto"></pre>' +
+      '<div id="soPatchWrap" style="display:none;padding:10px 16px 0"></div>' +
+      '<div id="soApplyBar" style="display:none;padding:10px 16px;gap:10px;align-items:center">' +
+      '<button class="btn pri" id="soApplyBtn">✅ 应用选中</button>' +
+      '<span id="soApplyMsg" style="font-size:12px;color:var(--tx3)"></span></div>' +
+      '<h3 style="padding:14px 16px 4px;font-size:13px">审计日志（最近应用）</h3>' +
+      '<div id="soLog" style="padding:0 16px 16px;font-size:12px;color:var(--tx2);max-height:180px;overflow:auto"></div>' +
+      '</div></div>';
+    el.innerHTML = h + hlx + hso;
+
+    // 保存 / 还原（与运行参数面板同套逻辑）
+    el.querySelectorAll('[data-cfgs]').forEach(function(b){
+      b.onclick = function(){
+        var key = b.dataset.cfgs;
+        var box = el.querySelector('[data-cfgv="' + key + '"]');
+        var inp = box.querySelector('[data-cfgi]'), chk = box.querySelector('[data-cfgc]');
+        var val = chk ? chk.checked : inp.value;
+        b.disabled = true; b.textContent = '…';
+        admApi('/config/' + key, {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({value: val})
+        }).then(function(){
+          b.disabled = false; b.textContent = '保存'; wtToast('已生效');
+          loadAdmin(true);
+        }).catch(function(e){
+          b.disabled = false; b.textContent = '保存';
+          alert('设置失败：' + e.message);
+        });
+      };
+    });
+    el.querySelectorAll('[data-cfgr]').forEach(function(b){
+      b.onclick = function(){
+        var key = b.dataset.cfgr;
+        admApi('/config/' + key, {method:'DELETE'})
+          .then(function(){ loadAdmin(true); })
+          .catch(function(e){ alert('还原失败：' + e.message); });
+      };
+    });
+    // 测试连接：带上当前输入框的值（未保存也能测），填完直接验证连通性
+    var tb = $('llmTestBtn'), tm = $('llmTestMsg');
+    if(tb) tb.onclick = function(){
+      tb.disabled = true; tb.textContent = '测试中…'; tm.style.color = 'var(--tx3)'; tm.textContent = '正在连接…';
+      // 收集当前输入框值（自动去首尾空格，避免复制粘贴带入空白导致鉴权失败）
+      var cfg = {};
+      el.querySelectorAll('[data-cfgi]').forEach(function(inp){
+        cfg[inp.dataset.cfgi] = (inp.value || '').trim();
+      });
+      var en = el.querySelector('[data-cfgc="LLM_ENABLED"]');
+      cfg.enabled = en ? en.checked : false;
+      admApi('/llm/test', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({config: cfg})
+      }).then(function(r){
+        tb.disabled = false; tb.textContent = '▶ 测试连接';
+        if(r.ok){ tm.style.color = 'var(--up)'; tm.textContent = '✅ 连接成功：' + (r.msg || ''); }
+        else { tm.style.color = 'var(--down)'; tm.textContent = '❌ ' + (r.msg || '未知错误'); }
+      }).catch(function(e){
+        tb.disabled = false; tb.textContent = '▶ 测试连接';
+        tm.style.color = 'var(--down)'; tm.textContent = '❌ ' + e.message;
+      });
+    };
+    // AI 词表体检：把当前词典 + 近期样本喂给 LLM，产出只读建议（不改词典）
+    var lb = $('llmLexiconBtn'), lbox = $('llmLexiconBox'), lout = $('llmLexiconOut');
+    if(lb) lb.onclick = function(){
+      lb.disabled = true; lb.textContent = '体检中…'; lbox.style.display = 'block';
+      lout.textContent = '正在调用 AI 分析词典与近期新闻…';
+      var cfg = {};
+      el.querySelectorAll('[data-cfgi]').forEach(function(inp){
+        cfg[inp.dataset.cfgi] = (inp.value || '').trim();
+      });
+      var en = el.querySelector('[data-cfgc="LLM_ENABLED"]');
+      cfg.enabled = en ? en.checked : false;
+      admApi('/llm/lexicon-review', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({config: cfg})
+      }).then(function(r){
+        lb.disabled = false; lb.textContent = '🤖 AI 词表体检';
+        if(r.ok){
+          lout.textContent = r.report || '(空结果)';
+          // 渲染结构化建议词（点一下即加入词典）
+          var sug = r.suggestions || [];
+          var sugBox = $('llmLexiconSug'), chips = $('llmLexiconChips');
+          if(sugBox && chips){
+            if(sug.length){
+              sugBox.style.display = 'block';
+              chips.innerHTML = sug.map(function(s){
+                return '<span data-w="' + esc(s.word) + '" data-p="' + s.polarity + '" data-wt="' + s.weight + '" '
+                  + 'style="cursor:pointer;border:1px solid var(--bd,#2a2e38);border-radius:14px;'
+                  + 'padding:3px 10px;font-size:12px;background:var(--bg2,#1a1d24)">＋ '
+                  + esc(s.word) + '（' + (s.polarity === 'pos' ? '看涨' : '看跌') + '/' + s.weight + '）</span>';
+              }).join('');
+              chips.querySelectorAll('span[data-w]').forEach(function(c){
+                c.onclick = function(){
+                  admApi('/lexicon', {method:'POST', headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({action:'add', word:c.dataset.w, polarity:c.dataset.p,
+                      weight:parseFloat(c.dataset.wt) || 2.0})})
+                    .then(function(rr){
+                      if(rr.ok){ c.style.opacity = 0.4; c.style.cursor = 'default';
+                        c.textContent = '✓ ' + c.textContent.replace('＋ ', ''); lexLoad(); }
+                      else alert(rr.msg);
+                    }).catch(function(e){ alert(e.message); });
+                };
+              });
+            } else { sugBox.style.display = 'none'; }
+          }
+        }
+        else { lout.textContent = '❌ ' + (r.msg || '未知错误'); }
+      }).catch(function(e){
+        lb.disabled = false; lb.textContent = '🤖 AI 词表体检';
+        lout.textContent = '❌ ' + e.message;
+      });
+    };
+    // 情绪词典：加载列表 → 表格渲染（含删除）
+    function lexRender(rows){
+      var tb = $('lexTbody'); if(!tb) return;
+      if(!rows || !rows.length){
+        tb.innerHTML = '<tr><td colspan="4" style="color:var(--tx3)">暂无用户词（基础层 70 词照常生效）</td></tr>';
+        return;
+      }
+      tb.innerHTML = rows.map(function(r){
+        var pol = r.polarity === 'pos'
+          ? '<span style="color:var(--up)">看涨</span>' : '<span style="color:var(--down)">看跌</span>';
+        return '<tr><td><b>' + esc(r.word) + '</b></td><td>' + pol + '</td><td>' + r.weight + '</td>'
+          + '<td class="ctr"><button class="btn" style="padding:2px 8px;font-size:11px" data-lexdel="'
+          + esc(r.word) + '">删除</button></td></tr>';
+      }).join('');
+      tb.querySelectorAll('[data-lexdel]').forEach(function(b){
+        b.onclick = function(){
+          admApi('/lexicon', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({action:'remove', word:b.dataset.lexdel})})
+            .then(function(rr){ if(rr.ok) lexLoad(); else alert(rr.msg); })
+            .catch(function(e){ alert(e.message); });
+        };
+      });
+    }
+    function lexLoad(){
+      admApi('/lexicon', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({action:'list'})})
+        .then(function(r){
+          if(!r.ok){ alert(r.msg); return; }
+          var ex = r.extra || {}, rows = [];
+          Object.keys(ex.pos || {}).forEach(function(k){ rows.push({word:k, polarity:'pos', weight:ex.pos[k]}); });
+          Object.keys(ex.neg || {}).forEach(function(k){ rows.push({word:k, polarity:'neg', weight:ex.neg[k]}); });
+          lexRender(rows);
+        }).catch(function(e){ alert(e.message); });
+    }
+    lexLoad();
+    // 情绪词典：手动添加
+    var ab = $('lexAddBtn');
+    if(ab) ab.onclick = function(){
+      var w = ($('lexWord').value || '').trim(), p = $('lexPol').value, wt = parseFloat($('lexWt').value) || 2.0;
+      if(!w){ $('lexMsg').style.color = 'var(--down)'; $('lexMsg').textContent = '请先填词'; return; }
+      ab.disabled = true; $('lexMsg').style.color = 'var(--tx3)'; $('lexMsg').textContent = '添加中…';
+      admApi('/lexicon', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({action:'add', word:w, polarity:p, weight:wt})})
+        .then(function(rr){
+          ab.disabled = false;
+          if(rr.ok){ $('lexWord').value = ''; $('lexMsg').style.color = 'var(--up)'; $('lexMsg').textContent = '✅ 已添加'; lexLoad(); }
+          else { $('lexMsg').style.color = 'var(--down)'; $('lexMsg').textContent = '❌ ' + rr.msg; }
+        }).catch(function(e){
+          ab.disabled = false; $('lexMsg').style.color = 'var(--down)'; $('lexMsg').textContent = '❌ ' + e.message;
+        });
+    };
+
+    /* ---------- 板块词表扩展层 · AI 舆情优化（P1） ---------- */
+    var SECTORS = ["新能源","半导体","医药","消费","军工","通信","金融","地产","汽车","有色","化工","能源","建材","科技AI","农业","中概港股"];
+    var soState = {samples: [], patch: []};
+    $('soSec').innerHTML = SECTORS.map(function(s){ return '<option>' + s + '</option>'; }).join('');
+    function soRenderExtra(extra, log){
+      var tb = $('soTbody'); if(!tb) return;
+      var rows = [];
+      Object.keys(extra || {}).forEach(function(sec){
+        var pol = extra[sec] || {};
+        (pol.bull || []).forEach(function(w){ rows.push({sec:sec, pol:'bull', w:w}); });
+        (pol.bear || []).forEach(function(w){ rows.push({sec:sec, pol:'bear', w:w}); });
+      });
+      if(!rows.length){ tb.innerHTML = '<tr><td colspan="4" style="color:var(--tx3)">扩展层为空（全部走基础层词表）</td></tr>'; return; }
+      tb.innerHTML = rows.map(function(r){
+        var p = r.pol === 'bull' ? '<span style="color:var(--up)">利好</span>' : '<span style="color:var(--down)">利空</span>';
+        return '<tr><td>' + esc(r.sec) + '</td><td>' + p + '</td><td><b>' + esc(r.w) + '</b></td>' +
+          '<td class="ctr"><button class="btn" style="padding:2px 8px;font-size:11px" data-sodel="' + esc(r.sec) + '|' + esc(r.w) + '">删除</button></td></tr>';
+      }).join('');
+      tb.querySelectorAll('[data-sodel]').forEach(function(b){
+        b.onclick = function(){
+          var parts = b.dataset.sodel.split('|');
+          admApi('/sentiment/extra', {method:'POST', headers:{'Content-Type':'application/json'},
+            body: JSON.stringify({action:'remove', sector:parts[0], word:parts[1]})})
+            .then(function(rr){ if(rr.ok) soLoad(); else alert(rr.msg); })
+            .catch(function(e){ alert(e.message); });
+        };
+      });
+    }
+    function soRenderLog(log){
+      var box = $('soLog'); if(!box) return;
+      if(!log || !log.length){ box.innerHTML = '<div style="color:var(--tx3)">暂无记录</div>'; return; }
+      box.innerHTML = log.map(function(l){
+        var items = (l.items || []).map(function(it){
+          return (it.action === 'add' ? '＋' : '－') + it.sector + (it.polarity === 'bull' ? '利好' : '利空') + '「' + it.word + '」';
+        }).join('，');
+        var via = l.via === 'selfcheck'
+          ? ' <span style="color:var(--tx3)">（自检 roundtrip，非人工操作）</span>' : '';
+        return '<div' + (l.via === 'selfcheck' ? ' style="opacity:.55"' : '') + '>['
+          + esc(l.time || '') + '] ' + esc(items) + via + '</div>';
+      }).join('');
+    }
+    function soLoad(){
+      admApi('/sentiment/extra', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({action:'list'})})
+        .then(function(r){ if(r.ok) soRenderExtra(r.extra, r.log); })
+        .catch(function(e){});
+      // P2：每日自动提议（巡检后落盘）——有则直接展示，人工只做勾选
+      admApi('/sentiment/pending')
+        .then(function(r){
+          var m = $('soAutoMsg'); if(!m) return;
+          if(!r.ok){ m.textContent = '尚未生成自动提议（每日 21:00 巡检结束后自动生成，也可点上方按钮立即生成）'; return; }
+          m.textContent = '🤖 上次自动提议：' + (r.time || '?') + '（每日巡检后自动生成，可点上方按钮重新生成）';
+          soShowResult(r);
+        }).catch(function(e){});
+    }
+    soLoad();
+    // 手动加入扩展层（不经 AI 护栏——管理员直接管理，与情绪词典同模式）
+    var ab2 = $('soAddBtn');
+    if(ab2) ab2.onclick = function(){
+      var w = ($('soWord').value || '').trim();
+      if(!w){ $('soAddMsg').style.color='var(--down)'; $('soAddMsg').textContent='请先填词'; return; }
+      ab2.disabled = true; $('soAddMsg').style.color='var(--tx3)'; $('soAddMsg').textContent='添加中…';
+      admApi('/sentiment/extra', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({action:'add', sector:$('soSec').value, polarity:$('soPol').value, word:w})})
+        .then(function(rr){
+          ab2.disabled = false;
+          if(rr.ok){ $('soWord').value=''; $('soAddMsg').style.color='var(--up)'; $('soAddMsg').textContent='✅ 已加入扩展层'; soLoad(); }
+          else { $('soAddMsg').style.color='var(--down)'; $('soAddMsg').textContent='❌ ' + rr.msg; }
+        }).catch(function(e){
+          ab2.disabled=false; $('soAddMsg').style.color='var(--down)'; $('soAddMsg').textContent='❌ ' + e.message;
+        });
+    };
+    // AI 舆情优化：挑问题板块 → LLM 补丁 → 护栏校验（不落盘）
+    var rb = $('soRunBtn');
+    if(rb) rb.onclick = function(){
+      rb.disabled = true; rb.textContent = 'AI 分析中…'; $('soRunMsg').style.color='var(--tx3)'; $('soRunMsg').textContent='正在挑问题板块并调用 AI…';
+      var cfg = {};
+      el.querySelectorAll('[data-cfgi]').forEach(function(inp){ cfg[inp.dataset.cfgi] = (inp.value||'').trim(); });
+      var en2 = el.querySelector('[data-cfgc="LLM_ENABLED"]'); cfg.enabled = en2 ? en2.checked : false;
+      admApi('/sentiment/optimize', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({config: cfg})})
+        .then(function(r){
+          rb.disabled = false; rb.textContent = '🚀 AI 舆情优化';
+          if(!r.ok){ $('soRunMsg').style.color='var(--down)'; $('soRunMsg').textContent='❌ ' + (r.msg||'失败'); return; }
+          soShowResult(r);
+        }).catch(function(e){
+          rb.disabled=false; rb.textContent='🚀 AI 舆情优化';
+          $('soRunMsg').style.color='var(--down)'; $('soRunMsg').textContent='❌ ' + e.message;
+        });
+    };
+    // 渲染一次提议结果（手动 / 每日自动共用；empty 与非空都走这里）
+    function soShowResult(r){
+      if(r.empty){
+        $('soRunMsg').style.color='var(--up)';
+        $('soRunMsg').textContent='✅ ' + (r.msg||'当前无需优化');
+        $('soFlagBox').style.display='none'; $('soReport').style.display='none';
+        $('soPatchWrap').style.display='none'; $('soApplyBar').style.display='none';
+        return;
+      }
+      $('soRunMsg').style.color='var(--up)';
+      $('soRunMsg').textContent=(r.auto ? '🤖 自动提议（' + (r.time||'') + '）：' : '✅ 补丁 ')
+        + (r.n_pass||0) + ' 条通过护栏 / ' + (r.n_fail||0) + ' 条被拒';
+      soState.samples = (r.ctx && r.ctx.samples) || [];
+      var fl = (r.ctx && r.ctx.flagged) || [], fb = $('soFlagBox');
+      fb.style.display = fl.length ? 'block' : 'none';
+      fb.innerHTML = '<b>问题板块：</b>' + fl.map(function(f){
+        return '<span title="' + esc(f.reasons.join('；')) + '" style="border:1px solid var(--bd,#2a2e38);'
+          + 'border-radius:12px;padding:2px 9px;margin:0 4px 4px 0;display:inline-block;background:var(--bg2,#1a1d24)">'
+          + esc(f.sector) + '（n=' + f.n + ' 修正率' + Math.round((f.corrected_ratio||0)*100) + '% 词表' + f.bull_words + ':' + f.bear_words + '）</span>';
+      }).join('');
+      var rp = $('soReport');
+      if(r.report){ rp.style.display='block'; rp.textContent = r.report; } else rp.style.display='none';
+      soState.patch = r.patch || [];
+      soRenderPatch();
+      if(r.extra) soRenderExtra(r.extra, r.log);
+    }
+    var CHK_LABEL = {schema:'形态', evidence:'证据逐字', ab:'A/B翻转', applyable:'可应用', selfcheck:'自检零回归'};
+    function soRenderPatch(){
+      var wrap = $('soPatchWrap'), bar = $('soApplyBar');
+      if(!soState.patch.length){ wrap.style.display='none'; bar.style.display='none'; wrap.innerHTML=''; return; }
+      var rows = soState.patch.map(function(p, i){
+        var it = p.item || {}, ck = p.checks || {};
+        var badges = Object.keys(CHK_LABEL).map(function(k){
+          return '<span title="' + esc(CHK_LABEL[k]) + '" style="font-size:11px;color:'
+            + (ck[k] ? 'var(--up)' : 'var(--down)') + '">' + (ck[k] ? '✅' : '❌') + '</span>';
+        }).join(' ');
+        var polTxt = it.polarity === 'bull' ? '<span style="color:var(--up)">利好</span>' : '<span style="color:var(--down)">利空</span>';
+        return '<tr' + (p.ok ? '' : ' style="opacity:.55"') + '><td class="ctr">' +
+          '<input type="checkbox" data-sop="' + i + '"' + (p.ok ? ' checked' : ' disabled') + '></td>' +
+          '<td>' + (it.action === 'add' ? '新增' : '删除') + '</td><td>' + esc(it.sector||'') + '</td><td>' + polTxt + '</td>' +
+          '<td><b>' + esc(it.word||'') + '</b></td>' +
+          '<td style="font-size:11px;color:var(--tx3);max-width:260px">' + esc(it.evidence||'') + '</td>' +
+          '<td style="font-size:11px;max-width:200px">' + esc(it.reason||'') +
+          (p.msg ? '<div style="color:var(--down)">' + esc(p.msg) + '</div>' : '') + '</td>' +
+          '<td class="ctr" style="white-space:nowrap">' + badges + '</td></tr>';
+      }).join('');
+      wrap.innerHTML = '<table class="tbl"><thead><tr><th class="ctr" style="width:36px">选</th>' +
+        '<th style="width:52px">动作</th><th style="width:64px">板块</th><th style="width:52px">极性</th>' +
+        '<th>词</th><th>证据（逐字）</th><th>理由 / 拒绝原因</th><th class="ctr">护栏</th></tr></thead><tbody>' +
+        rows + '</tbody></table>';
+      wrap.style.display = 'block'; bar.style.display = 'flex';
+      soUpdateApplyBtn();
+      wrap.querySelectorAll('[data-sop]').forEach(function(c){ c.onchange = soUpdateApplyBtn; });
+    }
+    function soUpdateApplyBtn(){
+      var n = 0;
+      document.querySelectorAll('#soPatchWrap [data-sop]:checked').forEach(function(){ n++; });
+      var b = $('soApplyBtn');
+      if(b){ b.textContent = '✅ 应用选中（' + n + '）'; b.disabled = n === 0; }
+      $('soApplyMsg').textContent = n ? '将写入板块词表扩展层并记审计日志' : '勾选通过护栏的条目';
+    }
+    var apb = $('soApplyBtn');
+    if(apb) apb.onclick = function(){
+      var picked = [];
+      document.querySelectorAll('#soPatchWrap [data-sop]:checked').forEach(function(c){
+        var p = soState.patch[parseInt(c.dataset.sop, 10)];
+        if(p && p.ok && p.item) picked.push(p.item);
+      });
+      if(!picked.length) return;
+      apb.disabled = true; apb.textContent = '应用中…'; $('soApplyMsg').style.color='var(--tx3)'; $('soApplyMsg').textContent='正在过护栏并写入扩展层…';
+      admApi('/sentiment/apply', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({patch: picked, samples: soState.samples})})
+        .then(function(r){
+          if(r.ok){
+            $('soApplyMsg').style.color='var(--up)';
+            $('soApplyMsg').textContent='✅ 已应用 ' + (r.applied||[]).length + ' 条，次日对账看效果';
+            if(r.extra) soRenderExtra(r.extra, r.log);
+            document.querySelectorAll('#soPatchWrap [data-sop]:checked').forEach(function(c){ c.checked=false; c.disabled=true; });
+            soUpdateApplyBtn();
+          } else {
+            apb.disabled = false;
+            $('soApplyMsg').style.color='var(--down)'; $('soApplyMsg').textContent='❌ ' + (r.msg||'失败');
+          }
+        }).catch(function(e){
+          apb.disabled=false; $('soApplyMsg').style.color='var(--down)'; $('soApplyMsg').textContent='❌ ' + e.message;
+        });
+    };
+  }).catch(function(e){ die(el, '读取失败：' + e.message); });
+}
+
+/* ---------- AI 用量：每账号每日配额与已用次数 ---------- */
+function admAiUsage(el){
+  admApi('/ai_usage').then(function(d){
+    admState.loaded.aiusage = 1;
+    var items = d.items || [];
+    var total = items.reduce(function(s,x){ return s + (x.used||0); }, 0);
+    var h = '<div class="card"><div class="card-h"><h2>📈 AI 用量</h2>' +
+            '<div class="meta">' + esc(d.day || '') + ' · 今日合计 <b>' + total + '</b> 次 · ' +
+            '新账号默认每日 ' + (d.default_quota != null ? d.default_quota : 10) + ' 次</div></div>' +
+            '<div class="card-b">';
+    h += '<div class="needtip" style="margin-bottom:14px">' +
+         '<b>计费口径</b><span class="sm">每点击一次「开始分析」即扣减 1 次当日配额' +
+         '（LLM 调用有真实 Token 成本，失败不退款）；按本地日期计，每日 0 点自动重置。' +
+         '配额改为 <b>0</b> 即停用该账号的 AI 深度分析。</span></div>';
+    if(!items.length){
+      h += '<div class="empty">还没有注册用户。</div>';
+    } else {
+      h += '<div class="tblw"><table class="tbl"><thead><tr>' +
+           '<th>账号</th><th class="ctr" style="width:150px">今日已用</th>' +
+           '<th class="ctr" style="width:180px">每日配额（次）</th>' +
+           '<th class="ctr" style="width:80px">操作</th></tr></thead><tbody>';
+      items.forEach(function(x){
+        var full = x.quota > 0 && x.used >= x.quota;
+        h += '<tr><td><b>' + esc(x.username) + '</b>' +
+             (x.display && x.display !== x.username
+               ? '<div style="font-size:11px;color:var(--tx3)">' + esc(x.display) + '</div>' : '') +
+             '</td>' +
+             '<td class="ctr"><b' + (full ? ' class="down"' : '') + '>' + x.used + '</b> / ' + x.quota +
+             (full ? ' <span class="tag">已用完</span>' : '') + '</td>' +
+             '<td class="ctr"><input type="number" min="0" max="1000" step="1" value="' + x.quota + '" ' +
+               'data-aq="' + x.id + '" style="width:76px;text-align:center"></td>' +
+             '<td class="ctr"><button class="btn" style="padding:2px 8px;font-size:11px" ' +
+               'data-aqs="' + x.id + '">保存</button></td></tr>';
+      });
+      h += '</tbody></table></div>';
+    }
+    h += '<div style="padding:12px 16px;font-size:12px;color:var(--tx3);line-height:1.7">' +
+         '配额按账号独立设置，<b>保存后立即生效、无需重启</b>；未超额的账号改动下一次分析就按新配额走。' +
+         '「今日已用」只统计当天，跨天自动归零。该功能是否要求登录在旁边的「🔒 登录权限」面板。</div></div></div>';
+    el.innerHTML = h;
+
+    el.querySelectorAll('[data-aqs]').forEach(function(b){
+      b.onclick = function(){
+        var uid = b.dataset.aqs;
+        var inp = el.querySelector('[data-aq="' + uid + '"]');
+        var v = inp ? parseInt(inp.value, 10) : NaN;
+        if(isNaN(v) || v < 0){ alert('配额应是非负整数'); return; }
+        b.disabled = true;
+        admApi('/users/' + uid + '/ai_quota', {
+          method:'PUT', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({quota: v})
+        }).then(function(){
+          wtToast('已保存：每日 ' + v + ' 次' + (v === 0 ? '（已停用）' : ''));
+          loadAdmin(true);
+        }).catch(function(e){
+          b.disabled = false;
+          alert('保存失败：' + e.message);
+        });
       };
     });
   }).catch(function(e){ die(el, '读取失败：' + e.message); });
@@ -5158,7 +5786,34 @@ function admSectorAudit(el){
       '<button class="btn" id="admAuditRun72">近 72h</button>' +
       '<span id="admAuditMsg" style="font-size:12px;color:var(--tx3)"></span></div>';
     h += '</div></div>';
+    h += '<div id="auditDetail" style="margin-top:14px"></div>';
     el.innerHTML = h;
+    renderAuditDetail();
+    function renderAuditDetail(){
+      var box = $('auditDetail'); if(!box) return;
+      var dt = admState.auditDetail;
+      if(!dt || !dt.findings || !dt.findings.length){ box.innerHTML = ''; return; }
+      var fs = dt.findings, high = fs.filter(function(f){ return f.level === 'high'; }).length;
+      var lvName = {high:'高危', mid:'关注', low:'提示'};
+      var html = '<details open style="margin-top:2px"><summary style="cursor:pointer;font-size:13px;color:var(--accent);font-weight:600">'
+        + '本次巡检疑点 · ' + fs.length + ' 个（高危 ' + high + '）</summary><div style="margin-top:10px">';
+      ['high','mid','low'].forEach(function(lv){
+        var grp = fs.filter(function(f){ return f.level === lv; });
+        if(!grp.length) return;
+        html += '<div style="font-size:12px;color:var(--tx3);margin:8px 0 4px">' + lvName[lv] + '（' + grp.length + '）</div>';
+        grp.forEach(function(f){
+          var lcls = lv === 'high' ? 'down' : (lv === 'mid' ? 'warn' : '');
+          html += '<div style="margin-top:6px;padding:8px 10px;border:1px solid var(--bd);border-radius:8px;background:rgba(255,255,255,.02)">'
+            + '<div style="font-size:13px"><b>[' + esc(f.rule) + ']</b> ' + esc(f.sector) + ' <span class="' + lcls + '">' + esc(f.level) + '</span></div>'
+            + '<div style="font-size:12px;color:var(--tx3);margin-top:3px">' + esc(f.detail || '') + '</div>';
+          (f.samples || []).forEach(function(s){ html += '<div style="font-size:12px;color:var(--tx2);margin-top:2px">· ' + esc(s) + '</div>'; });
+          html += '<div style="font-size:12px;margin-top:4px"><b>建议：</b>' + esc(f.advice || '') + '</div>';
+          html += '</div>';
+        });
+      });
+      html += '</div></details>';
+      box.innerHTML = html;
+    }
 
     var msg = $('admAuditMsg');
     function run(hours){
@@ -5170,6 +5825,8 @@ function admSectorAudit(el){
         if(!r.ok){ if(msg) msg.textContent = '失败'; return; }
         if(msg) msg.textContent = '✅ ' + r.items + ' 条快讯 / ' + r.sectors +
           ' 个板块 / ' + r.findings + ' 个疑点（高危 ' + r.high + '）· ' + (r.at || '');
+        admState.auditDetail = { findings: r.findings || [], summary: r.summary || {} };
+        renderAuditDetail();
         setTimeout(function(){ if(admState.cur === 'sectoraudit') loadAdmin(true); }, 1200);
       }).catch(function(e){ if(msg) msg.textContent = '失败：' + e.message; });
     }
@@ -5235,7 +5892,54 @@ function admSectorVerify(el){
       '<button class="btn" id="admVrfRun72">近 72h</button>' +
       '<span id="admVrfMsg" style="font-size:12px;color:var(--tx3)"></span></div>';
     h += '</div></div>';
+    h += '<div id="vrfDetail" style="margin-top:14px"></div>';
     el.innerHTML = h;
+    renderVrfDetail();
+    function renderVrfDetail(){
+      var box = $('vrfDetail'); if(!box) return;
+      var dt = admState.vrfDetail;
+      if(!dt || !dt.rows || !dt.rows.length){ box.innerHTML = ''; return; }
+      var rows = dt.rows, sum = dt.summary || {}, acc = sum.acc != null ? Math.round(sum.acc * 100) + '%' : '—';
+      var html = '<details open style="margin-top:2px"><summary style="cursor:pointer;font-size:13px;color:var(--accent);font-weight:600">'
+        + '本次对账明细 · 准确率 ' + acc + '（' + (sum.hits || 0) + '/' + (sum.n_dir || 0) + ' 方向板块）</summary><div style="margin-top:10px">';
+      html += '<table style="width:100%;font-size:12px;border-collapse:collapse">'
+        + '<tr style="color:var(--tx3);text-align:left"><th style="padding:4px 8px">板块</th>'
+        + '<th style="padding:4px 8px">舆情方向·置信</th><th style="padding:4px 8px">板块组涨跌</th>'
+        + '<th style="padding:4px 8px">超额</th><th style="padding:4px 8px">实际</th>'
+        + '<th style="padding:4px 8px">判定</th></tr>';
+      rows.forEach(function(r){
+        var cls = r.result === '错失' ? 'down' : (r.result === '命中' ? 'up' : '');
+        var raw = r.raw != null ? (r.raw >= 0 ? '+' : '') + r.raw.toFixed(2) + '%' : '—';
+        var exc = r.excess != null ? (r.excess >= 0 ? '+' : '') + r.excess.toFixed(2) + '%' : '—';
+        html += '<tr style="border-top:1px solid var(--bd)"><td style="padding:4px 8px">' + esc(r.sector) + '</td>'
+          + '<td style="padding:4px 8px">' + esc(r.sent_dir) + '·' + esc(r.conf) + '</td>'
+          + '<td style="padding:4px 8px">' + raw + '</td><td style="padding:4px 8px">' + exc + '</td>'
+          + '<td style="padding:4px 8px">' + esc(r.actual_dir || '—') + '</td>'
+          + '<td style="padding:4px 8px" class="' + cls + '">' + esc(r.result) + '</td></tr>';
+      });
+      html += '</table>';
+      var wrong = rows.filter(function(r){ return r.result === '错失'; });
+      if(wrong.length){
+        html += '<div style="margin-top:10px;font-size:12px;color:var(--tx3)">错因研判（' + wrong.length + ' 个错失）</div>';
+        wrong.forEach(function(r){
+          html += '<div style="margin-top:8px;padding:8px 10px;border:1px solid var(--bd);border-radius:8px;background:rgba(255,255,255,.02)">'
+            + '<div style="font-size:13px"><b>' + esc(r.sector) + '</b> · <span class="down">' + esc(r.cause || '') + '</span></div>'
+            + '<div style="font-size:12px;color:var(--tx3);margin-top:3px">' + esc(r.cause_detail || '') + '</div>';
+          (r.samples || []).forEach(function(s){
+            var tag = s.corrected ? '〔修正〕' : '';
+            html += '<div style="font-size:12px;margin-top:2px;color:var(--tx2)">' + (tag ? ('[' + tag + '] ') : '') + esc(s.text || '') + '</div>';
+          });
+          html += '</div>';
+        });
+      }
+      if(dt.suggestions && dt.suggestions.length){
+        html += '<div style="margin-top:10px;font-size:12px;color:var(--tx3)">调整建议</div><ul style="margin:4px 0 0;padding-left:18px;font-size:12px">';
+        dt.suggestions.forEach(function(s){ html += '<li style="margin:2px 0">' + esc(s) + '</li>'; });
+        html += '</ul>';
+      }
+      html += '</div></details>';
+      box.innerHTML = html;
+    }
 
     var msg = $('admVrfMsg');
     function run(hours){
@@ -5250,6 +5954,8 @@ function admSectorVerify(el){
           Math.round((r.acc || 0) * 100) + '%）' +
           (r.counted ? ' · 已计入当日' : ' · ⚠️ 试跑不计入（需交易日且已过 15:00）') +
           ' · ' + (r.at || '');
+        admState.vrfDetail = { rows: r.rows || [], suggestions: r.suggestions || [], summary: r.summary || {} };
+        renderVrfDetail();
         setTimeout(function(){ if(admState.cur === 'sectorverify') loadAdmin(true); }, 1200);
       }).catch(function(e){ if(msg) msg.textContent = '失败：' + e.message; });
     }
@@ -6056,6 +6762,7 @@ function loadSectorNews(){
         + '<div class="st-head"><span class="st-name" data-sec="'+esc(r.sector)
         + '" onclick="openSectorStocks(this.dataset.sec)" title="点击查看成分股">'
         + esc(r.sector) + ' <i class="st-jump">↗</i></span>'
+        + (r.low_conf ? '<span class="st-lowc" title="样本不足（'+r.n+' 条 &lt; 3），方向置信度低，勿单独据其判断">低置信</span>' : '')
         + '<span class="st-net" style="color:'+col+'">'+arrow+' '+net.toFixed(2)+'</span></div>'
         + catRow
         + '<div class="st-bar"><span class="st-seg pos" style="width:'+posP+'%"></span>'
@@ -6077,7 +6784,7 @@ function loadSectorNews(){
     var h = '<div class="st-range">'+rbtn+'</div>'
           + '<div class="st-summary">共 <b>'+rows.length+'</b> 个板块 · <b>'+total+'</b> 条快讯 · 近 '+wh+' 小时滚动 · 更新于 '+ts+'</div>'
           + '<div class="st-grid">'+cards+'</div>'
-          + '<div class="st-note">描述性参考 · ticker 反查 + 关键词聚合，<b>非预测</b>；净情绪 = 偏多占比 − 偏空占比；统计窗口为<b>近 '+wh+' 小时</b>滚动，非实时单条。<b>催化剂净信号</b> = 命中的利好词数 − 利空词数（如「OPEC减产/霍尔木兹」→能源利好、「集采/降价」→医药利空）。</div>';
+          + '<div class="st-note">描述性参考 · ticker 反查 + 关键词聚合，<b>非预测</b>；净情绪 = 偏多占比 − 偏空占比，按发布时间<b>衰减加权</b>（越新权重越高，半衰期 12h，昨日旧闻不重复计分）；统计窗口为<b>近 '+wh+' 小时</b>滚动，非实时单条。<b>催化剂净信号</b> = 命中的利好词数 − 利空词数（如「OPEC减产/霍尔木兹」→能源利好、「集采/降价」→医药利空）。样本不足 3 条的板块标<b>低置信</b>，勿单独据其判断方向。</div>';
     el.innerHTML = h;
   }).catch(function(e){ die(el, '板块舆情加载失败：' + e.message); });
 }
@@ -7267,6 +7974,11 @@ if($('grStrategy')) $('grStrategy').onchange = function(){
 if($('grSuggest')) $('grSuggest').onclick = runGridSuggest;
 if($('gpCreate')) $('gpCreate').onclick = createGridPlan;
 if($('etfRun')) $('etfRun').onclick = function(){ runEtfScreen(false); };
+// ponytail: ETF 筛选输入框回车即筛选（与条件选股一致）
+['etfKw','etfMinCap','etfMinAmt','etfMinTurn','etfChgMin','etfChgMax','etfLimit'].forEach(function(id){
+  var el = $(id); if(!el) return;
+  el.addEventListener('keydown', function(e){ if(e.key === 'Enter'){ e.preventDefault(); runEtfScreen(false); } });
+});
 if($('etfRefresh')) $('etfRefresh').onclick = function(){ runEtfScreen(true); };
 if($('wfRun')) $('wfRun').onclick = runWalkForward;
 if($('psRun')) $('psRun').onclick = runPatternScore;
@@ -7779,6 +8491,7 @@ function renderIntent(r, target){
   var h = '<div class="intentbox">';
   h += '<div class="row"><span class="lbl">匹配策略</span><b>' + esc(r.strategy_name || '—') + '</b>' +
        (r.strategy ? ' <span style="color:var(--tx3);font-size:12px">(' + esc(r.strategy) + ')</span>' : '') +
+       (r._llm ? ' <span style="color:#8b5cf6;font-size:12px;border:1px solid #8b5cf6;border-radius:4px;padding:0 4px">✨AI增强</span>' : '') +
        '<span style="margin-left:auto;font-size:12px;color:var(--tx3)">置信度 <b class="' + confColor + '">' +
        (conf*100).toFixed(0) + '%</b></span></div>';
   h += '<div class="row"><span class="lbl">指标</span>' + inds + '</div>';
@@ -7801,7 +8514,8 @@ function nlBacktest(){
   if(!text){ die($('nlResult'), '请先输入策略描述'); return; }
   var el = $('nlResult');
   loading(el, '解析中…');
-  api('/api/intent_parse?text=' + encodeURIComponent(text)).then(function(r){
+  var llmQ = ($('nlLLM') && $('nlLLM').checked) ? '&llm=true' : '';
+  api('/api/intent_parse?text=' + encodeURIComponent(text) + llmQ).then(function(r){
     if(r.error){ die(el, r.error); return; }
     renderIntent(r, 'nlResult');
     if(!r.strategy){
@@ -8495,6 +9209,7 @@ function renderGrid(d, el){
    ========================================================================= */
 function runEtfScreen(force){
   var el = $('etfOutput');
+  var btn = $('etfRun'); if(btn) btn.disabled = true;   // 防连点重复提交，finally 恢复
   var snap = $('etfSnap').checked;
   loading(el, snap && force ? '拉取全量清单并补 1600+ 只实时快照，约 10 秒…' : '筛选中…');
   var q = [];
@@ -8510,7 +9225,8 @@ function runEtfScreen(force){
   q.push('with_snapshot=' + (snap ? 'true' : 'false'));
   if(force) q.push('refresh=true');
   api('/api/etf/list?' + q.join('&')).then(function(d){ renderEtf(d, el); })
-    .catch(function(e){ die(el, 'ETF 筛选失败：' + e.message); });
+    .catch(function(e){ die(el, 'ETF 筛选失败：' + e.message); })
+    .finally(function(){ if(btn) btn.disabled = false; });
 }
 
 function renderEtf(d, el){
@@ -8756,7 +9472,8 @@ if($('nlParse')) $('nlParse').onclick = function(){
   var t = ($('nlText').value || '').trim();
   if(!t){ die($('nlResult'), '请先输入策略描述'); return; }
   loading($('nlResult'), '解析中…');
-  api('/api/intent_parse?text=' + encodeURIComponent(t))
+  var llmQ = ($('nlLLM') && $('nlLLM').checked) ? '&llm=true' : '';
+  api('/api/intent_parse?text=' + encodeURIComponent(t) + llmQ)
     .then(function(r){ renderIntent(r, 'nlResult'); })
     .catch(function(e){ die($('nlResult'), '解析失败：' + e.message); });
 };

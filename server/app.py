@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import threading
+import concurrent.futures
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -2965,9 +2966,17 @@ def api_valuation(code: str = Query(..., description="股票代码，如 sh60051
 # ===========================================================================
 
 @app.get("/api/intent_parse")
-def api_intent_parse(request: Request, text: str = Query(..., min_length=1, description="策略自然语言描述")):
-    """把一句话策略描述解析为结构化意图（指标/类型/风险/止损止盈）。"""
+def api_intent_parse(request: Request, text: str = Query(..., min_length=1, description="策略自然语言描述"),
+                     llm: bool = Query(False, description="是否 LLM 增强(失败自动回落规则版)")):
+    """把一句话策略描述解析为结构化意图（指标/类型/风险/止损止盈）。
+
+    llm=true 走 intent_llm 增强解释性字段；conditions 仍由规则版产出，
+    LLM 未启用/失败/白名单不过都自动回落规则版，行为与 llm=false 一致。
+    """
     _require_module_login(request, "nlpick")
+    if llm:
+        import intent_llm
+        return intent_llm.parse_enhanced(text)
     return itt.parse_intent(text)
 
 
@@ -2975,6 +2984,41 @@ def api_intent_parse(request: Request, text: str = Query(..., min_length=1, desc
 def api_intent_examples():
     """返回意图解析示例，供前端做快捷填入。"""
     return {"examples": itt.EXAMPLES}
+
+
+@app.get("/api/stock/analyze")
+def api_stock_analyze(request: Request, code: str = Query(..., description="股票代码，如 sh600519"),
+                      hours: int = Query(24, ge=6, le=72)):
+    """#93 个股 AI 深度分析：只读聚合行情/技术面/板块/快讯 → LLM 解读。
+
+    LLM 未启用/网络错/输出不过 schema 都自动降级为纯数据摘要(data_only)，不报错。
+    纯只读 + 人工点触发，LLM 未启用时零调用（无成本）。
+
+    登录与配额（后台「🔒 登录权限」+「📈 AI 用量」两个面板管控）：
+      - 模块开关默认要求登录（TICK_AUTH_REQ_STOCKAI），管理员可放开匿名；
+      - 登录用户每次分析扣 1 次当日配额（默认 10 次/天，可按账号调整）。
+        **先扣后调**：LLM 调用有真实 Token 成本，按尝试次数计费对运营方公平，
+        失败不退款（失败也花了 token）。扣减是原子 UPSERT，并发不会超扣；
+      - 超额返回 429，文案带配额与恢复方式；
+      - 放开匿名时没有账号可扣，直接放行（不计数）。
+    """
+    import store as _store
+    u = _require_module_login(request, "stockai")
+    quota_info = None
+    if u:
+        ok, used, quota = _store.ai_quota_consume(u["id"])
+        if not ok:
+            raise HTTPException(
+                429,
+                f"今日 AI 深度分析次数已用完（每账号每日 {quota} 次），"
+                f"次日 0 点自动恢复；如需调整可让管理员在后台「AI 用量」面板修改配额")
+        quota_info = {"used": used, "quota": quota,
+                      "remaining": max(quota - used, 0)}
+    import stock_analyzer
+    res = stock_analyzer.analyze_stock(code, hours=hours)
+    if quota_info is not None and isinstance(res, dict):
+        res["ai_quota"] = quota_info
+    return res
 
 
 @app.get("/api/tdx_capabilities")
@@ -3228,15 +3272,19 @@ def api_admin_overview(request: Request):
     # 快照降级链：带 live 探测（实测当前真正在用哪一级）。
     # ⚠ 原来这里有个硬编码的 "tencent": True —— 腾讯挂了也照样显示绿点，
     #   属于假指示。现在只报探测到的事实：chain 是能力顺序，live 是当前实际生效的那一级。
-    try:
-        snap_st = ds.snapshot_status(probe=True)
-    except Exception as e:
-        snap_st = {"error": str(e)}
+    # ponytail: 两个源探测是独立 I/O，串行会相加耗时（含任一源超时等待），
+    #   改 2 线程并发，耗时取最大；各探针自带异常兜底，失败也填回 error 不拖垮概览。
+    def _probe(fn, *a, **k):
+        try:
+            return fn(*a, **k)
+        except Exception as e:
+            return {"error": str(e)}
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as _ex:
+        _fa = _ex.submit(_probe, ds.snapshot_status, True)
+        _fb = _ex.submit(_probe, ds.intraday_source_status)
+        snap_st = _fa.result()
+        intraday = _fb.result()
     srcs["snapshot"] = snap_st
-    try:
-        intraday = ds.intraday_source_status()
-    except Exception as e:
-        intraday = {"error": str(e)}
 
     # 进程运行信息
     rows, upd = MARKET.get()
@@ -3303,6 +3351,35 @@ def api_admin_reset_account(uid: int, request: Request,
     except Exception as e:
         raise HTTPException(400, f"{type(e).__name__}: {e}")
     return {"ok": True, **res}
+
+
+@app.get("/api/admin/ai_usage")
+def api_admin_ai_usage(request: Request):
+    """AI 深度分析用量统计：每账号当日已用次数 / 每日配额 / 总计。
+
+    与 /api/admin/users 的分工：那边管账号本身，这边只管「AI 次数」这一本账。
+    """
+    _require_admin(request)
+    import store as _store
+    try:
+        return _store.ai_usage_report()
+    except Exception as e:
+        raise HTTPException(500, f"{type(e).__name__}: {e}")
+
+
+@app.put("/api/admin/users/{uid}/ai_quota")
+def api_admin_set_ai_quota(uid: int, request: Request,
+                           payload: Dict[str, Any] = Body(...)):
+    """设置某账号的每日 AI 分析配额。0 = 停用；新账号默认 10 次/天。"""
+    _require_admin(request)
+    import store as _store
+    if not _store.get_user(uid):
+        raise HTTPException(404, "用户不存在")
+    try:
+        n = _store.set_ai_quota(uid, payload.get("quota"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "user_id": uid, "quota": n}
 
 
 @app.delete("/api/admin/users/{uid}")
@@ -3488,6 +3565,273 @@ def _apply_config_live() -> Dict[str, Any]:
     except Exception as e:
         out["eltdx"] = {"error": f"{type(e).__name__}: {e}"}
     return out
+
+
+@app.post("/api/admin/llm/test")
+async def api_admin_llm_test(request: Request):
+    """LLM 连通性冒烟测试：用极短 prompt 验证 key / 网络。
+
+    支持 body {"config": {...}} 传入前端当前输入框的值（未保存也能测），
+    不要求已启用开关——用户可先验证连通性再开开关。
+    返回 {"ok": bool, "msg": str}，供后台「AI 模型」面板「测试连接」按钮调用。
+    """
+    _require_admin(request)
+    override: dict = {}
+    try:
+        body = await request.json()
+        cfg = (body or {}).get("config") or {}
+        # 前端传的是 config 项的真实 key（大写 LLM_*），与 _conf 的 override 键一致
+        for k in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_ENABLED"):
+            if k in cfg and cfg[k] not in (None, ""):
+                override[k] = cfg[k]
+    except Exception:
+        override = {}
+    try:
+        import asyncio
+        import llm_client
+        return await asyncio.to_thread(llm_client.test, override=override)
+    except Exception as e:
+        return {"ok": False, "msg": f"{type(e).__name__}: {e}"}
+
+
+def _recent_news_sample(n: int = 15) -> List[str]:
+    """从 24h 快讯缓存抠近期真实标题，喂给 AI 看语料缺口。ponytail: 纯文件读，无依赖。"""
+    out: List[str] = []
+    try:
+        p = os.path.join(os.path.dirname(HERE), "data", "news_cache.md")
+        with open(p, encoding="utf-8") as f:
+            for line in f:
+                if not line.strip().startswith("- "):
+                    continue
+                parts = line.split("|")
+                if len(parts) < 9:
+                    continue
+                txt = parts[8].strip()   # 每行末段是新闻正文
+                if txt:
+                    out.append(txt)
+                if len(out) >= n:
+                    break
+    except Exception:
+        pass
+    return out
+
+
+@app.post("/api/admin/llm/lexicon-review")
+async def api_admin_llm_lexicon_review(request: Request):
+    """AI 词表体检（只读建议，绝不动词典 / selfcheck）：把现有情绪词典 + 近期真实新闻
+    喂给 LLM，产出「建议新增词 / 建议删除词 / 误判样例」供人工拍板。复用 llm_client.chat。
+    """
+    _require_admin(request)
+    override: dict = {}
+    try:
+        body = await request.json()
+        cfg = (body or {}).get("config") or {}
+        for k in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_ENABLED"):
+            if k in cfg and cfg[k] not in (None, ""):
+                override[k] = cfg[k]
+    except Exception:
+        override = {}
+    try:
+        import asyncio
+        import sentiment
+        import llm_client
+        pos, neg = sentiment.POSITIVE_WORDS, sentiment.NEGATIVE_WORDS
+        lex = ("【当前词典】\n看涨词(%d)：%s\n看跌词(%d)：%s\n否定词：%s\n"
+               "程度词：%s\n转折词：%s") % (
+            len(pos), "、".join(pos), len(neg), "、".join(neg),
+            "、".join(sentiment.NEGATION_WORDS),
+            "、".join("%s×%s" % (k, v) for k, v in sentiment.DEGREE_WORDS.items()),
+            "、".join(sentiment.TRANSITION_WORDS))
+        sample = _recent_news_sample(15)
+        blind = ["不看好后市走势", "机构并不看空该股", "无重大利好兑现", "拟不进行现金分红"]
+        msgs = [{
+            "role": "system",
+            "content": ("你是中文金融舆情词典审核员。基于给定词典与真实新闻样本，产出可落地的"
+                        "词典优化建议，只输出中文，结构严格如下：\n"
+                        "## 建议新增情绪词\n表格：词 | 极性(看涨/看跌) | 建议权重(1.0~3.0) | 理由\n"
+                        "## 建议删除或调整的词\n词 | 问题 | 建议\n"
+                        "## 当前词典误判样例\n句子 | 词典判(看涨/看跌/中性) | 应判 | 建议修法\n"
+                        "## 结构化建议（机读）\n在报告末尾追加一个 ```json 代码块，仅含 "
+                        "{\"add\":[{\"word\":\"词\",\"polarity\":\"pos|neg\",\"weight\":数值}]}，"
+                        "不要在该代码块内写其他文字；权重取 1.0~3.0。\n"
+                        "要求：每条须有依据（来自样本或金融常识），不编造；权重参考现有词"
+                        "（涨停/暴跌3.0，利好/利空2.5）；不要改动打分规则本身。")
+        }, {
+            "role": "user",
+            "content": (lex + "\n\n【近期真实新闻样本】\n" + "\n".join("- " + s for s in sample)
+                        + "\n\n【词典已知薄弱样例（当前会判错，供你针对性建议）】\n"
+                        + "\n".join("- " + s for s in blind))
+        }]
+        # ponytail: chat 抛 RuntimeError 即视为降级，转成前端可读错误，不崩接口。
+        rep = await asyncio.to_thread(llm_client.chat, msgs,
+                                      max_tokens=1600, temperature=0.4, override=override)
+        # 模型若额外给出 ```json 机读块，解析成一键添加建议（解析失败则忽略，不影响报告）
+        import re as _re, json as _json
+        suggestions = []
+        m = _re.search(r"```json\s*(.*?)```", rep, _re.S)
+        if m:
+            rep_clean = _re.sub(r"```json.*?```", "", rep, flags=_re.S).strip()
+            try:
+                obj = _json.loads(m.group(1))
+                for it in (obj.get("add") or []):
+                    w = (it.get("word") or "").strip()
+                    pol = it.get("polarity")
+                    if w and pol in ("pos", "neg"):
+                        try:
+                            wt = round(float(it.get("weight") or 2.0), 2)
+                        except Exception:
+                            wt = 2.0
+                        suggestions.append({"word": w, "polarity": pol, "weight": wt})
+            except Exception:
+                suggestions = []
+        else:
+            rep_clean = rep
+        return {"ok": True, "report": rep_clean, "suggestions": suggestions}
+    except Exception as e:
+        return {"ok": False, "msg": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/admin/lexicon")
+async def api_admin_lexicon(request: Request):
+    """用户层情绪词典的增删查（不改硬编码基础层 / selfcheck）。action: add|remove|list。"""
+    _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    action = (body or {}).get("action") or "list"
+    try:
+        if action == "add":
+            d = senti.add_word(body.get("word"), body.get("polarity"), body.get("weight", 2.0))
+            return {"ok": True, "extra": d}
+        if action == "remove":
+            d = senti.remove_word(body.get("word"))
+            return {"ok": True, "extra": d}
+        return {"ok": True, "extra": senti.list_extra()}
+    except ValueError as e:
+        return {"ok": False, "msg": str(e)}
+    except Exception as e:
+        return {"ok": False, "msg": f"{type(e).__name__}: {e}"}
+
+
+# ---------------------------------------------------------------- 舆情 AI 优化（P1）
+
+def _llm_override(body: dict) -> dict:
+    """从请求体收集 LLM 临时配置（前端未保存也能用），与 _conf override 键一致。"""
+    override: dict = {}
+    cfg = (body or {}).get("config") or {}
+    for k in ("LLM_BASE_URL", "LLM_API_KEY", "LLM_MODEL", "LLM_ENABLED"):
+        if k in cfg and cfg[k] not in (None, ""):
+            override[k] = cfg[k]
+    return override
+
+
+@app.post("/api/admin/sentiment/optimize")
+async def api_admin_sentiment_optimize(request: Request):
+    """AI 舆情优化（P1 第一步：提议 + 护栏校验，**不落盘**）。
+
+    流程：build_context（对账同口径信号挑 flagged 板块 + 真实样本）→ LLM 产出
+    JSON 补丁 → validate_patch 逐条过护栏。返回的 patch 带逐条 checks/msg，
+    前端只允许勾选 ok=true 的条目，连同 samples 回传给 /apply。
+    """
+    _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    override = _llm_override(body)
+    try:
+        import asyncio
+        import sentiment_optimizer as so
+        ctx = await asyncio.to_thread(so.build_context)
+        if not ctx.get("ok"):
+            return {"ok": False, "msg": ctx.get("reason") or "无可用快讯窗口"}
+        if not ctx.get("flagged"):
+            return {"ok": True, "empty": True,
+                    "msg": "当前窗口没有 flagged 板块（修正率/样本数/词表均衡都正常），无需优化",
+                    "ctx": ctx, "patch": []}
+        prop = await asyncio.to_thread(so.propose, ctx, override)
+        res = await asyncio.to_thread(so.validate_patch, prop.get("patch"), ctx.get("samples"))
+        return {"ok": True, "report": prop.get("report", ""),
+                "ctx": ctx, "patch": res["items"],
+                "n_pass": res["n_pass"], "n_fail": res["n_fail"],
+                "extra": so.ss_list_extra(), "log": so.list_log(10)}
+    except Exception as e:
+        return {"ok": False, "msg": f"{type(e).__name__}: {e}"}
+
+
+@app.get("/api/admin/sentiment/pending")
+async def api_admin_sentiment_pending(request: Request):
+    """P2：读取最近一次每日自动提议（落盘于 data/sentiment_optimizer_pending.json）。
+
+    形状同 /optimize 响应；无文件返回 ok:false。前端卡片加载即展示，
+    人工只做勾选应用（/apply 仍重跑护栏，不可绕过）。
+    """
+    _require_admin(request)
+    import sentiment_optimizer as so
+    d = so.load_pending()
+    if not d:
+        return {"ok": False, "msg": "尚未生成自动提议（每日巡检结束后自动生成）"}
+    return d
+
+
+@app.post("/api/admin/sentiment/apply")
+async def api_admin_sentiment_apply(request: Request):
+    """AI 舆情优化（P1 第二步：应用人工勾选的补丁子集）。
+
+    护栏在服务端重新跑一遍（validate_patch 不可绕过），只有全项通过的才落盘；
+    只写 sector_sentiment 扩展层 JSON + 审计日志，基础层/selfcheck 不动。
+    body: {"patch": [选中条目...], "samples": [optimize 返回的样本...]}
+    """
+    _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    patch = (body or {}).get("patch") or []
+    samples = (body or {}).get("samples") or []
+    if not isinstance(patch, list) or not patch:
+        return {"ok": False, "msg": "没有选中的补丁条目"}
+    try:
+        import asyncio
+        import sentiment_optimizer as so
+        out = await asyncio.to_thread(so.apply_patch, patch, samples)
+        out["extra"] = so.ss_list_extra()
+        out["log"] = so.list_log(10)
+        return out
+    except Exception as e:
+        return {"ok": False, "msg": f"{type(e).__name__}: {e}"}
+
+
+@app.post("/api/admin/sentiment/extra")
+async def api_admin_sentiment_extra(request: Request):
+    """板块词表扩展层的手动增删查（不经 AI 护栏——管理员直接管理，与
+    /api/admin/lexicon 同模式）。action: add|remove|list。"""
+    _require_admin(request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    action = (body or {}).get("action") or "list"
+    try:
+        import asyncio
+        import sector_sentiment as _ss
+        import sentiment_optimizer as so
+        if action == "add":
+            d = await asyncio.to_thread(_ss.add_word, body.get("sector"),
+                                        body.get("polarity"), body.get("word"))
+            return {"ok": True, "extra": d}
+        if action == "remove":
+            removed, d = await asyncio.to_thread(_ss.remove_word, body.get("sector"),
+                                                 body.get("word"))
+            if not removed:
+                return {"ok": False, "msg": "扩展层没有这个词（基础层词不可删）"}
+            return {"ok": True, "extra": d}
+        return {"ok": True, "extra": so.ss_list_extra(), "log": so.list_log(10)}
+    except ValueError as e:
+        return {"ok": False, "msg": str(e)}
+    except Exception as e:
+        return {"ok": False, "msg": f"{type(e).__name__}: {e}"}
 
 
 # ---------------------------------------------------------------- 数据落库

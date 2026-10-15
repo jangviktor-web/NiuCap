@@ -16,8 +16,9 @@ go-stock 用 gse 分词后查词典。但中文分词有个隐患：像「创新
 
 ## 打分规则（照抄 go-stock，一处明确标注的例外）
 
-  · 正/负词各 35 个，权重 1.5~3.0（涨停/跌停 3.0，利好/利空 2.5 …）；
+  · 正负词各约 40 个（2026-10 词表体检后扩充），权重 1.0~3.0；
   · 否定词（不/没/无/非/未/别/勿）紧邻在前 → 极性反转；
+    （例外：「利好 / 利空」被否定时不反转，改判中性——无利好≠有利空）
   · 程度副词（非常 1.8 / 极其 2.2 / 稍微 0.6 …）紧邻在前 → 权重相乘；
   · 转折词（但是/然而/不过/却/可是）把文本切段，**后段整体 ×1.5**；
   · 阈值：score > +1.0 → 看涨，< -1.0 → 看跌，否则中性。
@@ -26,13 +27,18 @@ go-stock 用 gse 分词后查词典。但中文分词有个隐患：像「创新
   只生效一个（先命中先得）。这里保持同样语义，不做"更聪明"的叠加——
   词典法的收益来自简单可预期，而不是精巧。
 
-## 已知天花板（词典法的固有缺陷，照抄不修）
+## 已知天花板（词典法的固有缺陷）
 
-  「不看好」会判成正面（不 + 看空 → 反转 +2.0）。真正的解决办法是
-  上 LLM（那是 #93 的活），词典法只求把 80% 的常见表达判对。
+  词典法只求把 80% 的常见表达判对，上 LLM 才是根治方案（#93 的活）。
+  已修掉的两类高频误判：①「不 + 看涨词（看好/看涨）」→ 看跌；
+  ②「无/不 + 利好/利空」→ 中性（而非反转为利空）。
+  仍存在的硬伤：否定词与情绪词隔 >3 个衬字时（如「拟不进行现金分红」
+  中 不 距 分红 5 字）会漏判，需靠更长的字面短语兜底。
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 from typing import Any, Dict, List
 
@@ -47,7 +53,10 @@ POSITIVE_WORDS: Dict[str, float] = {
     "利好消息": 3.0, "收益增长": 2.5, "利润增长": 2.5, "业绩优异": 2.5,
     "潜力股": 2.0, "绩优股": 2.0, "强势": 1.5, "走高": 1.5, "攀升": 1.5,
     "大涨": 2.5, "飙升": 3.0, "井喷": 3.0, "爆发": 2.5, "暴涨": 3.0,
-    "站上": 1.5, "收涨": 2.0, "批准": 1.5, "获批": 1.5,
+    "站上": 1.5,     "收涨": 2.0, "批准": 1.5, "获批": 1.5,
+    # ponytail: AI 词表体检(2026-10) 采纳的新词，已人工过目，非 LLM 自动写入
+    "拉升": 1.5, "拓展业务": 1.2, "纷纷走高": 1.8,
+    "看好": 2.0, "看涨": 2.0, "分红": 2.0,
 }
 
 NEGATIVE_WORDS: Dict[str, float] = {
@@ -58,11 +67,18 @@ NEGATIVE_WORDS: Dict[str, float] = {
     "利空消息": 3.0, "收益下降": 2.5, "利润下滑": 2.5, "业绩不佳": 2.5,
     "垃圾股": 2.0, "风险股": 2.0, "弱势": 1.5, "走低": 1.5, "缩量": 2.5,
     "大跌": 2.5, "暴跌": 3.0, "崩盘": 3.0, "跳水": 3.0, "重挫": 3.0,
-    "收跌": 2.0, "上调": 1.5, "回落": 1.5, "下探": 1.5,
+    "收跌": 2.0, "回落": 1.5, "下探": 1.5,
+    # ponytail: AI 词表体检(2026-10) 采纳的新词（上调已移出，因其高频误判）
+    "传出爆炸声": 2.0, "双重挑战": 1.5,
+    "不分红": 2.0, "取消分红": 2.0, "不进行现金分红": 2.0,
 }
 
 #: 否定词：紧邻在情绪词前 → 极性反转
 NEGATION_WORDS = {"不", "没", "无", "非", "未", "别", "勿"}
+
+#: ponytail: 「否定 + 利好/利空」不按通用规则反转，改判中性
+#: （无利好 ≠ 有利空，只是预期落空）。其余情绪词仍走通用反转。
+NEG_NEUTRAL_WORDS = {"利好", "利空", "利好消息", "利空消息"}
 
 #: 程度副词：紧邻在情绪词前 → 权重乘数
 DEGREE_WORDS: Dict[str, float] = {
@@ -77,10 +93,46 @@ TRANSITION_WORDS = {"但是", "然而", "不过", "却", "可是"}
 #: 情绪词按长度倒序（长词优先：先匹配「创新高」再让「新高」跳过重叠区）。
 #: 负词在入表时就带上负号——后面 sign/base/mult 统一相乘，
 #: 否定反转（sign=-1 × 负 base = 正分）天然就是对的。
-_ALL_WORDS = sorted(
-    [(w, s) for w, s in POSITIVE_WORDS.items()]
-    + [(w, -s) for w, s in NEGATIVE_WORDS.items()],
-    key=lambda kv: -len(kv[0]))
+def _base_all_words():
+    return [(w, s) for w, s in POSITIVE_WORDS.items()] \
+         + [(w, -s) for w, s in NEGATIVE_WORDS.items()]
+
+
+# ---------------------------------------------------------------- 用户扩展词典
+# ponytail: 词表走「硬编码基础层 + data/lexicon_extra.json 用户层」双轨。
+# 运行时不改源码即可增删词；用户词排在同名基础词之前（稳定排序）用于覆盖含糊基础词
+# （如基础层「减持」为看跌，但某语境需区分时，用户加一条同名词即可覆盖——排序在前、先命中生效）。
+# selfcheck 只锁基础层语义，不约束用户词，避免后人加词误改已有规则。
+
+EXTRA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "lexicon_extra.json")
+
+
+def _load_extra():
+    try:
+        with open(EXTRA_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        if isinstance(d, dict) and "pos" in d and "neg" in d:
+            return d
+    except Exception:
+        pass
+    return {"pos": {}, "neg": {}}
+
+
+def _extra_all_words(extra):
+    return [(w, s) for w, s in (extra.get("pos") or {}).items()] \
+         + [(w, -s) for w, s in (extra.get("neg") or {}).items()]
+
+
+def rebuild():
+    """合并基础层 + 用户层，重建扫描表。用户词在前（同名先命中），基础层不动。"""
+    global _ALL_WORDS
+    extra = _load_extra()
+    merged = _extra_all_words(extra) + _base_all_words()
+    _ALL_WORDS = sorted(merged, key=lambda kv: -len(kv[0]))
+
+
+_ALL_WORDS = sorted(_base_all_words(), key=lambda kv: -len(kv[0]))  # 初始（rebuild 会覆盖）
+rebuild()
 
 #: 转折词正则（用于定位首个转折点；「却」单字容易误伤「却步」，
 #: 但词典法的固有精度就这样，不值得为单字转折写例外表）
@@ -144,6 +196,11 @@ def analyze(text: str) -> Dict[str, Any]:
             continue
         w, base = hit
         sign, mult = _prefix_mod(t, i)
+        # ponytail: 否定 + 利好/利空 → 中性（不反转），仅标注不计分
+        if sign < 0 and w in NEG_NEUTRAL_WORDS:
+            hits.append(w + "(否定→中性)")
+            i += len(w)
+            continue
         if trans_at >= 0 and i > trans_at:
             mult *= 1.5            # 转折后段权重
         s = sign * base * mult
@@ -185,6 +242,60 @@ def tag_notice(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return items
 
 
+# ---------------------------------------------------------------- 用户扩展词典 API
+
+def list_extra():
+    """返回用户扩展词 {pos:{...}, neg:{...}}（只读，不暴露基础层）。"""
+    return _load_extra()
+
+
+def add_word(word, polarity, weight=2.0):
+    """新增/覆盖一个用户情绪词。polarity∈{'pos','neg'}，weight 夹在 1.0~3.0。
+
+    落在对侧用户层的同名词会被移除（避免一词双极性）。返回更新后的 list_extra()。
+    基础层硬编码词不受此影响；若需覆盖某含糊基础词，加一条同名用户词即可
+    （排序在前、先命中生效）。
+    """
+    word = (word or "").strip()
+    if not word:
+        raise ValueError("词不能为空")
+    if polarity not in ("pos", "neg"):
+        raise ValueError("极性必须是 pos 或 neg")
+    try:
+        weight = float(weight)
+    except (TypeError, ValueError):
+        raise ValueError("权重必须是数字")
+    weight = max(1.0, min(3.0, round(weight, 2)))
+    d = _load_extra()
+    d.setdefault("pos", {})
+    d.setdefault("neg", {})
+    other = "neg" if polarity == "pos" else "pos"
+    d[other].pop(word, None)          # ponytail: 同词只保留一侧极性
+    d[polarity][word] = weight
+    _save_extra(d)
+    rebuild()
+    return d
+
+
+def remove_word(word):
+    """删除一个用户词（基础层不受影响）。返回更新后的 list_extra()。"""
+    word = (word or "").strip()
+    d = _load_extra()
+    d.setdefault("pos", {})
+    d.setdefault("neg", {})
+    removed = d["pos"].pop(word, None) is not None or d["neg"].pop(word, None) is not None
+    if removed:
+        _save_extra(d)
+        rebuild()
+    return d
+
+
+def _save_extra(d):
+    os.makedirs(os.path.dirname(EXTRA_PATH), exist_ok=True)
+    with open(EXTRA_PATH, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+
+
 # ---------------------------------------------------------------- 自检
 
 def selfcheck() -> int:
@@ -215,12 +326,17 @@ def selfcheck() -> int:
     eq(tone_of(""), "neutral", "空文本 → 中性")
 
     print("\n[3] 否定反转（含衬词场景：否定词与情绪词隔着衬字）")
-    eq(tone_of("无重大利好"), "neg", "无【重大】利好 → 看跌（衬词窗口）")
-    eq(score_of("无重大利好"), -2.5, "无重大利好 → -2.5")
+    # ponytail: 「无利好」不再判利空，改中性（2026-10 词表体检采纳）
+    eq(tone_of("无重大利好兑现"), "neutral", "无【重大】利好 → 中性（否定利好≠利空）")
+    eq(score_of("无重大利好"), 0.0, "无重大利好 → 0.0")
     eq(tone_of("业绩不及预期"), "neg", "不及预期 → 看跌（词典原生负词）")
     eq(tone_of("未出现上涨"), "neg", "未【出现】上涨 → 看跌（衬词窗口）")
     eq(tone_of("拟不进行卖出"), "pos", "不【进行】+卖出(负词) → 反转看涨")
-    eq(tone_of("机构并不看空"), "pos", "不+看空(负词) → 反转看涨")
+    eq(tone_of("机构并不看空该股"), "pos", "不+看空(负词) → 反转看涨（双向否定）")
+    eq(tone_of("不看好后市走势"), "neg", "不+看好(正词) → 反转看跌")
+    eq(tone_of("公司不分红"), "neg", "不+分红(正词) → 反转看跌")
+    eq(tone_of("取消分红计划"), "neg", "取消分红 → 看跌（字面短语）")
+    eq(tone_of("拟不进行现金分红"), "neg", "不进行现金分红 → 看跌（字面兜底）")
 
     print("\n[4] 程度乘数")
     eq(score_of("股价非常强势"), 1.5 * 1.8, "非常+强势 → 1.5×1.8=2.7")
@@ -249,6 +365,17 @@ def selfcheck() -> int:
     eq(items[1]["sentiment"]["tone"], "pos", "tag_notice：content 兜底生效")
     eq("sentiment" in items[2], True, "tag_notice：普通标题也有字段")
     eq(isinstance(items[3], str), True, "tag_notice：坏条目原样保留不炸")
+
+    print("\n[9] AI 词表体检新词（2026-10 采纳）")
+    eq(tone_of("板块短线拉升"), "pos", "拉升 → 看涨")
+    eq(tone_of("汇丰拓展业务"), "pos", "拓展业务 → 看涨")
+    eq(tone_of("电力煤炭股纷纷走高"), "pos", "纷纷走高 → 看涨")
+    eq(tone_of("行长看多并看好"), "pos", "看好 → 看涨")
+    eq(tone_of("机构看涨该股"), "pos", "看涨 → 看涨")
+    eq(tone_of("公司现金分红"), "pos", "分红 → 看涨")
+    eq(tone_of("基辅传出爆炸声"), "neg", "传出爆炸声 → 看跌")
+    eq(tone_of("面临双重挑战"), "neg", "双重挑战 → 看跌")
+    eq(tone_of("利率上调"), "neutral", "上调已移出看跌词 → 中性（不再误判）")
 
     print("\n" + "=" * 46)
     if fails:

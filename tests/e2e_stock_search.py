@@ -36,6 +36,14 @@ def _tradable():
         return False
 
 
+def open_tab(pg, tab):
+    """#190 后桌面端也是抽屉导航：直接点 button[data-tab] 会命中隐藏副本。"""
+    pg.click("#navToggle")
+    pg.wait_for_timeout(300)
+    pg.click('.nd-item[data-tab="%s"]' % tab)
+    pg.wait_for_timeout(1200)
+
+
 def main():
     tradable = _tradable()
     with sync_playwright() as p:
@@ -54,7 +62,7 @@ def main():
         pg.goto(BASE, wait_until="networkidle")
 
         # ---------- 1a. 策略回测：全策略对比，输入中文名 ----------
-        pg.click('button[data-tab="backtest"]')
+        open_tab(pg, 'backtest')
         pg.wait_for_timeout(400)
         seen.clear()
         pg.fill("#btCode", "贵州茅台")
@@ -84,7 +92,7 @@ def main():
         rec("走查回测(五粮液)", ok, f"url={wf[0][:80] if wf else 'NONE'}")
 
         # ---------- 3. 多股对比：混合输入（代码+名称） ----------
-        pg.click('button[data-tab="compare"]')
+        open_tab(pg, 'compare')
         pg.wait_for_timeout(400)
         seen.clear()
         pg.fill("#cmpCodes", "茅台,五粮液,600519")
@@ -100,7 +108,7 @@ def main():
 
         # ---------- 4. 虚拟盘：中文名买入 ----------
         # 虚拟盘现在需要登录（守卫），所以先过一遍注册/登录弹层。
-        pg.click('button[data-tab="paper"]')
+        open_tab(pg, 'paper')
         pg.wait_for_timeout(500)
         gate = pg.query_selector("#ppGate")
         gate_visible = bool(gate) and gate.is_visible()
@@ -137,7 +145,7 @@ def main():
                 "非交易时段跳过（收盘后禁止交易，改日盘中运行）")
 
         # ---------- 5. 自选：中文名加入（回归） ----------
-        pg.click('button[data-tab="watch"]')
+        open_tab(pg, 'watch')
         pg.wait_for_timeout(600)
         seen.clear()
         pg.fill("#wtAddCode", "平安银行")
@@ -148,7 +156,7 @@ def main():
 
         # ---------- 6. 异动监控：确认是全市场扫描，无需单股搜索 ----------
         # 异动监控页签已并入「市场榜单」，先回去再通过下拉切换
-        pg.click('button[data-tab="rank"]')
+        open_tab(pg, 'rank')
         pg.wait_for_timeout(500)
         pg.select_option("#rankSel", "moves:涨停")
         pg.wait_for_timeout(1800)
