@@ -3288,16 +3288,26 @@ function renderStockAi(r, out){
   var h = '';
   if(r.llm){
     var L = r.llm;
-    h += '<div class="row"><span class="lbl">综合概述</span><span>' + esc(L.summary || '—') + '</span></div>';
-    h += '<div class="row"><span class="lbl">数据评分</span><b style="font-size:20px">' +
-         (L.score != null ? L.score : '—') + '</b>' +
+    // 评分大数字 + 本地化配色（≥60 红 / <40 绿 / 中间中性，与涨跌色一致）
+    var sc = L.score, scCol = sc == null ? 'var(--tx3)'
+      : (sc >= 60 ? 'var(--up)' : (sc < 40 ? 'var(--down)' : 'var(--tx2)'));
+    h += '<div class="row"><span class="lbl">综合评分</span><b style="font-size:26px;line-height:1;color:' +
+         scCol + '">' + (sc != null ? sc : '—') + '</b>' +
          '<span style="color:var(--tx3);font-size:12px;margin-left:8px">' + esc(L.score_note || '') + '</span></div>';
+    h += '<div class="row" style="align-items:flex-start"><span class="lbl">综合概述</span>' +
+         '<span style="text-align:left;flex:1">' + esc(L.summary || '—') + '</span></div>';
+    if(L.logic)
+      h += '<div class="row" style="align-items:flex-start"><span class="lbl">多空逻辑</span>' +
+           '<span style="text-align:left;flex:1">🧭 ' + esc(L.logic) + '</span></div>';
     if(L.strengths && L.strengths.length)
       h += '<div class="row" style="align-items:flex-start"><span class="lbl">亮点</span><span style="text-align:left">' +
            L.strengths.map(function(x){ return '✅ ' + esc(x); }).join('<br>') + '</span></div>';
     if(L.risks && L.risks.length)
       h += '<div class="row" style="align-items:flex-start"><span class="lbl">风险</span><span style="text-align:left">' +
            L.risks.map(function(x){ return '⚠️ ' + esc(x); }).join('<br>') + '</span></div>';
+    if(L.watch && L.watch.length)
+      h += '<div class="row" style="align-items:flex-start"><span class="lbl">关注信号</span><span style="text-align:left">' +
+           L.watch.map(function(x){ return '🔔 ' + esc(x); }).join('<br>') + '</span></div>';
     h += '<div class="meta" style="margin-top:8px;font-size:12px;color:var(--tx3)">✨ AI 增强解读 · 仅供参考，非投资建议</div>';
   } else {
     h += '<div class="empty">AI 模型未启用或暂不可用，以下为纯数据摘要。</div>';

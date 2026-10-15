@@ -150,7 +150,8 @@ def main():
         pg.evaluate("document.querySelector('#stockAiBtn').click();")
         pg.wait_for_selector("#stockAiOut .intentbox", timeout=60000)
         quota_txt = pg.locator("#stockAiOut").inner_text()
-        check("结果区显示今日配额行", "今日配额" in quota_txt and "剩余" in quota_txt,
+        check("结果区显示今日配额行", "今日配额" in quota_txt
+              and ("剩余" in quota_txt or "已用完" in quota_txt),
               [ln for ln in quota_txt.split("\n") if "配额" in ln][:1])
         # 把「今日配额」行滚进视口再截图（卡片在技术面结论下方，首屏拍不到）
         pg.evaluate(

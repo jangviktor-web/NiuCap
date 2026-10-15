@@ -23,12 +23,17 @@ from typing import Any, Dict, List, Optional
 
 _SYS = """你是A股个股分析助手。给你一只股票的真实数据（行情/技术面信号/所属板块/近期快讯），
 你产出结构化解读。只输出一个 ```json 代码块，仅含：
-{"summary":"≤80字综合概述","strengths":["亮点1","亮点2"],"risks":["风险点1","风险点2"],
-"score":0~100,"score_note":"≤30字打分依据"}
+{"summary":"≤140字综合概述","logic":"≤200字多空逻辑","strengths":["亮点1","亮点2"],
+"risks":["风险点1","风险点2"],"watch":["关注信号1"],"score":0~100,"score_note":"≤30字打分依据"}
 
 规则（违反会被代码拒绝、白费 Token）：
-- summary/score_note 分别是 ≤80/≤30 字中文；
-- strengths/risks 各 1~5 条，每条 ≤40 字，必须基于给定数据，禁止编造数据里没有的信息；
+- summary 用 2~3 句话说清「现在这是什么状态、为什么」；≤140 字；
+- logic 专门解释技术面：把多空计数与关键信号组织成一段话，讲清「信号之间一致还是矛盾、
+  哪一方占上风、量价/超买类细节意味着什么」；信号数据不足就明说，≤200 字；
+- strengths/risks 各 1~5 条，每条 ≤60 字，必须基于给定数据、尽量引用具体数值或信号名
+  （如「CCI=199.9 已超买」而非笼统的「技术面好」），禁止编造数据里没有的信息；
+- watch 列 1~3 条「后续盯什么」：条件式提示（如「若跌破 20 日线且缩量，短线转弱」），
+  同样只能基于给定数据，≤50 字每条；
 - 数据里标注"暂无"的维度不要强行解读，可略过或在 risks 里提"数据不全"；
 - score 反映"多空信号一致性 + 数据完备度"（不是预测涨跌）：信号一致且数据全→偏高，
   信号矛盾或数据缺失→偏低，中性给 50 左右；
@@ -179,26 +184,33 @@ def _parse_json(text: str) -> Optional[dict]:
 
 
 def _validate(obj: Dict[str, Any]) -> Dict[str, Any]:
-    """schema 校验：summary/strengths/risks/score/score_note 形态，返回采用子集。"""
+    """schema 校验：summary/logic/strengths/risks/watch/score/score_note 形态，返回采用子集。"""
     out: Dict[str, Any] = {}
     s = obj.get("summary")
-    if isinstance(s, str) and s.strip() and len(s) <= 120:
+    if isinstance(s, str) and s.strip() and len(s) <= 160:
         out["summary"] = s.strip()
 
-    def _strlist(key, lo, hi):
+    lg = obj.get("logic")
+    if isinstance(lg, str) and lg.strip() and len(lg) <= 240:
+        out["logic"] = lg.strip()
+
+    def _strlist(key, lo, hi, maxlen):
         v = obj.get(key)
         if isinstance(v, list):
-            keep = [x.strip() for x in v if isinstance(x, str) and x.strip() and len(x) <= 60]
+            keep = [x.strip() for x in v if isinstance(x, str) and x.strip() and len(x) <= maxlen]
             if lo <= len(keep) <= hi:
                 return keep
         return None
 
-    st = _strlist("strengths", 1, 5)
+    st = _strlist("strengths", 1, 5, 60)
     if st:
         out["strengths"] = st
-    rk = _strlist("risks", 1, 5)
+    rk = _strlist("risks", 1, 5, 60)
     if rk:
         out["risks"] = rk
+    wt = _strlist("watch", 1, 3, 60)
+    if wt:
+        out["watch"] = wt
     try:
         sc = round(float(obj.get("score")))
         if 0 <= sc <= 100:
@@ -272,13 +284,19 @@ def selfcheck() -> int:
     miss = {"name": "", "code": "sh000001", "quote": {}, "tech": {}, "sectors": [], "news": [], "missing": []}
     ok("_ctx_prompt：缺维度标注暂无(≥3)", _ctx_prompt(miss).count("暂无") >= 3)
 
-    good = {"summary": "茅台技术面偏多，估值偏高。", "strengths": ["均线多头", "资金流入"],
-            "risks": ["估值不低", "短线超买"], "score": 68, "score_note": "信号一致但估值高"}
+    good = {"summary": "茅台技术面信号多空交织，短线偏中性。", "logic": "多空各4个信号："
+             "DMI/TRIX/站上BBI偏多，但KDJ与CCI双双超买，短线有回踩风险，整体中性。",
+             "strengths": ["均线多头", "资金流入"],
+             "risks": ["估值不低", "短线超买"], "watch": ["若跌破20日线且缩量，短线转弱"],
+             "score": 68, "score_note": "信号一致但估值高"}
     v = _validate(good)
     ok("_validate：合法解读提取全部字段",
-       v.get("score") == 68 and len(v.get("strengths", [])) == 2 and v.get("summary"))
+       v.get("score") == 68 and len(v.get("strengths", [])) == 2 and v.get("summary")
+       and v.get("logic") and v.get("watch") == ["若跌破20日线且缩量，短线转弱"])
     ok("_validate：summary 超长丢弃", "summary" not in _validate({"summary": "x" * 200, "score": 50}))
+    ok("_validate：logic 超长丢弃", "logic" not in _validate({"summary": "ok", "logic": "x" * 300}))
     ok("_validate：strengths 条数超限丢弃", "strengths" not in _validate({"summary": "ok", "strengths": ["a"] * 6}))
+    ok("_validate：watch 条数超限丢弃", "watch" not in _validate({"summary": "ok", "watch": ["a"] * 4}))
     ok("_validate：score 超范围丢弃", "score" not in _validate({"score": 150}))
     ok("_validate：空 dict → 无采用", _validate({}) == {})
     ok("_parse_json：坏 JSON → None", _parse_json("```json\n{bad}\n```") is None)
