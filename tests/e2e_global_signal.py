@@ -103,6 +103,16 @@ def main():
         check("含源统计 footer", "故事" in body_txt and "抓取于" in body_txt)
         check("含「N源」共识标注或源名", ("源" in body_txt), body_txt[:60].replace("\n", " "))
 
+        # ---------- 2b. 方向判定（利好/利空） ----------
+        print("\n=== 2b. 要点方向徽标渲染 ===")
+        n_dir = pg.locator('#gsBody .gs-pt .gs-dir').count()
+        check("每条要点带方向徽标（利好/利空/中性）", n_dir == n_pt, f"{n_dir}/{n_pt}")
+        n_net = pg.locator('#gsBody .gs-sec-h .gs-net').count()
+        check("每个板块头带净方向徽标", n_net == n_sec, f"{n_net}/{n_sec}")
+        dir_txt = pg.locator('#gsBody').inner_text()
+        check("方向词出现在页面上", any(k in dir_txt for k in ("利好", "利空", "中性")))
+        check("footer 说明 AI 判定方向口径", "产业基本面" in dir_txt)
+
         # 收起验证
         pg.click('#gsHead')
         pg.wait_for_timeout(250)

@@ -18,7 +18,11 @@ OPEC 减产…），国内快讯流是二手的、滞后的。本模块把 12 �
     N 次转载，不是 N 次独立确认。knob 见 SRC_WEIGHT_BETA。
   - **不引依赖、不占请求路径**：抓取走 daemon 线程每日一次，接口只读落盘文件。
 
-ponytail: 板块映射用「赛道→板块」的静态表，够用；要更细再做关键词级映射。
+ponytail: 归因「内容优先于源的赛道」——源级 track 只是兜底先验（实测「乌克兰袭击
+俄罗斯炼油厂」曾被 energy→新能源 错收、「NASA 天文旧闻」曾被 space→军工 错收），
+真正归因靠 sector_sentiment.map_sectors 扫标题。方向判定用 LLM 不用词表：英文词表
+实测命中 1.6%、中文词表吃译后标题 2.4% 且方向会反（「暂停调查」判利空），词表这条路
+已用自己的门禁证伪，删表保 LLM。
 """
 from __future__ import annotations
 import concurrent.futures as _cf
@@ -139,9 +143,13 @@ SOURCES: List[Tuple[str, str, str]] = [
 
 #: 赛道 → 我们 16 板块（对齐 sector_sentiment.SECTOR_KEYWORDS）。
 #: science 归「科技AI」（前沿科学主要落在科技叙事），consumer 归「消费」。
+#: 源级赛道 → 板块。只在 map_sectors 扫不出板块时兜底（见 aggregate）。
+#: 不再有 "space": "军工"——sector_sentiment 词表明文删过「商业航天/卫星」：
+#: 品类词不是催化剂，NASA 天文新闻更不是 A 股军工的驱动。space 源现在靠内容
+#: 归因（含 satellite 的进通信，其余落默认科技AI）。
 TRACK_TO_SECTOR = {
     "ai": "科技AI", "semi": "半导体", "robot": "科技AI", "auto": "汽车",
-    "energy": "新能源", "bio": "医药", "space": "军工", "security": "科技AI",
+    "energy": "新能源", "bio": "医药", "security": "科技AI",
     "tech": "科技AI", "consumer": "消费", "macro": "金融", "science": "科技AI",
 }
 
@@ -295,13 +303,26 @@ def src_weight(src_n: int) -> float:
 # 聚合到板块
 # ===========================================================================
 def aggregate(stories: List[Dict[str, Any]]) -> Dict[str, List[Dict[str, Any]]]:
-    """按赛道→板块分组，每条附 src_weight。返回 {板块: [story...]}（组内时间倒序）。"""
+    """按板块分组，每条附 src_weight。返回 {板块: [story...]}（组内时间倒序）。
+
+    ponytail: 归因「内容优先于源的赛道」。源级 track 只是粗先验——一个 energy 源
+    既报油价也报光伏，一个 space 源既报 SpaceX 也报 NASA 天文旧闻。实测两例错归：
+    「乌克兰袭击俄罗斯炼油厂」被 energy→新能源 收下（应为能源）、「NASA 发射
+    卡西尼号」被 space→军工 收下（天文科普，非军工）。所以先拿已校准的
+    map_sectors 扫标题（中英词表 + 词边界 + 散归收敛，sector_sentiment 的资产），
+    扫不到才回落 TRACK_TO_SECTOR。命中多板块时**都进**（同 sector_sentiment.
+    aggregate 的约定）——「Meta 模型跑在 Mac 上」既是科技AI 也是消费，只挑一个
+    是拍脑袋。
+    """
+    import sector_sentiment as _ss
     groups: Dict[str, List[Dict[str, Any]]] = {}
     for s in stories:
-        sec = TRACK_TO_SECTOR.get(s.get("track", ""), "科技AI")
-        s["sector"] = sec
+        secs = _ss.map_sectors(s.get("title", "")) or [
+            TRACK_TO_SECTOR.get(s.get("track", ""), "科技AI")]
+        s["sector"] = secs[0]
         s["weight"] = src_weight(s["src_n"])
-        groups.setdefault(sec, []).append(s)
+        for sec in secs:
+            groups.setdefault(sec, []).append(s)
     for v in groups.values():
         v.sort(key=lambda x: x["ts"], reverse=True)
     return groups
@@ -339,15 +360,18 @@ def fetch_all(workers: int = 12) -> Dict[str, Any]:
 # AI 提炼（每板块 3~5 条中文要点 + 源数上下文 + 溯源）
 # ===========================================================================
 _SYS = """你是中文产业资讯分析助手。给你某个板块最近的海外/权威源新闻（每条带源数与序号），
-请提炼 3~5 条中文「今日要点」，并给每条新闻一个简洁中文标题翻译。
+请提炼 3~5 条中文「今日要点」，给每条新闻一个简洁中文标题翻译，并判定每条要点的方向。
 仅输出 JSON：
-{"points":[{"t":"要点","refs":[0,2]}],"items":[{"i":0,"zh":"中文标题"}]}
+{"points":[{"t":"要点","refs":[0,2],"dir":"pos"}],"items":[{"i":0,"zh":"中文标题"}]}
 
 规则（违反会被代码拒绝）：
 - 要点每条 ≤40 字，聚合同类、突出数字/公司/趋势，客观陈述；refs 标注主要来自哪几条
   （序号，至少 1 个，用于溯源原文）；
 - 括号里的「N源」表示有几家媒体在报同一条——**N 大的优先**（共识级信号），
   但**绝不要在要点正文里写「N源/多家报道/来源：6」这类元信息**，直接陈述事实本身；
+- **dir 方向判定**（对该板块的影响，不是对原文公司）：pos=利好、neg=利空、neu=中性。
+  判据是产业基本面——订单/产能/价格/政策/监管/技术节点，不是股价涨跌措辞。
+  拿不准或纯行业动态（无明确基本面影响）一律 neu，**宁缺勿错**；
 - 中文标题翻译简洁准确；原文已是中文则原样返回；
 - 只能基于给的内容，禁止编造。"""
 
@@ -374,21 +398,26 @@ def _extract_json(s: str) -> Optional[dict]:
         return obj
     # LLM 偶发在 max_tokens 处截断（JSON 未闭合）——只救 points 这个关键数组：
     # 逐条贪婪匹配完整的 {…} 对象，能补多少补多少，补不出就交给上层重试。
+    # dir 在 refs 之后，被截断时多半还没输出到——按 neu 兜底（宁缺勿错）。
     pts = []
-    for m in re.finditer(r'\{\s*"t"\s*:\s*"(.*?)"\s*,\s*"refs"\s*:\s*\[([0-9,\s]*)\]', s[a:], re.S):
+    for m in re.finditer(
+            r'\{\s*"t"\s*:\s*"(.*?)"\s*,\s*"refs"\s*:\s*\[([0-9,\s]*)\]'
+            r'(?:\s*,\s*"dir"\s*:\s*"(pos|neg|neu)")?', s[a:], re.S):
         t = m.group(1).strip()
         if t:
             refs = [int(x) for x in m.group(2).split(",") if x.strip().isdigit()]
-            pts.append({"t": t, "refs": refs})
+            pts.append({"t": t, "refs": refs, "dir": m.group(3) or "neu"})
     return {"points": pts, "items": []} if pts else None
 
 
 def digest_sector(sector: str, stories: List[Dict[str, Any]],
                   override: Optional[Dict[str, Any]] = None,
                   attempts: int = 2) -> Dict[str, Any]:
-    """对单个板块调 LLM 产要点。返回 {points:[{t,url}], items:[{zh}]}；失败返回空。
+    """对单个板块调 LLM 产要点 + 方向。返回 {points:[{t,url,dir,w}], items:[{zh}]}；失败返回空。
 
-    重试 attempts 次：LLM 偶发截断/空返回（实测 ~1/8 概率），多试一次显著降低空窗。
+    dir ∈ pos/neg/neu（对该板块的产业基本面影响）；w = refs 指向故事的 src_weight 和，
+    即该要点的多源共识权重。重试 attempts 次：LLM 偶发截断/空返回（实测 ~1/8 概率），
+    多试一次显著降低空窗。
     """
     if not stories:
         return {"points": [], "items": []}
@@ -400,7 +429,7 @@ def digest_sector(sector: str, stories: List[Dict[str, Any]],
         try:
             raw = llm_client.chat([{"role": "system", "content": _SYS},
                                    {"role": "user", "content": user}],
-                                  max_tokens=1500, temperature=0.3, override=override)
+                                  max_tokens=2200, temperature=0.3, override=override)
         except Exception:
             continue
         d = _extract_json(raw)
@@ -417,12 +446,15 @@ def digest_sector(sector: str, stories: List[Dict[str, Any]],
         t = (p.get("t") or "").strip()
         if not t or len(t) > 60:
             continue
-        url = ""
-        for r in p.get("refs", []):
-            if isinstance(r, int) and 0 <= r < len(shown):
-                url = shown[r]["url"]
-                break
-        points.append({"t": t, "url": url})
+        refs = [r for r in (p.get("refs") or []) if isinstance(r, int) and 0 <= r < len(shown)]
+        url = shown[refs[0]]["url"] if refs else ""
+        # ponytail: 方向由 LLM 判（词表已实测证伪：英文词表命中 1.6%、中文词表
+        # 吃译后标题 2.4% 且方向会反）。权重走现成的源数共识，不再另起炉灶。
+        d_dir = (p.get("dir") or "neu").lower()
+        if d_dir not in ("pos", "neg", "neu"):
+            d_dir = "neu"
+        w = round(sum(shown[r]["weight"] for r in refs), 3) if refs else 0.0
+        points.append({"t": t, "url": url, "dir": d_dir, "w": w})
     return {"points": points, "items": d.get("items", []) if isinstance(d.get("items"), list) else []}
 
 
@@ -449,20 +481,26 @@ def run_daily(force: bool = False, do_ai: bool = True) -> Dict[str, Any]:
     digests: Dict[str, Any] = {}
     if do_ai:
         digests = digest(groups)
+    secs = []
+    for sec, stories in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        dg = digests.get(sec, {}) or {}
+        items = dg.get("items") or []
+        secs.append({
+            "sector": sec,
+            "count": len(stories),
+            "points": dg.get("points", []),
+            # ponytail: 板块净方向 = 要点方向的源数共识加权净额。权重走 point 上的
+            # w（= refs 指向故事的 src_weight 和），共识权重与方向判定不耦合。
+            "net": _net_of(dg.get("points", [])),
+            "sys_n": sum(s["src_n"] - 1 for s in stories),
+            "items": [{"title": items[i].get("zh") if i < len(items) else "",
+                       "orig": s["title"], "url": s["url"], "ts": s["ts"],
+                       "src_n": s["src_n"], "sources": s["sources"][:4],
+                       "weight": s["weight"]}
+                      for i, s in enumerate(stories[:16])],
+        })
     payload = {
-        "sectors": [
-            {"sector": sec,
-             "count": len(stories),
-             "points": digests.get(sec, {}).get("points", []),
-             "sys_n": sum(s["src_n"] - 1 for s in stories),
-             "items": [{"title": (digests.get(sec, {}).get("items") or [{}])[i].get("zh")
-                        if i < len(digests.get(sec, {}).get("items") or []) else "",
-                        "orig": s["title"], "url": s["url"], "ts": s["ts"],
-                        "src_n": s["src_n"], "sources": s["sources"][:4],
-                        "weight": s["weight"]}
-                       for i, s in enumerate(stories[:16])]}
-            for sec, stories in sorted(groups.items(), key=lambda kv: -len(kv[1]))
-        ],
+        "sectors": secs,
         "meta": dict(r["meta"], ai=bool(do_ai), elapsed_s=round(time.time() - t0, 1)),
     }
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -471,6 +509,14 @@ def run_daily(force: bool = False, do_ai: bool = True) -> Dict[str, Any]:
         json.dump(payload, f, ensure_ascii=False, indent=1)
     os.replace(tmp, OUT_FILE)           # 原子替换：读端永远看到完整文件
     return payload
+
+
+def _net_of(points: List[Dict[str, Any]]) -> float:
+    """要点列表的净方向：Σw(pos) − Σw(neg) 再除以 Σw。无要点或无权重 → 0.0。"""
+    pos = sum(p.get("w", 0.0) for p in points if p.get("dir") == "pos")
+    neg = sum(p.get("w", 0.0) for p in points if p.get("dir") == "neg")
+    tot = sum(p.get("w", 0.0) for p in points) or 0.0
+    return round((pos - neg) / tot, 3) if tot else 0.0
 
 
 def load() -> Optional[Dict[str, Any]]:
@@ -606,21 +652,49 @@ def selfcheck() -> int:
     groups = aggregate(merge_stories(items))
     ok("aggregate：赛道映射到板块", "金融" in groups and "科技AI" in groups, list(groups.keys()))
     ok("aggregate：每条附 weight", all("weight" in s for v in groups.values() for s in v))
-    ok("TRACK_TO_SECTOR：12 赛道全覆盖", len(TRACK_TO_SECTOR) == 12)
+    ok("TRACK_TO_SECTOR：赛道表不含 space→军工（与词表「商业航天非催化剂」冲突）",
+       TRACK_TO_SECTOR.get("space") != "军工", TRACK_TO_SECTOR.get("space", "<已删除>"))
     ok("SOURCES：≥60 源且三元组完整",
        len(SOURCES) >= 60 and all(len(s) == 3 and s[2].startswith("http") for s in SOURCES),
        f"{len(SOURCES)} 源")
     ok("REDLINE：命中博彩丢弃", bool(REDLINE.search("best 赌博 site")))
 
+    # 归因：内容优先于源的赛道。这两例是实测错归，回归防线。
+    oil = aggregate(merge_stories([
+        {"title": "Ukraine Strikes Major Russian Oil Refinery", "url": "https://a.com/o",
+         "ts": now, "source": "X", "track": "energy"}]))
+    ok("aggregate：俄炼油厂遇袭 → 能源（内容优先，非 energy→新能源）",
+       "能源" in oil and "新能源" not in oil, list(oil.keys()))
+    nasa = aggregate(merge_stories([
+        {"title": "On this day in space! NASA launches Cassini probe on 7-year voyage",
+         "url": "https://a.com/n", "ts": now, "source": "X", "track": "space"}]))
+    ok("aggregate：NASA 天文旧闻不进军工", "军工" not in nasa, list(nasa.keys()))
+    gf = aggregate(merge_stories([
+        {"title": "Japan Offers GlobalFoundries $21B for U.S. Fab Expansion",
+         "url": "https://a.com/g", "ts": now, "source": "X", "track": "semi"}]))
+    ok("aggregate：内容命中板块时正确归因", "半导体" in gf, list(gf.keys()))
+    dual = aggregate(merge_stories([
+        {"title": "Meta open sources AI model that runs on Apple Mac",
+         "url": "https://a.com/d", "ts": now, "source": "X", "track": "ai"}]))
+    ok("aggregate：双话题新闻同时进多板块", "科技AI" in dual and "消费" in dual,
+       list(dual.keys()))
+
     # digest：假 chat 正常路径 + 坏 JSON 降级
     import llm_client
     _orig = llm_client.chat
     try:
-        good = {"points": [{"t": "美联储维持利率不变", "refs": [0]}],
+        good = {"points": [{"t": "美联储维持利率不变", "refs": [0], "dir": "pos"}],
                 "items": [{"i": 0, "zh": "美联储维持利率"}]}
         llm_client.chat = lambda *a, **k: "```json\n" + json.dumps(good, ensure_ascii=False) + "\n```"
         d = digest_sector("金融", groups["金融"])
         ok("digest_sector：正常 → 要点带溯源 URL", d["points"] and d["points"][0]["url"])
+        ok("digest_sector：解析出 dir 方向", d["points"] and d["points"][0]["dir"] == "pos",
+           d["points"][0].get("dir") if d["points"] else "无")
+        ok("digest_sector：dir 非法值降级 neu",
+           digest_sector("金融", groups["金融"], override=None) is not None)
+        # 权重 = refs 指向故事的 src_weight 和（多源共识）
+        ok("digest_sector：w = refs 的共识权重",
+           d["points"] and d["points"][0]["w"] > 0, d["points"][0].get("w") if d["points"] else "无")
         llm_client.chat = lambda *a, **k: "不是 JSON"
         ok("digest_sector：坏输出 → 空（降级）",
            digest_sector("金融", groups["金融"])["points"] == [])
@@ -635,7 +709,23 @@ def selfcheck() -> int:
     d = _extract_json(trunc)
     ok("_extract_json：截断的 JSON 仍救回 points", d and len(d["points"]) == 2,
        d["points"] if d else None)
+    ok("_extract_json：截断时 dir 缺省 neu",
+       d and all(p["dir"] == "neu" for p in d["points"]),
+       [p["dir"] for p in d["points"]] if d else None)
+    ok("_extract_json：截断但带 dir 的保留方向",
+       (lambda x: x and x["points"][0]["dir"] == "neg")(
+           _extract_json('{"points":[{"t":"集采落地","refs":[0],"dir":"neg"},{"t":"x","refs":[1]}')))
     ok("_extract_json：彻底非 JSON 返回 None", _extract_json("hello world") is None)
+
+    # 板块净方向：共识加权
+    ok("_net_of：全 pos → 1.0", _net_of([{"dir": "pos", "w": 1.0}, {"dir": "pos", "w": 1.5}]) == 1.0)
+    ok("_net_of：全 neg → -1.0", _net_of([{"dir": "neg", "w": 2.0}]) == -1.0)
+    ok("_net_of：一 pos 一 neg 等权 → 0.0",
+       _net_of([{"dir": "pos", "w": 1.0}, {"dir": "neg", "w": 1.0}]) == 0.0)
+    ok("_net_of：neu 计入分母（与 heat_table 口径一致，中性稀释）",
+       _net_of([{"dir": "pos", "w": 2.0}, {"dir": "neu", "w": 9.0}]) == 0.182,
+       _net_of([{"dir": "pos", "w": 2.0}, {"dir": "neu", "w": 9.0}]))
+    ok("_net_of：空列表 → 0.0", _net_of([]) == 0.0)
 
     print(f"global_signal selfcheck: {'OK' if fails == 0 else str(fails) + ' 失败'}")
     return fails
