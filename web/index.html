@@ -966,6 +966,36 @@ td .starbtn{font-size:16px}
 .st-badge.neu{background:rgba(139,147,161,.16);color:var(--flat)}
 .st-note{font-size:11.5px;color:var(--tx3);margin:14px 2px 2px;line-height:1.6}
 .st-note b{color:var(--tx2)}
+/* #225 全球领先信号（挂在板块舆情内，可折叠） */
+.gs-wrap{margin-top:16px;border:1px solid var(--line);border-radius:11px;background:var(--card);overflow:hidden}
+.gs-h{display:flex;align-items:center;gap:9px;padding:12px 15px;cursor:pointer;
+  background:#fafbfc;border-bottom:1px solid transparent;user-select:none}
+.gs-wrap.open .gs-h{border-bottom-color:var(--line2)}
+.gs-h .gs-ic{font-size:16px}
+.gs-h .gs-t{font-size:14px;font-weight:650;color:var(--tx)}
+.gs-h .gs-sub{font-size:11.5px;color:var(--tx3);margin-left:auto}
+.gs-h .gs-ar{font-size:11px;color:var(--tx3);transition:.2s}
+.gs-wrap.open .gs-h .gs-ar{transform:rotate(90deg)}
+.gs-b{display:none;padding:13px 15px}
+.gs-wrap.open .gs-b{display:block}
+.gs-sec{margin-bottom:16px}
+.gs-sec:last-child{margin-bottom:0}
+.gs-sec-h{display:flex;align-items:baseline;gap:8px;font-size:13px;font-weight:700;
+  color:var(--tx);padding-bottom:6px;border-bottom:1px solid var(--line2);margin-bottom:8px}
+.gs-sec-h .gs-cnt{font-size:11.5px;font-weight:400;color:var(--tx3);margin-left:auto}
+.gs-pt{list-style:none;font-size:12.8px;line-height:1.62;color:var(--tx2);
+  padding-left:16px;position:relative;margin-bottom:5px}
+.gs-pt::before{content:'▸';position:absolute;left:2px;color:var(--accent)}
+.gs-pt a{color:var(--tx);text-decoration:none;border-bottom:1px dashed var(--line)}
+.gs-pt a:hover{color:var(--accent);border-bottom-color:var(--accent)}
+.gs-items{margin-top:8px;border-top:1px dashed var(--line2);padding-top:7px}
+.gs-it{font-size:12px;line-height:1.55;color:var(--tx3);margin-bottom:4px;
+  display:flex;gap:6px;align-items:baseline}
+.gs-it .gs-src{flex:none;font-size:10.5px;padding:1px 5px;border-radius:4px;
+  background:var(--line);color:var(--tx2)}
+.gs-it .gs-src.multi{background:var(--accent);color:#fff;font-weight:700}
+.gs-meta{font-size:11.5px;color:var(--tx3);margin-top:12px;padding-top:10px;
+  border-top:1px solid var(--line2);line-height:1.6}
 /* 板块级催化剂（利空/利好词解析） */
 .st-cat{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px;
   padding:6px 8px;border-radius:8px;background:var(--line2)}
@@ -6808,8 +6838,70 @@ function loadSectorNews(){
           + '<div class="st-summary">共 <b>'+rows.length+'</b> 个板块 · <b>'+total+'</b> 条快讯 · 近 '+wh+' 小时滚动 · 更新于 '+ts+'</div>'
           + '<div class="st-grid">'+cards+'</div>'
           + '<div class="st-note">描述性参考 · ticker 反查 + 关键词聚合，<b>非预测</b>；净情绪 = 偏多占比 − 偏空占比，按发布时间<b>衰减加权</b>（越新权重越高，半衰期 12h，昨日旧闻不重复计分）；统计窗口为<b>近 '+wh+' 小时</b>滚动，非实时单条。<b>催化剂净信号</b> = 命中的利好词数 − 利空词数（如「OPEC减产/霍尔木兹」→能源利好、「集采/降价」→医药利空）。样本不足 3 条的板块标<b>低置信</b>，勿单独据其判断方向。</div>';
+    h += gsShellHtml();          // #225 全球领先信号折叠区（异步填内容）
     el.innerHTML = h;
+    bindGsToggle();
+    loadGlobalSignals();
   }).catch(function(e){ die(el, '板块舆情加载失败：' + e.message); });
+}
+
+/* ===== #225 全球领先信号 =====
+   抓海外权威源（半导体设备/OpenAI/OPEC…）聚成中文要点，补国内快讯的「全球视角」。
+   每日盘前抓一次落盘，这里只读缓存，不触发抓取。 */
+function gsShellHtml(){
+  return '<div class="gs-wrap" id="gsWrap"><div class="gs-h" id="gsHead">'
+    + '<span class="gs-ic">🌐</span><span class="gs-t">全球领先信号</span>'
+    + '<span class="gs-sub">海外权威源 · 中文要点</span>'
+    + '<span class="gs-ar">▶</span></div>'
+    + '<div class="gs-b" id="gsBody"><div class="load"><span class="spin"></span>加载中…</div></div></div>';
+}
+function bindGsToggle(){
+  var head = $('gsHead'), wrap = $('gsWrap');
+  if(!head || !wrap) return;
+  head.onclick = function(){ wrap.classList.toggle('open'); };
+}
+function loadGlobalSignals(){
+  var el = $('gsBody'); if(!el) return;
+  api('/api/newsfeed/global').then(function(d){
+    if(!d || !d.ok){
+      el.innerHTML = '<div class="empty" style="padding:14px 0">' + esc((d && d.note) || '暂无全球信号') + '</div>';
+      return;
+    }
+    var secs = (d.sectors || []).filter(function(s){ return (s.points||[]).length || (s.items||[]).length; });
+    if(!secs.length){ el.innerHTML = '<div class="empty" style="padding:14px 0">今日暂无命中</div>'; return; }
+    var h = '';
+    secs.forEach(function(s){
+      h += '<div class="gs-sec"><div class="gs-sec-h">' + esc(s.sector)
+        + '<span class="gs-cnt">' + (s.count||0) + ' 条故事</span></div>';
+      (s.points || []).forEach(function(p){
+        h += '<li class="gs-pt">' + (p.url
+          ? '<a href="' + attr(p.url) + '" target="_blank" rel="noopener">' + esc(p.t) + ' ↗</a>'
+          : esc(p.t)) + '</li>';
+      });
+      var items = s.items || [];
+      if(items.length){
+        h += '<div class="gs-items">';
+        items.slice(0, 8).forEach(function(it){
+          var n = it.src_n || 1;
+          var tag = n > 1
+            ? '<span class="gs-src multi" title="' + esc((it.sources||[]).join('、')) + '">' + n + '源</span>'
+            : '<span class="gs-src">' + esc((it.sources||[''])[0]) + '</span>';
+          h += '<div class="gs-it">' + tag + '<span>' + esc(it.title || it.orig || '') + '</span></div>';
+        });
+        h += '</div>';
+      }
+      h += '</div>';
+    });
+    var m = d.meta || {};
+    h += '<div class="gs-meta">源 ' + (m.sources_ok||0) + '/' + (m.sources_total||0)
+      + ' · 故事 ' + (m.stories||0) + ' 条 · 抓取于 ' + esc(m.fetched_at||'—')
+      + (m.ai ? ' · <b>AI 提炼</b>' : ' · 未启用 AI')
+      + '<br>「N源」= 有 N 家媒体在报同一条（共识级信号）；海外行业动向，非行情数据、非投资建议。</div>';
+    el.innerHTML = h;
+  }).catch(function(e){
+    var el2 = $('gsBody');
+    if(el2) die(el2, '全球信号加载失败：' + e.message);
+  });
 }
 
 /* 板块舆情：点击板块名 → 弹窗列出该板块成分股；可跳转成分股点击 openStock。

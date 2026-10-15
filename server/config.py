@@ -45,6 +45,14 @@ _REGISTRY: List[Tuple[str, str, str, Any, str]] = [
     ("TICK_SYNC_BARS_SCOPE", "日线落库 · 股票池", "scope", "all",
      "all=全市场（约 5575 只，含北交所）；也可填 hs300 / zz500 / zz1000 / zz2000。"),
 
+    # ── 全球领先信号（#225）：抓海外权威源 → 按板块聚合 → AI 提炼中文要点 ──
+    ("TICK_GLOBAL_SIGNAL_AT", "全球信号 · 每日抓取时间", "time", "08:30",
+     "24 小时制 HH:MM。默认盘前抓取（美盘隔夜消息已出完）。抓取约 10 秒、"
+     "AI 提炼约 45 秒，走后台 daemon 线程，不占用任何请求。"),
+    ("TICK_GLOBAL_SIGNAL_AI", "全球信号 · 启用 AI 提炼", "bool", True,
+     "打开后每日用 LLM 把各板块海外新闻提炼成 3~5 条中文要点（有 Token 成本）；"
+     "关闭则只抓取展示原文标题，无成本。"),
+
     # ── 新闻 API 密钥（自部署用户在后台填写，存 meta 表；前端密码框渲染）────
     # 优先级同样 meta > env > 默认（空）。sector_news_lab 读取顺序：
     # 后台 config.get → 环境变量 → .env 文件。留空则该新闻源自动降级跳过。

@@ -237,6 +237,14 @@ def startup():
     except Exception as e:
         print(f"[sector-audit] 每日巡检调度启动失败（不影响其他功能）：{e}")
 
+    # #225 全球领先信号：每日盘前抓海外源 → 聚板块 → AI 提炼中文要点。
+    # 同 daemon 模式；抓取走后台线程，接口只读落盘文件，不占请求路径。
+    try:
+        import global_signal as _gs
+        _gs.start_daily()
+    except Exception as e:
+        print(f"[global-signal] 每日调度启动失败（不影响其他功能）：{e}")
+
     # #189 板块舆情收盘对账：默认 15:30（仅交易日）。用收盘板块涨跌
     # 回验当日 24h 舆情方向准确率，产出错因研判+调整建议报告。
     # 非交易日/盘前不跑（对账没意义：没有当日行情可对）。
@@ -2693,6 +2701,21 @@ def api_newsfeed_sectors(hours: int = Query(3, ge=1, le=24), force: int = Query(
             "catalyst_lexicon": _ss.catalyst_lexicon(),  # 各板块利空利好词表（解析报告）
             "sources": f["sources"], "errors": f["errors"],
             "ts": f["ts"], "window_hours": hours, "cached": f.get("cached", False)}
+
+
+@app.get("/api/newsfeed/global")
+def api_newsfeed_global(request: Request):
+    """#225 全球领先信号：读每日落盘产物（毫秒级，不触发抓取）。
+
+    产物由 global_signal 每日 daemon 生成；未跑过时返回 {ok:False}，
+    前端据此显示「等待今日抓取」而不是空列表。
+    """
+    import global_signal as _gs
+    p = _gs.load()
+    if not p:
+        return {"ok": False, "sectors": [], "meta": None,
+                "hit": _gs._at(), "note": "尚未生成，等待每日自动抓取（或管理员手动触发）"}
+    return {"ok": True, "sectors": p.get("sectors", []), "meta": p.get("meta")}
 
 
 @app.get("/api/sector/stocks")
