@@ -85,7 +85,7 @@ import pandas as pd
 
 WEB_DIR = os.path.join(os.path.dirname(HERE), "web")
 
-app = FastAPI(title="tick-stock-panel", version="1.0.0")
+app = FastAPI(title="tick-stock-panel", version="1.0.1")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
