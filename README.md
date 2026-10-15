@@ -566,9 +566,3 @@ A：本面板仅供量化学习与研究，不构成任何投资建议；虚拟�
 
 </div>
 
-<style>
-.fgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:16px 0}
-.fcard{background:#f6f8fa;border:1px solid #d0d7de;border-radius:10px;padding:14px 16px;text-align:left}
-.fcard h4{margin:0 0 6px;font-size:14.5px;color:#1f2328}
-.fcard p{margin:0;font-size:12.8px;line-height:1.65;color:#57606a}
-</style>
