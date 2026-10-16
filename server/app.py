@@ -2882,6 +2882,7 @@ def api_market_overview():
     return {
         "overview": ov,
         "changedist": wst.changedist(),
+        "realtime_score": wst.realtime_market_score(),
         "available": wst.CLI_AVAILABLE,
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }

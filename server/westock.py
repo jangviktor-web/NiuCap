@@ -546,6 +546,46 @@ def changedist() -> Dict[str, Any]:
     }
 
 
+def realtime_market_score() -> Dict[str, Any]:
+    """盘中实时综合评分：用 changedist() 的实时快照合成 0-60 量表。
+
+    西财（westock）的「调整评分」是盘后基于上一交易日收盘重算的 13 维模型，
+    date 常落后一天（即前端看到的 stale 标记），盘中没法变成实时。这个函数是
+    退而求其次、但真正「盘中活」的替代：只用实时涨跌分布 + 涨停跌停 + 成交额
+    环比三路信号合成，与调整评分同尺度（满分 60、中性 30、≥55 偏多 / ≤40 偏空），
+    便于前端复用同一套配色与卡片。
+
+    合成口径（均线性组合，可解释）：
+      breadth    = (上涨-下跌)/(上涨+下跌)          ∈ [-1, 1]   → 占 ±22
+      limit_b    = (涨停-跌停)/max(涨停+跌停, 1)     ∈ [-1, 1]   → 占 ±12
+      turn_b     = clamp(成交额环比/3000亿, -1, 1)   ∈ [-1, 1]
+      score      = 30 + 22·breadth + 12·limit_b + 6·turn_b·breadth
+      中性日（涨跌各半、涨跌停相抵、量能持平）→ 30；极端多/空 → 0/60（再夹断）
+    """
+    cd = changedist()
+    if not cd or not (cd.get("up") or cd.get("down")):
+        return {}
+    up = cd.get("up", 0) or 0
+    down = cd.get("down", 0) or 0
+    ul = cd.get("up_limit", 0) or 0
+    dl = cd.get("down_limit", 0) or 0
+    td = cd.get("turnover_delta_yi") or 0
+    denom = up + down
+    breadth = (up - down) / denom if denom else 0.0
+    limit_b = (ul - dl) / max(ul + dl, 1)
+    turn_b = max(min(td / 3000.0, 1.0), -1.0)
+    score = 30 + 22 * breadth + 12 * limit_b + 6 * (turn_b * breadth)
+    score = max(0.0, min(60.0, score))
+    return {
+        "score": round(score, 1),
+        "breadth": round(breadth, 4),
+        "limit_balance": round(limit_b, 4),
+        "turnover_bonus": round(turn_b * breadth, 4),
+        "up": up, "down": down,
+        "up_limit": ul, "down_limit": dl,
+    }
+
+
 def lhb_market(limit: int = 30) -> List[Dict[str, Any]]:
     """全市场龙虎榜（净买额排序）。"""
     out = _query(["lhb"], "lhb", "realtime")
