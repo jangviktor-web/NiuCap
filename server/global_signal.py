@@ -534,15 +534,48 @@ def load() -> Optional[Dict[str, Any]]:
 _thread = None
 _stop = None
 _K_TRY = "GLOBAL_SIGNAL_TRY"
-_K_OK = "GLOBAL_SIGNAL_OK"
+_K_OK = "GLOBAL_SIGNAL_OK"            # 旧版单一成功标记（已拆 AM/PM，保留只为兼容迁移）
+_K_OK_AM = "GLOBAL_SIGNAL_OK_AM"      # 早盘那次成功的日期
+_K_OK_PM = "GLOBAL_SIGNAL_OK_PM"      # 午间那次成功的日期
+#: 午间补抓的兜底下限：超过这时点就不再补（收盘后抓没人看，白烧 Token）。
+#: 早盘那次不加此限——它的语义是「错过就随时补」，72h 窗口对次日仍有效。
+_PM_CUTOFF = (15, 30)
+
+
+def _hm(s: str, dflt=(9, 15)) -> tuple:
+    """'HH:MM' → (h, m)。坏值回退默认，别让一个错配置把 daemon 打死。"""
+    try:
+        h, m = (int(x) for x in str(s).split(":"))
+        return (h, m)
+    except Exception:
+        return dflt
 
 
 def _at() -> str:
+    """早盘抓取时刻，默认 09:15（集合竞价开始）。"""
     try:
         import config
-        return str(config.get("TICK_GLOBAL_SIGNAL_AT") or "08:30")
+        return str(config.get("TICK_GLOBAL_SIGNAL_AT") or "09:15")
     except Exception:
-        return "08:30"
+        return "09:15"
+
+
+def _at_pm() -> str:
+    """午间补抓时刻。默认 12:45 = 下午开盘（13:00）前 15 分钟。
+
+    设成 00:00 表示关掉午间这次（判据是时刻 < 00:01，永不命中）。
+    """
+    try:
+        import config
+        return str(config.get("TICK_GLOBAL_SIGNAL_AT_PM") or "12:45")
+    except Exception:
+        return "12:45"
+
+
+def _pm_on() -> bool:
+    """午间补抓是否启用（配置成 00:00 即关）。"""
+    h, m = _hm(_at_pm())
+    return (h, m) > (0, 0)
 
 
 def _ai_on() -> bool:
@@ -554,34 +587,99 @@ def _ai_on() -> bool:
         return True
 
 
+def _trading_day() -> bool:
+    """今天是否 A 股交易日：非周末 + 非法定节假日。
+
+    与 datasource.market_state 同一套口径（holidays.py 的表 + 周末一律休市）。
+    周末/节假日抓海外源没有受众——A 股不开盘，还白烧一次 LLM Token。
+    """
+    try:
+        import holidays as _hl
+        d = _dt.date.today()
+        return d.weekday() < 5 and not _hl.is_market_holiday(d.isoformat())
+    except Exception:
+        # 判定不了就别拦：宁可多抓一次，不要因为日历模块出错而漏更新
+        return True
+
+
 def start_daily(hours_unused: int = 0) -> bool:
-    """拉起每日抓取线程（daemon）。重复调用只启动一次。"""
+    """拉起每日抓取线程（daemon）。重复调用只启动一次。
+
+    **交易日**抓两次（周末/法定节假日不抓，见 _trading_day）：
+
+    · **早盘**（默认 09:15，集合竞价开始）：把美盘隔夜消息炼成中文摘要，
+      抓取 + AI 约 85 秒，赶在 09:30 开盘前备好；
+    · **午间**（默认 12:45，下午 13:00 开盘前 15 分钟）：补一次，覆盖上午
+      才出的海外消息——美联储突发讲话、OPEC 紧急会议、盘前财报这类不在
+      早盘时间窗里的。午间那次只在 15:30（收盘）前补，收盘后错过就等次日。
+
+    两次都落同一个 data/global_signals.json，后一次覆盖前一次；前端只读缓存，
+    所以页面上的「抓取于」会从 09:15 变成 12:45，用户能直接看出更新过。
+    """
     global _thread, _stop
     import threading
     if _thread is not None and _thread.is_alive():
         return False
     _stop = threading.Event()
 
+    def _do(slot: str, key: str) -> None:
+        """跑一个时段并打成功标记。slot 只用于日志。"""
+        import store as _st
+        p = run_daily(do_ai=_ai_on())
+        _st.meta_set(key, _dt.date.today().isoformat())
+        print(f"[global-signal] {slot}完成：板块 {len(p['sectors'])}，"
+              f"故事 {p['meta']['stories']}，耗时 {p['meta']['elapsed_s']}s")
+
     def _loop():
-        last = ""
+        last_am = last_pm = ""
         while not _stop.is_set():
             try:
                 import store as _st
                 today = _dt.date.today().isoformat()
-                if last != today and _st.meta_get(_K_TRY, "") == today:
-                    last = today
+                # 跨日清记忆，否则「今天已抓」的判断会粘到下一天
+                if last_am and not last_am.startswith(today):
+                    last_am = ""
+                if last_pm and not last_pm.startswith(today):
+                    last_pm = ""
+                # 兼容旧版：原来只有一个 GLOBAL_SIGNAL_OK 标记「今天抓过了」。
+                # 拆成 AM/PM 后要把它折算成早盘已成功，否则升级当天重启服务
+                # 会白抓一次早盘（重复烧一轮 LLM Token）。
+                if not last_am and _st.meta_get(_K_OK_AM, "") != today \
+                        and _st.meta_get(_K_OK, "") == today:
+                    _st.meta_set(_K_OK_AM, today)
+
                 now = _dt.datetime.now()
-                hh, mm = (int(x) for x in _at().split(":"))
-                if (now.hour, now.minute) >= (hh, mm) and last != today:
-                    last = today
-                    _st.meta_set(_K_TRY, today)
-                    if _st.meta_get(_K_OK, "") == today:
-                        print("[global-signal] 今天已抓取过，跳过")
+                am = _hm(_at())
+                pm = _hm(_at_pm())
+                trading = _trading_day()
+
+                # ── 早盘（默认 09:15）──
+                if (now.hour, now.minute) >= am and last_am != today:
+                    last_am = today
+                    _st.meta_set(_K_TRY, today + ":am")
+                    if _st.meta_get(_K_OK_AM, "") == today:
+                        print("[global-signal] 早盘已抓取过，跳过")
+                    elif not trading:
+                        _st.meta_set(_K_OK_AM, today)   # 标记掉，免每 60s 重判
+                        print("[global-signal] 非交易日，早盘不抓")
                     else:
-                        p = run_daily(do_ai=_ai_on())
-                        _st.meta_set(_K_OK, today)
-                        print(f"[global-signal] 完成：板块 {len(p['sectors'])}，"
-                              f"故事 {p['meta']['stories']}，耗时 {p['meta']['elapsed_s']}s")
+                        _do("早盘", _K_OK_AM)
+
+                # ── 午间（默认 12:45，下午开盘前补一次）──
+                # 时点窗口 [pm, 收盘)：超过 15:30 就不再补——收盘后抓没人看，
+                # 白烧一轮 LLM Token，等次日早盘那次就行。
+                if (_pm_on() and (now.hour, now.minute) >= pm
+                        and (now.hour, now.minute) < _PM_CUTOFF
+                        and last_pm != today):
+                    last_pm = today
+                    _st.meta_set(_K_TRY, today + ":pm")
+                    if _st.meta_get(_K_OK_PM, "") == today:
+                        print("[global-signal] 午间已抓取过，跳过")
+                    elif not trading:
+                        _st.meta_set(_K_OK_PM, today)
+                        print("[global-signal] 非交易日，午间不抓")
+                    else:
+                        _do("午间", _K_OK_PM)
             except Exception as e:
                 print(f"[global-signal] 本轮出错（下轮重试）：{e}")
             _stop.wait(60)
@@ -726,6 +824,33 @@ def selfcheck() -> int:
        _net_of([{"dir": "pos", "w": 2.0}, {"dir": "neu", "w": 9.0}]) == 0.182,
        _net_of([{"dir": "pos", "w": 2.0}, {"dir": "neu", "w": 9.0}]))
     ok("_net_of：空列表 → 0.0", _net_of([]) == 0.0)
+
+    # ── 每日调度的时点/交易日判定（不联网，纯逻辑）──
+    # 这部分最容易悄悄坏：改个时点、或交易日判定失灵，都不会报错，
+    # 只是「该更新的时候没更新」。所以把行为钉死在这里。
+    ok("_hm：'09:15' → (9,15)", _hm("09:15") == (9, 15))
+    ok("_hm：坏值回退默认 (9,15)", _hm("oops") == (9, 15))
+    ok("_at：默认 09:15（早盘）", _at() == "09:15", _at())
+    ok("_at_pm：默认 12:45（午间）", _at_pm() == "12:45", _at_pm())
+    ok("_pm_on：默认开", _pm_on() is True)
+    ok("午间开关判据：00:00 不大于 (0,0) → 关", not (_hm("00:00") > (0, 0)))
+    ok("午间开关判据：12:45 大于 (0,0) → 开", _hm("12:45") > (0, 0))
+    ok("_PM_CUTOFF：15:30（收盘后不再补）", _PM_CUTOFF == (15, 30))
+    # 交易日判定：用固定日期而非 today()，否则这个断言本身会随时钟变红
+    import holidays as _hl
+    ok("周末一律休市（2026-10-17 周六 / 10-18 周日）",
+       [_dt.date(2026, 10, 17).weekday(), _dt.date(2026, 10, 18).weekday()] == [5, 6])
+    ok("法定节假日命中本地表（2026 国庆）",
+       all(_hl.is_market_holiday(x) for x in
+           ["2026-10-01", "2026-10-02", "2026-10-05", "2026-10-06"]),
+       "holidays.py 表内")
+    ok("调休补班日不算交易日（2026-09-20 周日补班）",
+       _hl.is_makeup_trading_day("2026-09-20")
+       and _dt.date(2026, 9, 20).weekday() == 6,
+       "证券所周末不开市，与 market_state 同口径")
+    ok("meta key 已拆 AM/PM",
+       _K_OK_AM == "GLOBAL_SIGNAL_OK_AM" and _K_OK_PM == "GLOBAL_SIGNAL_OK_PM"
+       and _K_OK_AM != _K_OK_PM)
 
     print(f"global_signal selfcheck: {'OK' if fails == 0 else str(fails) + ' 失败'}")
     return fails
