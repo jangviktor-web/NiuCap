@@ -1004,6 +1004,18 @@ def market_state(now=None):
             "is_trading": False, "is_closed_today": True}
 
 
+def today_session_data(now=None):
+    """今日是否已有盘中快照数据（集合竞价 / 交易 / 午休 / 收盘后当日）。
+
+    盘前（未开盘）、周末、节假日为 False——这些时刻 changedist/涨停池
+    返回的是**上一交易日**的冻结快照，若照常展示并标「实时」会误导
+    （用户以为看到的是今天）。收盘后当日（15:00~24:00）为 True：数据
+    是今日收盘真快照，只是不再跳动，前端改标「收盘」而非「盘后」。
+    """
+    st = market_state(now)
+    return st.get("state") in ("auction", "trading", "lunch", "closed")
+
+
 # ---------------------------------------------------------------------------
 # 新浪全市场快照（选股池来源，字段齐全）
 # 注意：新浪对高频访问会封 IP（HTTP 456，封禁 5-60 分钟），务必低速调用

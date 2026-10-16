@@ -2743,9 +2743,12 @@ def api_market_phase():
         return data
     # ponytail: get_mainline 内部已兜底网络异常，这里不再吞异常——
     # 否则主线 bug 会静默变成 unavailable，难以定位（曾因权重字段名不匹配踩过）。
-    data["mainline"] = mp.get_mainline(htk)
-    # 盘中实时连板梯队（交易时段）：实时涨停池聚合，前端叠加「实时」标签
-    if ds.market_state().get("state") in ("trading", "auction"):
+    # 与实时梯队同窗口：盘前/周末/节假日涨停池是上一交易日数据，不标「实时」。
+    if ds.today_session_data():
+        data["mainline"] = mp.get_mainline(htk)
+    # 盘中实时连板梯队（今日已有盘中数据的时段：竞价/交易/午休/收盘后当日）：
+    # 实时涨停池聚合，前端按会话状态叠加「实时/午休/收盘」标签
+    if ds.today_session_data():
         ladder = mp.realtime_ladder(htk)
         if ladder:
             data["realtime"] = ladder
@@ -2888,7 +2891,11 @@ def api_market_overview():
     return {
         "overview": ov,
         "changedist": wst.changedist(),
-        "realtime_score": wst.realtime_market_score(),
+        # 盘中合成评分：集合竞价/交易/午休/收盘后当日都返回（收盘后是今日
+        # 收盘真快照，只是冻结）；盘前/周末/节假日返回 None，前端回落盘后
+        # ——那些时刻 changedist 是上一交易日数据，标「实时」会误导。
+        "realtime_score": (wst.realtime_market_score()
+                          if ds.today_session_data() else None),
         "available": wst.CLI_AVAILABLE,
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -4901,8 +4908,10 @@ def api_market_breadth(
                             status_code=500)
     if not r.get("ok"):
         return JSONResponse(r, status_code=409)
-    # 盘中实时宽度快照（今日当下）：交易时段才会取 changedist，盘后回落盘后序列
-    if ds.market_state().get("state") in ("trading", "auction"):
+    # 盘中实时宽度快照（今日当下）：今日已有盘中数据的时段才取 changedist
+    # （含午休与收盘后当日——数据是今日真快照，前端分别标「午休/收盘」）；
+    # 盘前/周末/节假日不取，那些时刻是上一交易日冻结数据，易误判成「今日」。
+    if ds.today_session_data():
         try:
             r["realtime"] = market_breadth.realtime_snapshot()
         except Exception as e:
