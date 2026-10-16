@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 # Task#99 验证：命令面板(Cmd+K) + 沪深交易时段时钟
 # 纯前端增强，零后端改动；浏览器端到端验证。
 import os, re, sys, time
@@ -46,7 +49,7 @@ def main():
             rec("Enter 跳转到个股分析页", False, str(e))
         on_tab = page.evaluate("() => document.querySelector('.tabs button[data-tab=stock]').classList.contains('on')")
         rec("个股 tab 高亮", on_tab)
-        page.screenshot(path=f"{SHOT}/cmd_goto_stock.png")
+        shoot(page, path=f"{SHOT}/cmd_goto_stock.webp")
 
         # ---- 3. 搜股票：Ctrl+K → 600519 → 跳个股页 ----
         page.keyboard.press("Control+k")
@@ -66,7 +69,7 @@ def main():
         except Exception as e:
             code = page.evaluate("() => window.state && state.stockCode")
             rec("Enter 选中股票 → 跳个股页(stockCode=sh600519)", False, f"{e} | code={code}")
-        page.screenshot(path=f"{SHOT}/cmd_goto_stockcode.png")
+        shoot(page, path=f"{SHOT}/cmd_goto_stockcode.webp")
 
         # ---- 4. Esc 关闭 ----
         page.keyboard.press("Control+k")  # 若已关则打开；下面用 Esc 关
@@ -82,7 +85,7 @@ def main():
         rec("交易时段时钟有状态文本", ok_clk, str(clk))
         cls = page.evaluate("() => { var e=document.getElementById('mktClock'); return e? e.className : ''; }")
         rec("时钟带状态类名(mc-*)", 'mc-' in cls, cls)
-        page.screenshot(path=f"{SHOT}/clock_nav.png", full_page=False)
+        shoot(page, path=f"{SHOT}/clock_nav.webp", full_page=False)
 
         # ---- 6. 控制台无错误 ----
         rec("页面无 JS 报错", not errs, "; ".join(errs[:3])[:200])

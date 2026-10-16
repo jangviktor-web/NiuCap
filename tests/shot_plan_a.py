@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """方案 A/B 交付截图：策略体检面板（15 行 + 经典指标类）与模拟净值（新质量指标）。
 
 用法：python3 tests/shot_plan_a.py
@@ -30,7 +33,7 @@ def main():
         pg.wait_for_selector("#evalBody table.evt", timeout=180000)
         pg.wait_for_timeout(2000)
         # 截体检面板（含 15 行 + 经典指标分组 + 分层测试 + 跳过说明）
-        pg.locator("#evalPanel").screenshot(path=OUT_EVAL)
+        shoot(pg.locator("#evalPanel"), path=OUT_EVAL)
         print("已保存", OUT_EVAL)
 
         # ---------- 模拟净值 ----------
@@ -39,7 +42,7 @@ def main():
         pg.click("#simRun")
         pg.wait_for_selector("#simBody svg", timeout=15000)
         pg.wait_for_timeout(1000)
-        pg.locator("#simBox").screenshot(path=OUT_SIM)
+        shoot(pg.locator("#simBox"), path=OUT_SIM)
         print("已保存", OUT_SIM)
 
         b.close()

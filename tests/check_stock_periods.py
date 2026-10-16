@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """个股页全周期 × 全入口自检（日/周/月 + 1/5/15/30/60 分钟）。
 
 为什么单独一份：`check_stock_minute_code.py` 只守「分钟线别拿到 null 代码」
@@ -249,7 +252,7 @@ def main():
         finally:
             print("── H 控制台 ──")
             rec("页面无 JS 报错", not errors, "; ".join(errors[:3])[:220])
-            page.screenshot(path="shots_periods/periods.png", full_page=False)
+            shoot(page, path="shots_periods/periods.webp", full_page=False)
             browser.close()
 
     ok = sum(1 for _, o, _ in results if o)

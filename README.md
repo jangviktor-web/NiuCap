@@ -463,9 +463,9 @@ TICK_ADMIN_USERS=你的用户名
 > 两边共用同一份开关 —— 前端经匿名接口 `/api/access` 读当前策略，**只有显式 false 才放行**（读不到＝上锁）。
 > 少了这一步，管理员在后台放开某项，界面却还在拦，开关就成了摆设。
 
-![登录权限后台面板](shots/admin_access_panel.png)
+![登录权限后台面板](shots/admin_access_panel.webp)
 
-![选股登录守卫](shots/screen_guard_login.png)
+![选股登录守卫](shots/screen_guard_login.webp)
 
 ---
 

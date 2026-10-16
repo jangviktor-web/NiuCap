@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """关于页交付截图：验证指标/策略计数、模块构成、后台清单、版本构建均为动态渲染。
 
 用法：python3 tests/shot_about.py
@@ -32,7 +35,7 @@ def main():
 
         # 截关于卡片
         node = pg.locator("#tab-about .card")
-        node.screenshot(path=OUT)
+        shoot(node, path=OUT)
         print("截图:", OUT)
 
         print("JS 错误:", errs if errs else "无")

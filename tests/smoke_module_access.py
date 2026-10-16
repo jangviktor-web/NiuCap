@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """模块登录权限冒烟测试（后台开关 + 前端联动 + 文案）。
 
 这次改造最关键的一条：**管理员在后台关掉某个模块的开关后，前端必须跟着放行**。
@@ -145,7 +148,7 @@ def main():
         tip = pg.locator("#authNeedTip").inner_text()
         check("提示条讲清了为什么", "算力" in tip and "自动继续" in tip, tip.replace("\n", " / "))
         check("提示条带操作名", "加载指标评级" in tip)
-        pg.screenshot(path="shots/auth_need_tip.png", full_page=False)
+        shoot(pg, path="shots/auth_need_tip.webp", full_page=False)
         pg.evaluate("closeAuth(true);")
 
         # ---------- 2. 管理员：后台面板 ----------
@@ -163,7 +166,7 @@ def main():
         check("面板写明了放开代价与生效方式", "放开的代价" in body_txt and "无需重启" in body_txt,
               body_txt[-80:].replace("\n", " / "))
         mask_names(pg)
-        pg.screenshot(path="shots/admin_access_panel.png", full_page=False)
+        shoot(pg, path="shots/admin_access_panel.webp", full_page=False)
 
         print("\n=== 3. 「运行参数」面板不重复这批开关 ===")
         pg.click('#admTabs button[data-adm="config"]')

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3.11
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """截图面板「快讯 → 板块舆情」页，证明新功能已生效（无头 chromium）。"""
 import time
 
@@ -35,6 +38,6 @@ with sync_playwright() as p:
     )
     page.wait_for_timeout(1500)
 
-    page.screenshot(path=OUT, full_page=True)
+    shoot(page, path=OUT, full_page=True)
     browser.close()
     print("OK 截图已保存:", OUT)

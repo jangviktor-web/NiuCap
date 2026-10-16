@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """全球领先信号层 端到端验证（#225）。
 
 链路：
@@ -127,7 +130,7 @@ def main():
         mask_names(pg)
         pg.evaluate("document.getElementById('gsWrap').scrollIntoView({block:'start'})")
         pg.wait_for_timeout(400)
-        pg.screenshot(path="shots/global_signal.png", full_page=False)
+        shoot(pg, path="shots/global_signal.webp", full_page=False)
 
         print("\n=== JS 错误 ===")
         check("全程零 JS 报错", not errors, errors[:3])

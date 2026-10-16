@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """网格策略扩展截图：回测面板（策略下拉 + 移动网格结果 + K线买卖点 + 档位表）。
 
 用法：python3 tests/shot_grid_strategy.py
@@ -23,7 +26,7 @@ def main():
         pg.select_option("#grStrategy", "moving")   # 移动网格（会显示平移次数）
         pg.click("#grRun")
         pg.wait_for_timeout(5000)
-        pg.locator("#grOutput").screenshot(path=OUT)
+        shoot(pg.locator("#grOutput"), path=OUT)
         print("已保存", OUT)
         b.close()
 

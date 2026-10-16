@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """#87 同步守门 + #89 词典情绪 交付截图。
 
 一张图：五粮液(000858) 个股页公告区——「集团增持公司股票」公告
@@ -42,7 +45,7 @@ def main():
         # 五粮液 000858：有「集团增持公司股票」公告（看涨 +2.0）
         pg.evaluate("openStock('sz000858')")
         pg.wait_for_timeout(9000)           # 等扩展数据（含公告+情绪分）加载
-        pg.locator("#stockExtra").screenshot(path=OUT)
+        shoot(pg.locator("#stockExtra"), path=OUT)
         print("已保存", OUT)
 
         print("页面 JS 错误:", len(errs), errs[:3])

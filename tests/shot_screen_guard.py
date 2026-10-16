@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """选股登录守卫：截图留档。
 
 产出：
@@ -60,7 +63,7 @@ def main():
         pg.wait_for_selector("#authModal.on", timeout=8000)
         pg.wait_for_timeout(400)
         f1 = os.path.join(OUT, "screen_guard_login.png")
-        pg.screenshot(path=f1)
+        shoot(pg, path=f1)
         print("已截图:", f1)
 
         # ---- 2. 登录 → 自动续跑出结果 ----
@@ -88,7 +91,7 @@ def main():
         pg.wait_for_timeout(800)
         mask_names(pg)
         f2 = os.path.join(OUT, "screen_guard_result.png")
-        pg.screenshot(path=f2)
+        shoot(pg, path=f2)
         print("已截图:", f2)
 
         b.close()

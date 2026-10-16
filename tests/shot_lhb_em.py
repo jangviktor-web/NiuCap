@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """龙虎榜后验字段（东财源）交付截图。
 
 两张图：
@@ -56,7 +59,7 @@ def main():
         # 切到 市场榜单 -> 龙虎榜
         pg.evaluate("showBoard('hot:lhb')")
         pg.wait_for_timeout(2500)
-        pg.locator("#hotCard").screenshot(path=OUT_LATEST)
+        shoot(pg.locator("#hotCard"), path=OUT_LATEST)
         print("已保存", OUT_LATEST)
 
         # 注入 09-18 历史榜数据重渲染（D+1/D+2 有值）
@@ -65,7 +68,7 @@ def main():
             renderHot();
         }""", hist)
         pg.wait_for_timeout(800)
-        pg.locator("#hotCard").screenshot(path=OUT_HIST)
+        shoot(pg.locator("#hotCard"), path=OUT_HIST)
         print("已保存", OUT_HIST)
 
         print("页面 JS 错误:", len(errs), errs[:3])

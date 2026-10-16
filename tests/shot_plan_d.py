@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """方案 D 交付截图：策略体检表（含「市况敏感度」列）与市场宽度卡片（含「市况读数」+ Chop 震荡指数折线）。
 
 用法：python3 tests/shot_plan_d.py
@@ -40,7 +43,7 @@ def main():
             }""",
             timeout=10000,
         )
-        pg.locator("#evalPanel").screenshot(path=OUT_EVAL)
+        shoot(pg.locator("#evalPanel"), path=OUT_EVAL)
         print("已保存", OUT_EVAL)
 
         # ---------- 市场宽度（含方案 D 市况读数 + Chop 折线） ----------
@@ -55,7 +58,7 @@ def main():
             timeout=15000,
         )
         pg.wait_for_timeout(800)
-        pg.locator("#breadthCard").screenshot(path=OUT_BREADTH)
+        shoot(pg.locator("#breadthCard"), path=OUT_BREADTH)
         print("已保存", OUT_BREADTH)
 
         b.close()

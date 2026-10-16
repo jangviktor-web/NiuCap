@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """风险过滤器 + 公告风险着色 交付截图。
 
 两张图：
@@ -47,13 +50,13 @@ def main():
         pg.wait_for_timeout(400)
         pg.evaluate("stratState.picked = ['pullback_ma20']; runStrategyScan()")
         pg.wait_for_timeout(15000)          # 全市场扫描 + 引擎预热
-        pg.locator("#stratResultCard").screenshot(path=OUT_SCAN)
+        shoot(pg.locator("#stratResultCard"), path=OUT_SCAN)
         print("已保存", OUT_SCAN)
 
         # ---- 2) 个股公告着色 ----
         pg.evaluate("openStock('sh600519')")
         pg.wait_for_timeout(8000)           # 等扩展数据（含公告）加载
-        pg.locator("#stockExtra").screenshot(path=OUT_NOTICES)
+        shoot(pg.locator("#stockExtra"), path=OUT_NOTICES)
         print("已保存", OUT_NOTICES)
 
         print("页面 JS 错误:", len(errs), errs[:3])

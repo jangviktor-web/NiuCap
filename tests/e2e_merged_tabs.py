@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """
 「市场榜单 / 市场热点 / 异动监控」合并后的浏览器端到端校验。
 
@@ -176,7 +179,7 @@ def main() -> int:
               f"有 {len(net404) - len(benign_urls)} 条非良性 404")
         check(not real, "无 JS 运行时报错", f"有 {len(real)} 条报错: {real[:3]}")
 
-        pg.screenshot(path="/tmp/merged_tabs.png", full_page=False)
+        shoot(pg, path="/tmp/merged_tabs.webp", full_page=False)
         b.close()
 
     print("\n" + "=" * 56)

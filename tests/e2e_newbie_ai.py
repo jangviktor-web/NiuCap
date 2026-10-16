@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """小白选股 AI 讲解 登录守卫 + 配额 + 渲染 端到端验证（#224）。
 
 链路：
@@ -137,7 +140,7 @@ def main():
         n_watch = pg.locator('#nbBody .nbai .nbai-wt li').count()
         check("含 ≥1 条买前注意点", n_watch >= 1, f"{n_watch} 条")
         mask_names(pg)
-        pg.screenshot(path="shots/newbie_ai.png", full_page=False)
+        shoot(pg, path="shots/newbie_ai.webp", full_page=False)
 
         # ---------- 3. 配额 0 → 429 友好呈现 → 恢复 ----------
         print("\n=== 3. 超额 429 呈现（DB 置 0 后恢复）===")

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """分钟级功能端到端测试。
 
 覆盖两处入口（2026-09 整合后的架构，已无独立「分时看盘」页签）：
@@ -97,7 +100,7 @@ def main():
              f"日线={back} 分钟高亮={min_on} 提示条={hidden}")
         step("摘要行已清空", pg.inner_text("#stockMtSummary").strip() == "")
 
-        pg.screenshot(path=f"{SHOT}_stock_minute.png")
+        shoot(pg, path=f"{SHOT}_stock_minute.webp")
 
         # ---------- 2. 条件选股页的分钟级选股 ----------
         pg.click('button[data-tab="screen"]')
@@ -147,7 +150,7 @@ def main():
             step("跳转后分钟图正常", "30m 周期" in note and "失败" not in note,
                  note[:70])
 
-        pg.screenshot(path=f"{SHOT}_screen_scan.png")
+        shoot(pg, path=f"{SHOT}_screen_scan.webp")
 
         # ---------- 3. 其他页签回归 ----------
         steps_tabs = []
@@ -166,7 +169,7 @@ def main():
         bad = [n for n, o in steps_tabs if not o]
         step(f"其余 {len(steps_tabs)} 个页签正常", not bad, str(bad) if bad else "")
 
-        pg.screenshot(path=f"{SHOT}_final.png")
+        shoot(pg, path=f"{SHOT}_final.webp")
         b.close()
 
     # 主动触发的 400/404 是预期内的，浏览器会记成 console error，这里只关心脚本错误

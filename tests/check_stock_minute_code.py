@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """个股页分钟线「未找到代码 null」回归自检。
 
 起因：进个股页有两条路——`openStock()`（榜单/选股/搜索）写 `state.stockCode`，
@@ -73,7 +76,7 @@ def test_watch_to_minute(page, errors):
 
     bars = page.evaluate("(state.stockMinuteData && state.stockMinuteData.klines || []).length")
     rec("1 分钟线真的取到了数据", bars > 0, f"{bars} 根")
-    page.screenshot(path="shots_minute_fix/minute_1m.png", full_page=False)
+    shoot(page, path="shots_minute_fix/minute_1m.webp", full_page=False)
     return code
 
 

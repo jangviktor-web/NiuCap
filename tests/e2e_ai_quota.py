@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """AI 深度分析登录守卫 + 每日配额 + 后台「AI 用量」面板 端到端验证（#213~#219）。
 
 链路：
@@ -122,7 +125,7 @@ def main():
         check("提示条带功能名", "AI 深度分析" in tip, tip.replace("\n", " / ")[:80])
         check("提示条说明登录后续跑", "自动继续" in tip)
         mask_names(pg)
-        pg.screenshot(path="shots/ai_quota_need_login.png", full_page=False)
+        shoot(pg, path="shots/ai_quota_need_login.webp", full_page=False)
         pg.evaluate("closeAuth(true);")
         ctx.close()
 
@@ -160,7 +163,7 @@ def main():
               for(let r of rs){ if(r.textContent.indexOf('今日配额') >= 0){ r.scrollIntoView({block:'center'}); return; } } }""")
         pg.wait_for_timeout(400)
         mask_names(pg)
-        pg.screenshot(path="shots/ai_quota_result.png", full_page=False)
+        shoot(pg, path="shots/ai_quota_result.webp", full_page=False)
 
         after = pg.evaluate("async(u)=>{ let d=await (await fetch('/api/admin/ai_usage')).json(); "
                             "let m=(d.items||[]).find(x=>x.username===u); "
@@ -185,7 +188,7 @@ def main():
               if(ch){ ch.scrollIntoView({block:'start'}); window.scrollBy(0, -80); } }""")
         pg.wait_for_timeout(400)
         mask_names(pg)
-        pg.screenshot(path="shots/admin_ai_usage.png", full_page=False)
+        shoot(pg, path="shots/admin_ai_usage.webp", full_page=False)
 
         # 改配额：把测试账号改成 3，保存后管理端即时生效
         uid_row = pg.evaluate("async(u)=>{ let d=await (await fetch('/api/admin/users')).json(); "

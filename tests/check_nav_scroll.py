@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 # 验证导航条：标签溢出时可横向滚动、右侧时钟不被挤掉、无控制台报错
 import subprocess, sys, time, json
 from playwright.sync_api import sync_playwright
@@ -88,7 +91,7 @@ def main():
         # 5) 控制台无报错
         rec("页面无 JS 报错", not errors, "; ".join(errors[:2])[:160])
 
-        pg.screenshot(path=f"{SHOT}/nav_1100.png", full_page=False)
+        shoot(pg, path=f"{SHOT}/nav_1100.webp", full_page=False)
         b.close()
 
     print(f"\n{'通过' if fails==0 else '失败'} {len(results)-fails}/{len(results)}")

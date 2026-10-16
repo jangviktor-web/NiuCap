@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 # 连板梯队 + 题材雷达（#100）端到端：后端直连校验 + 浏览器渲染 + 现有 tab 不回归
 import sys, json, time
 import requests
@@ -84,7 +87,7 @@ def main():
                 pg.wait_for_selector("#tab-limitup.on", timeout=10000)
         except Exception as e:
             rec("连板项→个股分析页跳转", False, f"{e}")
-        pg.screenshot(path=f"{SHOT}/limitup.png", full_page=False)
+        shoot(pg, path=f"{SHOT}/limitup.webp", full_page=False)
 
         # 点击「题材雷达」
         pg.click('.tabs button[data-tab="theme"]')
@@ -95,7 +98,7 @@ def main():
             rec("题材雷达·渲染出板块表", nrows > 1, f"th-row={nrows}")
         except Exception as e:
             rec("题材雷达·渲染出板块表", False, f"等待超时: {e}")
-        pg.screenshot(path=f"{SHOT}/theme.png", full_page=False)
+        shoot(pg, path=f"{SHOT}/theme.webp", full_page=False)
 
         # 非回归：切回市场榜单仍正常
         pg.click('.tabs button[data-tab="rank"]')

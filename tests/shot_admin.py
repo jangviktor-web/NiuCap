@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """后台管理新增能力交付截图。
 
 两张图：
@@ -78,7 +81,7 @@ def main():
         # ---- 体检缓存面板 ----
         pg.click('button[data-adm="evalcache"]')
         pg.wait_for_timeout(1000)
-        pg.locator("#admBody").screenshot(path=OUT_CACHE)
+        shoot(pg.locator("#admBody"), path=OUT_CACHE)
         print("已保存", OUT_CACHE)
 
         # ---- 系统备份面板：先触发一次备份让清单非空 ----
@@ -89,7 +92,7 @@ def main():
             print("  备份触发失败:", e)
         pg.click('button[data-adm="backup"]')
         pg.wait_for_timeout(1200)
-        pg.locator("#admBody").screenshot(path=OUT_BACKUP)
+        shoot(pg.locator("#admBody"), path=OUT_BACKUP)
         print("已保存", OUT_BACKUP)
 
         # 删掉截图用的那份备份，避免 backups/ 堆积

@@ -214,4 +214,4 @@ GET    /api/admin/logs/download ⑤ 下载日志
 
 ### 前端截图
 
-见 `shots_admin97/adm_{database,modules,services,backup,logs}.png`。
+见 `shots_admin97/adm_{database,modules,services,backup,logs}.webp`。

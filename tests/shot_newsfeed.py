@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """#88 双源快讯流 交付截图：快讯页签（红条 + 来源徽章 + 情绪点）。
 
 用法：python3 tests/shot_newsfeed.py
@@ -29,7 +32,7 @@ def main():
         pg.wait_for_timeout(1200)
         pg.evaluate("syncTabs('news'); loadNews()")
         pg.wait_for_timeout(6000)
-        pg.locator("#tab-news .card").first.screenshot(path=OUT)
+        shoot(pg.locator("#tab-news .card").first, path=OUT)
         print("已保存", OUT, "· JS 错误", len(errs))
         b.close()
 

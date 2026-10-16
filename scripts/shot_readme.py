@@ -1,4 +1,7 @@
 #!/usr/bin/env python3.11
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 # 为 README 生成功能截图：逐 tab 打开并截取视口图。
 import os, sys, time
 from playwright.sync_api import sync_playwright
@@ -21,7 +24,7 @@ TABS = [
 
 def shot(page, name):
     path = os.path.join(OUT, name + ".png")
-    page.screenshot(path=path)
+    shoot(page, path=path)
     print("saved", path, os.path.getsize(path), "bytes")
 
 with sync_playwright() as p:

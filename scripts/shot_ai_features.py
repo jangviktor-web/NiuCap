@@ -1,4 +1,7 @@
 #!/usr/bin/env python3.11
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 # 为本轮两个 AI 功能截图：
 #   ① 策略回测页「✨AI 增强解析」开关 + 解析结果 AI 角标（需登录 nlpick）
 #   ② 个股页「✨AI 深度分析」卡片（LLM 解读）
@@ -37,7 +40,7 @@ def shot(pg, name):
       if (u) u.innerHTML = '<button class="ubtn">已登录</button>';
     }""")
     path = os.path.join(OUT, name + ".png")
-    pg.screenshot(path=path)
+    shoot(pg, path=path)
     print("saved", path, os.path.getsize(path), "bytes")
 
 

@@ -1,3 +1,6 @@
+import os as _os, sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+from webp_shot import shoot
 """波动率三件套交付截图。
 
 三张图：
@@ -61,7 +64,7 @@ def main():
         if not on:
             print("! 吊灯止损按钮未高亮，图可能没切换")
         mark_card(pg, "K线走势", "shotKlineCard")
-        pg.locator("#shotKlineCard").screenshot(path=OUT_KLINE)
+        shoot(pg.locator("#shotKlineCard"), path=OUT_KLINE)
         print("已保存", OUT_KLINE)
 
         # 全套技术指标（含新增波动率组）
@@ -75,7 +78,7 @@ def main():
         )
         mark_card(pg, "全套技术指标", "shotIndCard")
         pg.wait_for_timeout(500)
-        pg.locator("#shotIndCard").screenshot(path=OUT_IND)
+        shoot(pg.locator("#shotIndCard"), path=OUT_IND)
         print("已保存", OUT_IND)
 
         # ---------- 2) 虚拟盘：持仓表的建议止损列 ----------
@@ -106,7 +109,7 @@ def main():
         )
         pg.wait_for_timeout(800)
         mark_card(pg, "我的持仓", "shotPosCard")
-        pg.locator("#shotPosCard").screenshot(path=OUT_POS)
+        shoot(pg.locator("#shotPosCard"), path=OUT_POS)
         print("已保存", OUT_POS, f"（测试账号 {uname}）")
 
         print("JS 错误:", errs if errs else "无")
