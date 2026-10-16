@@ -361,6 +361,46 @@ def compute(days: int = 250, use_cache: bool = True) -> Dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# 盘中实时宽度快照（今日当下）
+# ---------------------------------------------------------------------------
+def realtime_snapshot() -> Dict[str, Any]:
+    """盘中实时宽度快照（今天当下）：用 westock.changedist() 的实时涨跌家数/涨跌停。
+
+    说明：市场宽度的**历史序列**（站上 MA20 比例 / 新高新低 / 极值分位）必须基于
+    收盘日线，无法盘中实时——盘后仍走 compute()。本函数只补一个「今天当下」的
+    广度读数，交易时段每 60s 刷新。CLI 不可用时返回 {}，前端回落盘后。
+
+    返回 {up, down, flat, up_limit, down_limit, adv_ratio, net, breadth,
+          limit_balance}（净宽度 net=涨-跌，breadth∈[-1,1] 与综合评分同口径）。
+    """
+    try:
+        from westock import changedist
+        cd = changedist() or {}
+    except Exception as e:
+        print(f"[market-breadth] realtime_snapshot 取数失败（CLI 不可用）：{e}")
+        return {}
+    if not cd or not (cd.get("up") or cd.get("down")):
+        return {}
+    up = cd.get("up", 0) or 0
+    down = cd.get("down", 0) or 0
+    flat = cd.get("flat", 0) or 0
+    ul = cd.get("up_limit", 0) or 0
+    dl = cd.get("down_limit", 0) or 0
+    denom = up + down
+    adv_ratio = round(up / denom * 100.0, 1) if denom else 0.0
+    breadth = (up - down) / denom if denom else 0.0
+    limit_b = (ul - dl) / max(ul + dl, 1)
+    return {
+        "up": up, "down": down, "flat": flat,
+        "up_limit": ul, "down_limit": dl,
+        "adv_ratio": adv_ratio,
+        "net": up - down,
+        "breadth": round(float(breadth), 4),
+        "limit_balance": round(float(limit_b), 4),
+    }
+
+
+# ---------------------------------------------------------------------------
 # 自检（合成数据，不依赖真实库）
 # ---------------------------------------------------------------------------
 

@@ -2744,6 +2744,12 @@ def api_market_phase():
     # ponytail: get_mainline 内部已兜底网络异常，这里不再吞异常——
     # 否则主线 bug 会静默变成 unavailable，难以定位（曾因权重字段名不匹配踩过）。
     data["mainline"] = mp.get_mainline(htk)
+    # 盘中实时连板梯队（交易时段）：实时涨停池聚合，前端叠加「实时」标签
+    if ds.market_state().get("state") in ("trading", "auction"):
+        ladder = mp.realtime_ladder(htk)
+        if ladder:
+            data["realtime"] = ladder
+            data["live_heat"] = mp.live_heat(ladder)
     return data
 
 
@@ -4895,6 +4901,12 @@ def api_market_breadth(
                             status_code=500)
     if not r.get("ok"):
         return JSONResponse(r, status_code=409)
+    # 盘中实时宽度快照（今日当下）：交易时段才会取 changedist，盘后回落盘后序列
+    if ds.market_state().get("state") in ("trading", "auction"):
+        try:
+            r["realtime"] = market_breadth.realtime_snapshot()
+        except Exception as e:
+            print(f"[market-breadth] realtime_snapshot 失败：{e}")
     return r
 
 

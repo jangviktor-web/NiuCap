@@ -451,3 +451,61 @@ def get_mainline(htk, top: int = _TOP_MAINLINE) -> dict:
                                          for c in _SCORE_WEIGHTS), 1)
     rec_list.sort(key=lambda x: -x["score"])
     return {"source": "hithink", "available": True, "items": rec_list[:top]}
+
+
+# ───────────────────────── 盘中实时连板梯队 ─────────────────────────
+def realtime_ladder(htk) -> dict:
+    """盘中实时连板梯队：同花顺 limit_up_pool 实时涨停池按 continue_day_cnt 聚合。
+
+    实时池只含「当前涨停」的股票（不含盘中开板的触板未封），所以晋级率按
+    「连板股 / 全部涨停股」近似——仅作盘中实时参考；历史 6 阶段序列仍走盘后
+    daily_bars 的精确连板推导。CLI/网络不可用时返回 {}。
+    """
+    try:
+        pool = htk.limit_up_pool()
+    except Exception as e:
+        logger.warning("realtime_ladder limit_up_pool failed: %s", e)
+        return {}
+    items = pool.get("items") or []
+    if not items:
+        return {"available": pool.get("total", 0) > 0, "items": 0,
+                "height": 0, "first_board": 0, "ge2": 0, "promo_rate": None}
+    heights, f1, ge2 = 0, 0, 0
+    for it in items:
+        cnt = int(it.get("continue_day_cnt") or 1)
+        heights = max(heights, cnt)
+        if cnt == 1:
+            f1 += 1
+        if cnt >= 2:
+            ge2 += 1
+    total = len(items)
+    promo = round(ge2 / total, 4) if total else None
+    return {
+        "available": True, "items": total,
+        "height": heights, "first_board": f1, "ge2": ge2,
+        "promo_rate": promo,
+    }
+
+
+def live_heat(ladder: dict) -> dict:
+    """盘中粗略热度（仅基于实时涨停梯队，非 6 阶段定级）。
+
+    6 阶段定级走整段日序 EMA + 连续 2 日确认，必须基于收盘日线，盘中无法复现，
+    故这里只给一个**透明、可解释**的盘中热度感知（按二板及以上家数 + 连板高度
+    粗分 5 档），与盘后定级口径不同，仅作盘中参考。
+    """
+    if not ladder or not ladder.get("available"):
+        return {}
+    g2 = ladder.get("ge2", 0)
+    h = ladder.get("height", 0)
+    if g2 >= 50 or h >= 10:
+        tag, col, desc = "高热", "#b91c1c", "涨停梯队活跃，连板氛围强"
+    elif g2 >= 15 or h >= 7:
+        tag, col, desc = "活跃", "#ef4444", "连板梯队较活跃"
+    elif g2 >= 8:
+        tag, col, desc = "偏暖", "#f59e0b", "连板梯队略偏暖"
+    elif g2 >= 3:
+        tag, col, desc = "平淡", "#94a3b8", "连板梯队平淡"
+    else:
+        tag, col, desc = "清淡", "#3b82f6", "连板梯队清淡"
+    return {"tag": tag, "color": col, "desc": desc}

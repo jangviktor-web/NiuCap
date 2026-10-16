@@ -7177,7 +7177,8 @@ function loadAbout(){
         '<tr><td>市场温度·综合评分</td><td><span class="ktag ktag-live">实时</span></td><td>盘中由涨跌家数/涨停跌停/成交额环比合成 0-60 量表，交易时段每 60s 刷新；西财盘后 13 维评分作「收盘」参考</td></tr>' +
         '<tr><td>市场温度·涨跌/成交额</td><td><span class="ktag ktag-live">实时</span></td><td>两市涨跌家数、涨停跌停、成交额，盘中实时快照</td></tr>' +
         '<tr><td>市场温度·13维画像</td><td><span class="ktag ktag-eod">盘后</span></td><td>上游收盘后统一重算，盘中显示上一交易日</td></tr>' +
-        '<tr><td>市场宽度</td><td><span class="ktag ktag-eod">盘后</span></td><td>全市场日线（T-1），收盘后生成</td></tr>' +
+        '<tr><td>市场宽度</td><td><span class="ktag ktag-live">实时</span><span class="ktag ktag-eod">盘后</span></td><td>今日广度（涨跌/涨停）盘中实时快照，交易时段每 60s 刷新；历史序列（站上 MA20 / 新高新低 / Chop 分位）为 T-1 收盘后生成</td></tr>' +
+        '<tr><td>市场情绪周期</td><td><span class="ktag ktag-live">实时</span><span class="ktag ktag-eod">盘后</span></td><td>实时连板梯队（高度/首板/二板/晋级率）盘中实时，每 60s 刷新；6 阶段定级仍基于 T-1 收盘日线，盘中相位仅作未确认参考</td></tr>' +
         '<tr><td>市场榜单</td><td><span class="ktag ktag-live">实时</span></td><td>实时快照排名</td></tr>' +
         '<tr><td>快讯</td><td><span class="ktag ktag-live">实时</span></td><td>双源滚动推送（断流时显示最近缓存）</td></tr>' +
         '<tr><td>自选股</td><td><span class="ktag ktag-live">实时</span></td><td>实时行情报价</td></tr>' +
@@ -8406,6 +8407,28 @@ function renderMarketPhase(){
        + (L.ge2||0) + '</b> 家'
        + (L.promo_rate!=null ? ' · 晋级率 <b style="color:var(--tx1)">' + (L.promo_rate*100).toFixed(0) + '%</b>' : '')
        + '</span></div>';
+    // 盘中实时连板梯队（后端在交易时段才返回 realtime）
+    if(p.realtime && p.realtime.available){
+      var rl = p.realtime;
+      h += '<div style="margin-top:10px;padding:8px 12px;border-radius:8px;background:rgba(22,119,255,.06);border:1px solid rgba(22,119,255,.25)">';
+      h += '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+         + '<span style="font-size:12px;font-weight:600;color:var(--tx1)">实时连板梯队</span>'
+         + '<span class="ktag ktag-live">实时</span>'
+         + '<span style="font-size:11px;color:var(--tx3)">基于实时涨停池 · 盘中每 60s 刷新</span></div>';
+      h += '<div style="margin-top:6px;font-size:12px;color:var(--tx3)">连板高度 <b style="color:var(--tx1)">' + (rl.height||0)
+         + '</b> · 首板 <b style="color:var(--tx1)">' + (rl.first_board||0) + '</b> · 二板及以上 <b style="color:var(--tx1)">'
+         + (rl.ge2||0) + '</b> 家'
+         + (rl.promo_rate!=null ? ' · 晋级率 <b style="color:var(--tx1)">' + (rl.promo_rate*100).toFixed(0) + '%</b>' : '')
+         + '</div>';
+      var lp = p.live_heat || {};
+      if(lp.tag){
+        h += '<div style="margin-top:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">'
+           + '<span style="font-size:11px;color:var(--tx3)">盘中热度（粗略）</span>'
+           + '<span style="display:inline-flex;align-items:center;padding:2px 10px;border-radius:8px;background:' + (lp.color||'#94a3b8') + '1a;color:' + (lp.color||'#94a3b8') + ';font-size:13px;font-weight:700;border:1px solid ' + (lp.color||'#94a3b8') + '55">' + lp.tag + '</span>'
+           + '<span style="font-size:11px;color:var(--tx3)">' + esc(lp.desc||'') + ' · 非 6 阶段定级</span></div>';
+      }
+      h += '</div>';
+    }
     // 近 N 日阶段色条
     var hist = p.history || [];
     if(hist.length){
@@ -9708,12 +9731,12 @@ loadStrategyList();
 loadPatternDims();
 loadMoves();       // 预取异动计数（表格默认隐藏，切到该项时再渲染）
 loadMarketTemp();
-// 市场温度：交易时段每 60s 刷新，让「盘中综合评分」真正实时跳动；
-// 盘后/休市时 changedist 是冻结快照，没必要轮询，故仅在可交易时刷新。
+// 市场温度 / 市场宽度：交易时段每 60s 刷新，让「盘中综合评分」「今日实时广度」
+// 真正实时跳动；盘后/休市时 changedist 是冻结快照，没必要轮询，故仅在可交易时刷新。
 (function(){
   setInterval(function(){
     var open = !!(window.mktPaperTradable && window.mktPaperTradable());
-    if(open) loadMarketTemp();
+    if(open){ loadMarketTemp(); loadBreadth(); }
   }, 60000);
 })();
 
@@ -9891,9 +9914,19 @@ function renderBreadth(d){
   var body = $('breadthBody'), meta = $('breadthMeta');
   if(!body) return;
   var L = d.latest || {};
-  if(meta) meta.innerHTML = '<span class="ktag ktag-eod">盘后</span> 最新 ' + (L.date || d.as_of || '—') + ' · 近 ' + d.days + ' 个交易日 · 全市场日线（T-1，收盘后生成）';
+  var rt = d.realtime || {};
+  var hasLive = rt && rt.up != null;
+  if(meta){
+    if(hasLive){
+      meta.innerHTML = '<span class="ktag ktag-live">实时</span> 今日实时广度 · '
+        + '<span class="ktag ktag-eod">盘后</span> 历史序列最新 ' + (L.date || d.as_of || '—') + ' · 近 ' + d.days + ' 个交易日';
+    } else {
+      meta.innerHTML = '<span class="ktag ktag-eod">盘后</span> 最新 ' + (L.date || d.as_of || '—') + ' · 近 ' + d.days + ' 个交易日 · 全市场日线（T-1，收盘后生成）';
+    }
+  }
 
   // 摘要行
+  var sumPrefix = hasLive ? '<div style="font-size:11px;color:var(--tx3);margin-bottom:4px">昨日收盘（T-1）最新读数</div>' : '';
   var sum =
     '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:baseline">' +
       '<span style="font-size:19px;font-weight:700;font-variant-numeric:tabular-nums">' +
@@ -9928,7 +9961,25 @@ function renderBreadth(d){
                       { fixed: [0, 100], refLines: [[38.2, '趋势线'], [61.8, '震荡线']],
                         color: '#6a5acd' });
 
-  body.innerHTML = sum + extremeHtml +
+  // 盘中实时广度快照（今日当下）
+  var liveHtml = '';
+  if(hasLive){
+    var net = rt.net || 0;
+    var netCls = net >= 0 ? UP : DOWN;
+    var netSign = net >= 0 ? '+' : '';
+    liveHtml = '<div style="margin-bottom:10px;padding:8px 12px;border-radius:8px;background:rgba(22,119,255,.06);border:1px solid rgba(22,119,255,.25)">'
+      + '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">'
+      + '<span style="font-size:12px;font-weight:600;color:var(--tx1)">今日实时广度</span>'
+      + '<span class="ktag ktag-live">实时</span>'
+      + '<span style="font-size:11px;color:var(--tx3)">盘中每 60s 刷新 · 涨跌家数/涨停跌停为实时快照</span></div>'
+      + '<div style="margin-top:6px;font-size:13px">'
+      + '<span style="color:#c62828">涨 ' + (rt.up||0) + '</span> / <span style="color:#1f7a3d">跌 ' + (rt.down||0) + '</span> / 平 ' + (rt.flat||0)
+      + ' · 涨停 <b style="color:#c62828">' + (rt.up_limit||0) + '</b> / 跌停 <b style="color:#1f7a3d">' + (rt.down_limit||0) + '</b>'
+      + ' · 净宽度 <b class="' + netCls + '">' + netSign + net + '</b>'
+      + ' <span style="color:var(--tx3)">（宽度 ' + (rt.adv_ratio!=null?rt.adv_ratio.toFixed(0):'?') + '%）</span>'
+      + '</div></div>';
+  }
+  body.innerHTML = liveHtml + sumPrefix + sum + extremeHtml +
     (g1 ? '<div style="margin-top:10px"><div style="font-size:12px;color:var(--muted);margin-bottom:2px">涨跌家数差（近 120 日 · 红柱涨多 / 绿柱跌多）</div>' + g1 + '</div>' : '') +
     (g2 ? '<div style="margin-top:10px"><div style="font-size:12px;color:var(--muted);margin-bottom:2px">站上 20 日线的股票比例（近 ' + d.days + ' 日 · 越低市场越弱）</div>' + g2 + '</div>' : '') +
     (g3 ? '<div style="margin-top:10px"><div style="font-size:12px;color:var(--muted);margin-bottom:2px">市场震荡指数 Chop（近 ' + d.days + ' 日 · &lt;38.2 趋势市 / &gt;61.8 震荡市 · 合成全市场等权指数）</div>' + g3 + '</div>' : '') +
