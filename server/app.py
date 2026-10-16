@@ -3055,15 +3055,19 @@ def api_intent_examples():
 
 @app.get("/api/stock/analyze")
 def api_stock_analyze(request: Request, code: str = Query(..., description="股票代码，如 sh600519"),
-                      hours: int = Query(24, ge=6, le=72)):
+                      hours: int = Query(24, ge=6, le=72),
+                      refresh: int = Query(0, ge=0, le=1, description="1=跳过缓存强制重算")):
     """#93 个股 AI 深度分析：只读聚合行情/技术面/板块/快讯 → LLM 解读。
 
     LLM 未启用/网络错/输出不过 schema 都自动降级为纯数据摘要(data_only)，不报错。
     纯只读 + 人工点触发，LLM 未启用时零调用（无成本）。
 
+    #A 常驻缓存：同 code+hours 在 TTL（默认 30 分钟）内直接返回上次结果，
+    **命中不消耗配额**——避免用户反复进页把配额烧光。refresh=1 强制重算。
+
     登录与配额（后台「🔒 登录权限」+「📈 AI 用量」两个面板管控）：
       - 模块开关默认要求登录（TICK_AUTH_REQ_STOCKAI），管理员可放开匿名；
-      - 登录用户每次分析扣 1 次当日配额（默认 10 次/天，可按账号调整）。
+      - 登录用户每次「实际分析」扣 1 次当日配额（默认 10 次/天，可按账号调整）。
         **先扣后调**：LLM 调用有真实 Token 成本，按尝试次数计费对运营方公平，
         失败不退款（失败也花了 token）。扣减是原子 UPSERT，并发不会超扣；
       - 超额返回 429，文案带配额与恢复方式；
@@ -3071,6 +3075,12 @@ def api_stock_analyze(request: Request, code: str = Query(..., description="股�
     """
     import store as _store
     u = _require_module_login(request, "stockai")
+    import stock_analyzer
+    # 缓存命中：直接返回，不扣配额、不触 LLM（配额无变化，无须回显）
+    if not refresh:
+        hit = stock_analyzer.cached(code, hours=hours)
+        if hit is not None:
+            return hit
     quota_info = None
     if u:
         ok, used, quota = _store.ai_quota_consume(u["id"])
@@ -3081,8 +3091,7 @@ def api_stock_analyze(request: Request, code: str = Query(..., description="股�
                 f"次日 0 点自动恢复；如需调整可让管理员在后台「AI 用量」面板修改配额")
         quota_info = {"used": used, "quota": quota,
                       "remaining": max(quota - used, 0)}
-    import stock_analyzer
-    res = stock_analyzer.analyze_stock(code, hours=hours)
+    res = stock_analyzer.analyze_stock(code, hours=hours, refresh=True)
     if quota_info is not None and isinstance(res, dict):
         res["ai_quota"] = quota_info
     return res

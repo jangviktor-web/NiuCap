@@ -3322,41 +3322,74 @@ function loadStock(code){
     renderStock(d);
     appendStockAiCard();
     loadStockExtra(code);
+    runStockAiGuarded();   // A 常驻：进页自动拉一次（命中后端缓存则不消耗配额）
   }).catch(function(e){ die(el, '个股数据加载失败：' + e.message); });
 }
 /* #93 AI 深度分析卡片：renderStock 后动态追加（stockWrap 被 renderStock 整体覆盖，
    故不能静态写死）；防重复插入。点击 runStockAi 调 /api/stock/analyze（只读）。
    #216 起该功能要求登录（后台「🔒 登录权限」可放开）+ 每账号每日配额
-   （默认 10 次，后台「📈 AI 用量」可调），按钮走 guardScreen 统一拦截续跑。 */
+   （默认 10 次，后台「📈 AI 用量」可调），按钮走 guardScreen 统一拦截续跑。
+   #A 常驻缓存：进页自动分析一次，30 分钟内再进命中缓存、不耗配额；「重新分析」强制刷新。
+   #C 小白视角：卡片顶部「大白话」开关（默认开），把同一份数据翻成小白语言。 */
 function appendStockAiCard(){
   var wrap = $('stockWrap');
   if(!wrap || $('stockAiCard')) return;
+  var plainOn = localStorage.getItem('stockAiPlain') !== '0';
   wrap.insertAdjacentHTML('beforeend',
     '<div class="card" id="stockAiCard" style="margin-top:12px">' +
     '  <div class="card-h"><h2>✨ AI 深度分析</h2>' +
-    '    <div class="meta">综合行情/技术面/板块舆情/近期快讯，AI 客观解读（仅供参考，非投资建议）</div>' +
-    '    <div style="margin-left:auto"><button class="btn pri sm" id="stockAiBtn" onclick="runStockAiGuarded()">开始分析</button></div>' +
+    '    <div class="meta" id="stockAiMeta">综合行情/技术面/资金筹码/板块舆情/近期快讯，AI 客观解读（仅供参考，非投资建议）</div>' +
+    '    <div style="margin-left:auto;display:flex;gap:8px;align-items:center">' +
+    '      <label style="font-size:12px;color:var(--tx2);cursor:pointer;white-space:nowrap"><input type="checkbox" id="stockAiPlainChk"' + (plainOn ? ' checked' : '') + ' onchange="toggleStockAiPlain(this.checked)"> 大白话</label>' +
+    '      <button class="btn sm" id="stockAiRefreshBtn" onclick="runStockAiGuarded(true)">重新分析</button>' +
+    '    </div>' +
     '  </div>' +
-    '  <div class="card-b" id="stockAiOut"><div class="empty">点击「开始分析」，AI 综合当前个股数据给出解读；未配置 AI 模型时展示纯数据摘要。</div></div>' +
+    '  <div class="card-b" id="stockAiOut"><div class="empty">正在分析…</div></div>' +
     '</div>');
 }
-function runStockAi(){
+/* C 小白视角开关：状态存 localStorage，切换后仅重绘当前结果，不重新调 LLM */
+function toggleStockAiPlain(on){
+  localStorage.setItem('stockAiPlain', on ? '1' : '0');
+  if(window._lastStockAi) renderStockAi(window._lastStockAi, $('stockAiOut'));
+}
+function runStockAi(force){
   var code = state.stockCode;
   var out = $('stockAiOut');
   if(!out) return;
   if(!code){ out.innerHTML = '<div class="empty">请先选择个股</div>'; return; }
   loading(out, 'AI 分析中…');
-  api('/api/stock/analyze?code=' + encodeURIComponent(code)).then(function(r){
+  var url = '/api/stock/analyze?code=' + encodeURIComponent(code) + (force === true ? '&refresh=1' : '');
+  api(url).then(function(r){
     if(!r || !r.ok){ die(out, (r && r.reason) || '分析失败'); return; }
+    window._lastStockAi = r;
     renderStockAi(r, out);
   }).catch(function(e){ die(out, '分析失败：' + (e && e.message ? e.message : e)); });
 }
 /* #216：AI 深度分析改为「登录后可用」（后台开关可放开匿名）。
-   复用 guardScreen：未登录先弹框，登录成功自动补跑这次分析，用户不必再点一次。 */
+   复用 guardScreen：未登录先弹框，登录成功自动补跑这次分析，用户不必再点一次。
+   #A：带 force 参数（重新分析按钮传 true）穿透到 runStockAi。 */
 var runStockAiGuarded = guardScreen(runStockAi, 'AI 深度分析', 'stockai');
 function renderStockAi(r, out){
   var ctx = r.ctx || {};
   var h = '';
+  // A 缓存提示：命中缓存时显示「分析于 X 分钟前」，让用户知道不是实时新算
+  if(r.cached && r.cache_age != null){
+    var ageTxt = r.cache_age < 60 ? (r.cache_age + ' 秒前')
+      : (Math.round(r.cache_age / 60) + ' 分钟前');
+    h += '<div class="meta" style="margin-bottom:6px;font-size:12px;color:var(--tx3)">📌 缓存结果 · 分析于 ' +
+         ageTxt + '（30 分钟内重复进页不消耗配额，点「重新分析」强制刷新）</div>';
+  }
+  // C 小白视角：开关开启时置顶展示大白话（同一份数据翻译，不额外消耗）
+  var plainOn = localStorage.getItem('stockAiPlain') !== '0';
+  if(plainOn && r.plain && r.plain.explain){
+    h += '<div style="background:var(--bg2,#f7f8fa);border-radius:8px;padding:10px 12px;margin-bottom:10px">' +
+         '<div style="font-size:13px;font-weight:600;margin-bottom:4px">🗣️ 大白话</div>' +
+         '<div style="font-size:13px;line-height:1.6">' + esc(r.plain.explain) + '</div>';
+    if(r.plain.watch && r.plain.watch.length)
+      h += '<div style="font-size:12px;color:var(--tx2);margin-top:6px">👉 ' +
+           r.plain.watch.map(function(x){ return esc(x); }).join('　') + '</div>';
+    h += '</div>';
+  }
   if(r.llm){
     var L = r.llm;
     // 评分大数字 + 本地化配色（≥60 红 / <40 绿 / 中间中性，与涨跌色一致）
@@ -3394,6 +3427,21 @@ function renderStockAi(r, out){
   if(t.verdict)
     h += '<div class="row" style="margin-top:8px"><span class="lbl">技术面</span><span>' + esc(t.verdict || '') +
          '（多' + (t.bull || 0) + ' / 空' + (t.bear || 0) + ' / 中' + (t.neutral || 0) + '）</span></div>';
+  // B 资金面 + 筹码（westock 可用时才有；主力净额涨红跌绿）
+  var fl = ctx.flow || {};
+  if(fl.main_net != null){
+    function yi(v){ return (v >= 0 ? '+' : '') + (Math.abs(v) >= 10000 ? (v / 10000).toFixed(2) + '亿' : v + '万'); }
+    h += '<div class="row"><span class="lbl">资金面</span><span>主力净额 <b class="' + cls(fl.main_net) + '">' +
+         yi(fl.main_net) + '</b>' +
+         (fl.main_circ_rate != null ? '（占流通 ' + fl.main_circ_rate + '%）' : '') +
+         (fl.main_net_5d != null ? ' · 5日 ' + yi(fl.main_net_5d) : '') +
+         (fl.main_net_20d != null ? ' · 20日 ' + yi(fl.main_net_20d) : '') + '</span></div>';
+  }
+  if(fl.avg_cost != null || fl.profit_rate != null)
+    h += '<div class="row"><span class="lbl">筹码</span><span>' +
+         (fl.avg_cost != null ? '平均成本 ' + fmt(fl.avg_cost) + ' 元' : '') +
+         (fl.profit_rate != null ? ' · 获利盘 ' + fl.profit_rate + '%' : '') +
+         (fl.concentration70 != null ? ' · 70% 集中度 ' + fl.concentration70 : '') + '</span></div>';
   if(ctx.sectors && ctx.sectors.length)
     h += '<div class="row"><span class="lbl">所属板块</span><span>' +
          ctx.sectors.map(function(x){ return esc(x); }).join('、') + '</span></div>';
@@ -7206,6 +7254,7 @@ function loadAbout(){
         '<tr><td>自选股</td><td><span class="ktag ktag-live">实时</span></td><td>实时行情报价</td></tr>' +
         '<tr><td>个股·行情条</td><td><span class="ktag ktag-live">实时</span></td><td>实时快照（约每 3 分钟刷新）</td></tr>' +
         '<tr><td>个股·技术面结论/指标</td><td><span class="ktag ktag-eod">盘后</span></td><td>日线收盘计算</td></tr>' +
+        '<tr><td>个股·AI 深度分析</td><td><span class="ktag ktag-live">实时</span><span class="ktag ktag-eod">缓存</span></td><td>综合行情/技术面/资金筹码/板块/快讯由 LLM 解读；进页自动分析，30 分钟内重复进页命中缓存（不消耗配额），点「重新分析」强制刷新；「大白话」开关把同一份数据翻成小白语言（不额外消耗）；资金/筹码取 westock 实时值，快讯为 24h 窗口</td></tr>' +
         '<tr><td>小白/策略/条件选股</td><td><span class="ktag ktag-eod">盘后</span></td><td>基于历史日线计算（条件选股页内「分钟级扫描」为盘中实时）</td></tr>' +
         '<tr><td>策略回测</td><td><span class="ktag ktag-eod">盘后</span></td><td>历史日线回测，本身即历史口径</td></tr>' +
       '</table>' +

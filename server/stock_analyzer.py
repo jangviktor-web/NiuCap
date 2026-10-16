@@ -17,6 +17,7 @@ build_context(code) 只读聚合四类数据（全部走现成模块，不重造
 """
 from __future__ import annotations
 import json
+import os
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -44,7 +45,7 @@ _SYS = """你是A股个股分析助手。给你一只股票的真实数据（行
 def build_context(code: str, hours: int = 24) -> Dict[str, Any]:
     """只读聚合个股四维数据；任何单源失败都记 missing、不阻断其余维度。"""
     ctx: Dict[str, Any] = {"ok": False, "code": str(code or "").strip(), "name": "",
-                           "quote": {}, "tech": {}, "sectors": [], "news": [],
+                           "quote": {}, "tech": {}, "sectors": [], "news": [], "flow": {},
                            "missing": [], "generated_at": int(time.time())}
     if not ctx["code"]:
         ctx["reason"] = "缺少股票代码"
@@ -113,7 +114,35 @@ def build_context(code: str, hours: int = 24) -> Dict[str, Any]:
         except Exception:
             pass
 
-    # 4) 近期快讯：该股名优先，所属板块补充（与收盘对账同窗口同原语）
+    # 4) 资金面 + 筹码（#B 扩展）：主力/超大单净额 + 5/10/20 日主力净额 + 获利盘。
+    #    westock CLI 不可用时整维记 missing，不阻断其余维度。
+    try:
+        import westock as wst
+        ff = (wst.fund_flow([ncode]) or {}).get(ncode) or {}
+        chip = wst.chip(ncode) or {}
+        flow: Dict[str, Any] = {}
+        if ff:
+            flow.update({
+                "main_net": ff.get("main_net"), "main_circ_rate": ff.get("main_circ_rate"),
+                "jumbo_net": ff.get("jumbo_net"), "block_net": ff.get("block_net"),
+                "main_rank": ff.get("main_rank"),
+                "main_net_5d": ff.get("main_net_5d"), "main_net_10d": ff.get("main_net_10d"),
+                "main_net_20d": ff.get("main_net_20d"),
+            })
+        if chip:
+            flow.update({
+                "avg_cost": chip.get("avg_cost"),
+                "concentration70": chip.get("concentration70"),
+                "profit_rate": chip.get("profit_rate"),
+            })
+        if flow:
+            ctx["flow"] = flow
+    except Exception:
+        pass
+    if not ctx.get("flow"):
+        ctx["missing"].append("资金/筹码")
+
+    # 5) 近期快讯：该股名优先，所属板块补充（与收盘对账同窗口同原语）
     try:
         import sector_verify as sv
         items = sv._load_news(hours) or []
@@ -160,6 +189,19 @@ def _ctx_prompt(ctx: Dict[str, Any]) -> str:
     else:
         L.append("【技术面】暂无")
     L.append("【所属板块】" + ("、".join(ctx.get("sectors") or []) or "暂无"))
+    fl = ctx.get("flow") or {}
+    if fl:
+        def w(k):
+            v = fl.get(k)
+            return "暂无" if v in (None, "") else v
+        L.append(f"【资金面】主力净额 {w('main_net')} 万元（占流通 {w('main_circ_rate')}%），"
+                 f"超大单 {w('jumbo_net')} 万，大单 {w('block_net')} 万；"
+                 f"5/10/20 日主力净额 {w('main_net_5d')}/{w('main_net_10d')}/{w('main_net_20d')} 万元")
+        if fl.get("avg_cost") is not None:
+            L.append(f"【筹码】平均成本 {w('avg_cost')} 元，70% 集中度 {w('concentration70')}，"
+                     f"获利盘比例 {w('profit_rate')}%")
+    else:
+        L.append("【资金面】暂无")
     news = ctx.get("news") or []
     if news:
         L.append("【近期快讯】")
@@ -172,14 +214,24 @@ def _ctx_prompt(ctx: Dict[str, Any]) -> str:
 
 
 def _parse_json(text: str) -> Optional[dict]:
-    """提取 ```json 块并解析；无机读块/坏 JSON/非 dict 都返回 None。"""
-    m = re.search(r"```json\s*(.*?)```", text or "", re.S)
-    if not m:
-        return None
+    """提取 JSON：优先 ```json 代码块，回退裸 JSON 对象；坏 JSON/非 dict 返回 None。
+
+    兼容裸 JSON 是必要的——LLM 常直接输出 {"...": ...} 而不包代码块，
+    只认代码块会把这类合理解读误判为失败、白费 Token（plain 视角实测踩到）。
+    """
+    t = text or ""
+    m = re.search(r"```json\s*(.*?)```", t, re.S)
+    cand = m.group(1) if m else t
     try:
-        obj = json.loads(m.group(1))
+        obj = json.loads(cand.strip())
     except Exception:
-        return None
+        m2 = re.search(r"\{.*\}", cand, re.S)      # 代码块/正文里掐出第一个对象
+        if not m2:
+            return None
+        try:
+            obj = json.loads(m2.group(0))
+        except Exception:
+            return None
     return obj if isinstance(obj, dict) else None
 
 
@@ -235,30 +287,120 @@ def analyze(ctx: Dict[str, Any], override: Optional[Dict[str, Any]] = None) -> O
     return _parse_json(raw)
 
 
-def analyze_stock(code: str, hours: int = 24,
+# ---------------------------------------------------------------------------
+# C（小白视角）：把同一份 ctx 翻成大白话，输出 {explain, watch}。
+# 与主解读共用 llm_client + schema 护栏；独立 prompt，避免与 #93 长文互相挤占。
+# ---------------------------------------------------------------------------
+_PLAIN_SYS = """你是 A 股小白的行情翻译官。给你一只股票的行情/技术面/资金筹码/板块/快讯数据，
+请用大白话讲清楚「现在是什么状况」和「要注意什么」。仅输出 JSON：
+{"explain":"≤120字大白话","watch":["注意点1"]}
+
+规则（违反会被代码拒绝、白费 Token）：
+- explain 用 2~3 句大白话：先说价格和资金在做什么（有主力流入就说、没有别编），
+  再说技术面偏多还是偏空；把术语（换手率/主力净额/均线/获利盘）换成生活化说法，
+  引用具体数字；≤120 字；
+- watch 列 1~2 条「现在要留意的事」：基于给定数据的风险或条件式提示
+  （如「主力在流出，反弹可能是诱多」「获利盘 90%，抛压重」），≤40 字每条；
+- 只能基于给定数据，禁止编造；不是投资建议。
+用 ```json 代码块包裹输出，例如：
+```json
+{"explain":"…","watch":["…"]}
+```"""
+
+
+def _plain_prompt(ctx: Dict[str, Any]) -> str:
+    """复用 _ctx_prompt 的维度渲染，套上「讲给小白听」的任务说明。"""
+    return "请把以下数据翻译成小白能懂的话：\n" + _ctx_prompt(ctx)
+
+
+def _validate_plain(obj: Dict[str, Any]) -> Dict[str, Any]:
+    out: Dict[str, Any] = {}
+    ex = obj.get("explain")
+    if isinstance(ex, str) and ex.strip() and len(ex) <= 200:
+        out["explain"] = ex.strip()
+    w = obj.get("watch")
+    if isinstance(w, list):
+        keep = [x.strip() for x in w if isinstance(x, str) and x.strip() and len(x) <= 60]
+        if 1 <= len(keep) <= 3:
+            out["watch"] = keep
+    return out if out.get("explain") else {}
+
+
+def plain(ctx: Dict[str, Any], override: Optional[Dict[str, Any]] = None) -> Optional[dict]:
+    """调 LLM 产大白话 JSON。异常上抛，由 analyze_stock 兜住。"""
+    import llm_client
+    raw = llm_client.chat([{"role": "system", "content": _PLAIN_SYS},
+                           {"role": "user", "content": _plain_prompt(ctx)}],
+                          max_tokens=400, temperature=0.4, override=override)
+    obj = _parse_json(raw)
+    return _validate_plain(obj) if obj else None
+
+
+# ---------------------------------------------------------------------------
+# A（常驻缓存）：同 code+hours 在 TTL 内复用上次结果，命中不消耗配额。
+# 模块级 dict 即可——单进程 uvicorn，无需 Redis；重启即失效，可接受。
+# ---------------------------------------------------------------------------
+_CACHE: Dict[str, Any] = {}
+_CACHE_TTL = float(os.environ.get("TICK_ANALYZE_TTL", "1800"))   # 默认 30 分钟
+
+
+def _cache_key(code: str, hours: int) -> str:
+    return f"{str(code).strip().lower()}|{int(hours)}"
+
+
+def cached(code: str, hours: int = 24) -> Optional[Dict[str, Any]]:
+    """命中且未过期返回缓存结果（附 cache_age 秒），否则 None。不触 LLM、不查配额。"""
+    hit = _CACHE.get(_cache_key(code, hours))
+    if hit and time.time() - hit["at"] < _CACHE_TTL:
+        res = dict(hit["res"])
+        res.pop("ai_quota", None)                  # 配额随每次扣减变化，不缓存
+        res["cache_age"] = int(time.time() - hit["at"])
+        res["cached"] = True
+        return res
+    return None
+
+
+def analyze_stock(code: str, hours: int = 24, refresh: bool = False,
+                  with_plain: bool = True,
                   override: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """主入口：build_context → LLM 解读 → schema 校验 → 降级为纯数据摘要。
 
-    返回 {"ok", "data_only", "ctx", "llm"}：
+    返回 {"ok", "data_only", "ctx", "llm", "plain"}：
       data_only=True  = LLM 不可用/schema 不过，只有原始数据摘要（不报错）；
-      data_only=False = 附上通过校验的 llm 解读。
+      data_only=False = 附上通过校验的 llm 解读；
+      plain           = C 小白视角 {explain, watch}，LLM 不可用时为 None。
+    refresh=False 且 TTL 内命中缓存 → 直接返回，不触 LLM。
     """
+    if not refresh:
+        hit = cached(code, hours)
+        if hit is not None:
+            return hit
     ctx = build_context(code, hours=hours)
     if not ctx.get("ok"):
         return {"ok": False, "reason": ctx.get("reason", "无可用数据"),
-                "data_only": True, "ctx": ctx, "llm": None}
-    base = {"ok": True, "data_only": True, "ctx": ctx, "llm": None}
+                "data_only": True, "ctx": ctx, "llm": None, "plain": None}
+    base = {"ok": True, "data_only": True, "ctx": ctx, "llm": None, "plain": None}
     try:
         import llm_client                          # 放 try 内：import 失败也降级
         obj = analyze(ctx, override=override)
     except Exception:
-        return base                                # LLM 不可用 → 纯数据摘要
-    if obj is None:
-        return base
-    v = _validate(obj)
+        return base                                # LLM 不可用 → 纯数据摘要（不缓存，下次可重试）
+    v = _validate(obj) if obj else {}
+    pl = None
+    if with_plain:
+        try:
+            pl = plain(ctx, override=override)
+        except Exception:
+            pl = None
     if not v:
-        return base                                # schema 不过 → 纯数据摘要
-    return {"ok": True, "data_only": False, "ctx": ctx, "llm": v}
+        # 主解读失败：不写长缓存——降级多是 LLM 临时抖动，锁 30 分钟会让用户
+        # 反复进页都只看到「纯数据摘要」。让下次进页重试更合理。
+        res = dict(base)
+        res["plain"] = pl                          # 主解读失败但小白视角成功也用上
+        return res
+    res = {"ok": True, "data_only": False, "ctx": ctx, "llm": v, "plain": pl}
+    _CACHE[_cache_key(code, hours)] = {"at": time.time(), "res": res}
+    return res
 
 
 def selfcheck() -> int:
@@ -308,17 +450,40 @@ def selfcheck() -> int:
         def _boom(*a, **k):
             raise RuntimeError("boom")
         llm_client.chat = _boom
-        r = analyze_stock("sh600519")
+        r = analyze_stock("sh600519", refresh=True)
         ok("analyze_stock：LLM 异常 → 纯数据摘要(data_only)",
            r["ok"] and r["data_only"] and r.get("llm") is None)
         llm_client.chat = lambda *a, **k: "解读\n```json\n" + json.dumps(good, ensure_ascii=False) + "\n```"
-        r2 = analyze_stock("sh600519")
+        r2 = analyze_stock("sh600519", refresh=True)
         ok("analyze_stock：LLM 正常 → 附加解读", r2["ok"] and not r2["data_only"] and r2["llm"]["score"] == 68)
+        # plain 用独立 mock：主解读与小白视角各要一份 schema，按 prompt 里的关键词分流
+        _plain_mock = json.dumps({"explain": "主力在流入，技术面偏多，但股价已连涨需防回调", "watch": ["获利盘偏高"]}, ensure_ascii=False)
+        llm_client.chat = lambda msgs, **k: ("```json\n" + _plain_mock + "\n```"
+            if any("小白" in (m.get("content") or "") for m in msgs)
+            else "```json\n" + json.dumps(good, ensure_ascii=False) + "\n```")
+        r2p = analyze_stock("sh600519", refresh=True)
+        ok("analyze_stock：plain 小白视角解析", bool(r2p.get("plain") and r2p["plain"].get("explain")))
         llm_client.chat = lambda *a, **k: '```json\n{"foo":"bar"}\n```'
-        r3 = analyze_stock("sh600519")
+        r3 = analyze_stock("sh600519", refresh=True)
         ok("analyze_stock：schema 不过 → 纯数据摘要", r3["ok"] and r3["data_only"])
+        # A 缓存：第一次 refresh=True 写缓存，第二次默认应命中（不调 LLM）
+        calls = {"n": 0}
+        def _count(*a, **k):
+            calls["n"] += 1
+            return "```json\n" + json.dumps(good, ensure_ascii=False) + "\n```"
+        llm_client.chat = _count
+        analyze_stock("sh600519", refresh=True)
+        n1 = calls["n"]
+        r_c = analyze_stock("sh600519")            # 默认读缓存
+        ok("A 缓存：TTL 内命中不调 LLM", calls["n"] == n1 and r_c.get("cached") is True)
+        ok("cached()：TTL 内返回且带 cache_age", (cached("sh600519") or {}).get("cache_age") is not None)
+        _cached_res = _CACHE.get(_cache_key("sh600519", 24))
+        if _cached_res:
+            _cached_res["at"] = 0.0                 # 手动过期
+        ok("cached()：过期返回 None", cached("sh600519") is None)
     finally:
         llm_client.chat, globals()["build_context"] = _orig_chat, _orig_bc
+        _CACHE.clear()                              # 清掉自检污染
     ok("build_context：空代码 → ok False", build_context("").get("ok") is False)
     print(f"stock_analyzer selfcheck: {'OK' if fails == 0 else str(fails) + ' 失败'}")
     return fails
