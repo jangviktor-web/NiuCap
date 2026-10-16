@@ -218,6 +218,63 @@ def do_verify():
     return tot
 
 
+def do_audit(sample: int = 120, tol: float = 0.02):
+    """体检：随机抽样，查库内历史段与实时源是否同口径。
+
+    为什么需要这个而不是只靠 rebuild：导致本次污染的那个机制还在——
+    sync_bars 的增量预筛是「尾部日期够新 + 根数够多 → 整只跳过」，
+    它**不会回头检查历史段的口径**。所以只要将来又有人换口径灌过一次
+    历史，同样的病还会复发，而且同样是静默的（K 线看着有、值不对）。
+    把抽检做成常跑的命令，比事后靠用户发现止损算错要好。
+
+    判定：库内「60 日前的最近 3 根」收盘价 vs 新拉 qfq 同日期值，中位
+    倍率偏离 1 超过 tol 即报脏。用 60 日前是为了避开尾部刚同步过的段，
+    专挑「预筛会跳过、因而最可能没人管」的历史段。
+    """
+    import random
+    print("═" * 66)
+    print(f"口径体检：随机抽 {sample} 只，查历史段是否仍与 qfq 同口径")
+    print("═" * 66)
+    c = _conn()
+    allc = [r["code"] for r in c.execute(
+        "SELECT DISTINCT code FROM daily_bars ORDER BY code")]
+    # 只看有足够历史的，太新的股票没有「历史段」可查
+    allc = [x for x in allc
+            if c.execute("SELECT COUNT(*) n FROM daily_bars WHERE code=?", (x,)).fetchone()["n"] >= 60]
+    picked = random.sample(allc, min(sample, len(allc)))
+    bad = []
+    t0 = time.time()
+    for code in picked:
+        cut = c.execute(
+            "SELECT date FROM daily_bars WHERE code=? ORDER BY date DESC LIMIT 1 OFFSET 59",
+            (code,)).fetchone()
+        if not cut:
+            continue
+        old = c.execute(
+            "SELECT date, close FROM daily_bars WHERE code=? AND date<=?"
+            " ORDER BY date DESC LIMIT 3", (code, cut["date"])).fetchall()
+        bars, _ = fetch(code)
+        qmap = {b["date"]: b["close"] for b in (bars or [])}
+        ratios = [o["close"] / qmap[o["date"]] for o in old
+                  if qmap.get(o["date"]) and o["close"]]
+        if not ratios:
+            continue
+        ratios.sort()
+        med = ratios[len(ratios) // 2]
+        if abs(med - 1.0) > tol:
+            bad.append((code, round(med, 4)))
+    c.close()
+    print(f"\n  抽样 {len(picked)} 只，耗时 {time.time()-t0:.0f}s")
+    if not bad:
+        print("  ✓ 未发现口径不一致——库内日线口径统一（全为 qfq）")
+        return 0
+    print(f"  ✗ 发现 {len(bad)} 只口径不一致（历史段疑似旧口径残留）：")
+    for code, r in bad[:40]:
+        print(f"      {code:<12} 倍率={r}")
+    print("\n  修复：python3 scripts/rebuild_bars_qfq.py --scope all")
+    return 1
+
+
 def main():
     ap = argparse.ArgumentParser(description="把 daily_bars 历史段重灌为 qfq")
     ap.add_argument("--scope", default="all", choices=["all", "hs300", "codes"],
@@ -227,8 +284,12 @@ def main():
     ap.add_argument("--workers", type=int, default=4, help="落库并发（默认4）")
     ap.add_argument("--dry-run", action="store_true", help="只抽样比对，不写库")
     ap.add_argument("--verify", action="store_true", help="只做复验扫描，不写库")
+    ap.add_argument("--audit", action="store_true",
+                    help="随机抽样体检口径一致性（建议定期跑）")
     args = ap.parse_args()
 
+    if args.audit:
+        return do_audit(args.limit or 120)
     if args.verify:
         do_verify()
         return 0
