@@ -4920,6 +4920,33 @@ def api_market_breadth(
 
 
 # ===========================================================================
+# 宏观风向 + 黄金行情（同花顺黄金数据中心 / 10jqka 报价聚合，见 server/ths_gold.py）
+#
+# 两个接口都带 TTL 缓存 + 失败静默降级返回 {}：前端收到空对象即隐藏对应
+# 卡片，不留错误占位（黄金数据是锦上添花，不该拖垮面板其它部分）。
+# ===========================================================================
+
+@app.get("/api/macro")
+def api_macro():
+    try:
+        import ths_gold
+        return ths_gold.macro_snapshot()
+    except Exception as e:
+        print(f"[ths-gold] api_macro 失败：{e}")
+        return {}
+
+
+@app.get("/api/gold_quotes")
+def api_gold_quotes():
+    try:
+        import ths_gold
+        return ths_gold.gold_quotes()
+    except Exception as e:
+        print(f"[ths-gold] api_gold_quotes 失败：{e}")
+        return {}
+
+
+# ===========================================================================
 # 静态前端
 # ===========================================================================
 

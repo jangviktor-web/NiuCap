@@ -1157,6 +1157,26 @@ td .starbtn{font-size:16px}
       </div>
     </div>
 
+    <!-- 宏观风向（同花顺黄金数据中心 · 日更 T-1）—— 无数据整卡隐藏，不占位 -->
+    <div class="card" id="macroCard" style="display:none">
+      <div class="card-h">
+        <h2>🌐 宏观风向</h2>
+        <div class="meta" id="macroMeta">加载中…</div>
+      </div>
+      <div class="card-b" id="macroBody"></div>
+    </div>
+
+    <!-- 黄金行情（10jqka 报价聚合 · 伦敦金/积存金/AU9999/AUTD）—— 无数据整卡隐藏 -->
+    <div class="card" id="goldCard" style="display:none">
+      <div class="card-h">
+        <h2>🥇 黄金行情</h2>
+        <div class="meta" id="goldMeta">加载中…</div>
+      </div>
+      <div class="card-b np">
+        <div class="tblw"><div id="goldBody"></div></div>
+      </div>
+    </div>
+
     <!-- 盘前竞价（同花顺）—— 无 Key / 无数据时整卡隐藏，不占位 -->
     <div class="card" id="auctionCard" style="display:none">
       <div class="card-h">
@@ -7160,7 +7180,7 @@ function loadAbout(){
       '<div style="font-size:13px;line-height:1.9;color:var(--tx2)">' +
       '<p><b>功能说明</b></p>' +
       '<p>· <b>小白选股</b>：面向完全不懂股票的人。不用填任何条件，从四套方案里挑一个最像自己想法的——<b>稳健白马</b>（怕亏本金、想拿住）、<b>超跌反弹</b>（想捡便宜）、<b>成长活跃</b>（想赚快钱）、<b>打板热点</b>（就想追最热的票）——点一下即出结果。每只票都会给一个 <b>0~100 友好度评分</b>，并用大白话逐条说明「为什么选它」，配市值档位、估值档位等标签，可一键跳个股详情。评分不是玄学：每套方案有独立的评分函数，逐项加分并在理由里标明依据；最终得分按全市场排名压到 40~98 区间，避免出现「人人 99 分」。<b>超跌反弹</b>会真的拉取日K计算「20 日跌幅」与「距 60 日高点回撤」，只保留跌得够透且刚站上 5 日均线的票（因行情接口限流，该方案由后台预计算，结果最多滞后一个刷新周期）。</p>' +
-      '<p>· <b>市场榜单</b>：涨幅榜、跌幅榜、成交额榜、换手率榜、市值榜、低估值榜，快速把握市场结构。</p>' +
+      '<p>· <b>市场榜单</b>：涨幅榜、跌幅榜、成交额榜、换手率榜、市值榜、低估值榜，快速把握市场结构；同页还有市场温度（盘中实时综合评分）、市场宽度、市场情绪周期、<b>宏观风向</b>（降息概率/实际利率/期限利差/恐慌指数，日更）与 <b>黄金行情</b>（伦敦金/积存金/AU9999/AUTD 六品种）。</p>' +
       '<p>· <b>市场温度</b>：<b>〔实时〕</b>市场综合评分（集合竞价/盘中/午休/收盘后当日显示，由两市涨跌家数、涨停跌停、成交额环比三路信号合成 0-60 量表，交易时段每 60s 刷新、收盘后为当日冻结快照并改标「收盘」；盘前/周末/节假日回落盘后）；<b>〔盘后〕</b>13 维市场画像（短期/中长期趋势、估值水平、成交量能、风格轮动、板块宽度、技术指标、情绪指标、大小盘轮动等，由腾讯自选股 westock 收盘后统一重算，盘中显示上一交易日，作为实时评分下方的「收盘」参考）；<b>〔实时〕</b>两市涨跌家数、涨停跌停家数、成交额与环比变化（今日盘中快照，盘前/周末/节假日为上一交易日）。</p>' +
       '<p>· <b>市场热点</b>：<b>人气热榜</b>（同花顺特色数据，含热度值与排名变动）、<b>龙虎榜</b>（净买额/买入额/卖出额）、<b>行业榜</b>（124 个行业涨跌幅 + 主力净流入 + 5 日净额 + 换手率 + 上涨家数 + 领涨股）、<b>涨停池 / 连板天梯 / 炸板池 / 异动解读</b>。<i>热榜与涨停系数据来自同花顺 hithink 特色数据接口，龙虎榜与行业榜来自 westock</i>。</p>' +
       '<p>· <b>策略选股</b>：' + stg.total + ' 个内置策略（趋势形态/量价涨停/反转波动/形态相似度/经典指标/分钟级六类），支持多策略并集/交集组合，秒级扫描全市场，结果标注命中策略。<i>借鉴 tick-stock-panel 的内置策略体系</i>。</p>' +
@@ -7179,6 +7199,8 @@ function loadAbout(){
         '<tr><td>市场温度·13维画像</td><td><span class="ktag ktag-eod">盘后</span></td><td>上游收盘后统一重算，盘中显示上一交易日</td></tr>' +
         '<tr><td>市场宽度</td><td><span class="ktag ktag-live">实时</span><span class="ktag ktag-live">收盘</span><span class="ktag ktag-eod">盘后</span></td><td>今日广度（涨跌/涨停）为今日盘中快照，交易时段每 60s 刷新、收盘后冻结；历史序列（站上 MA20 / 新高新低 / Chop 分位）为 T-1 收盘后生成；盘前/周末/节假日只显示历史序列</td></tr>' +
         '<tr><td>市场情绪周期</td><td><span class="ktag ktag-live">实时</span><span class="ktag ktag-live">收盘</span><span class="ktag ktag-eod">盘后</span></td><td>实时连板梯队（高度/首板/二板/晋级率）与今日主线为今日盘中快照，交易时段每 60s 刷新、收盘后冻结；6 阶段定级仍基于 T-1 收盘日线，盘中相位仅作未确认参考</td></tr>' +
+        '<tr><td>宏观风向</td><td><span class="ktag ktag-eod">盘后</span></td><td>降息概率 / 10Y 美债实际利率 / 10Y-2Y 期限利差 / 恐慌指数，同花顺黄金数据中心日更（T-1），不参与盘中轮询</td></tr>' +
+        '<tr><td>黄金行情</td><td><span class="ktag ktag-live">实时</span><span class="ktag ktag-eod">盘后</span></td><td>伦敦金现 / 三家银行积存金 / AU9999 / AUTD 六品种，60s 刷新；按行情时间距当前 <15 分钟标「实时」，否则「盘后」</td></tr>' +
         '<tr><td>市场榜单</td><td><span class="ktag ktag-live">实时</span></td><td>实时快照排名</td></tr>' +
         '<tr><td>快讯</td><td><span class="ktag ktag-live">实时</span></td><td>双源滚动推送（断流时显示最近缓存）</td></tr>' +
         '<tr><td>自选股</td><td><span class="ktag ktag-live">实时</span></td><td>实时行情报价</td></tr>' +
@@ -7191,7 +7213,7 @@ function loadAbout(){
       '<p>· 数据源：腾讯财经行情/K线接口（多域自动降级：ifzq → proxy.finance → web.ifzq）；股票池来自中证指数公司成分股清单。</p>' +
       '<p>· 计算核心：复用 <code>a-stock-data-quant</code> 技能的 MyTT 指标库与策略引擎（内置 71 个指标函数，面板已启用其中 ' + ind.total + ' 项），与命令行工具口径一致。</p>' +
       '<p>· 指标库同时对接 <code>Klang</code> 技能（MyTT + Ashare）的方法论，通道与多股对比口径与之对齐。</p>' +
-      '<p>· 扩展数据源：<code>westock</code>（腾讯自选股）提供资金流向、筹码、三大报表、研报公告、市场总评、龙虎榜与行业榜；<code>hithink-finance</code>（同花顺）提供人气热榜、涨停池、连板天梯、炸板池与异动解读。两者均不可用时对应模块自动降级，不影响核心行情与回测功能。</p>' +
+      '<p>· 扩展数据源：<code>westock</code>（腾讯自选股）提供资金流向、筹码、三大报表、研报公告、市场总评、龙虎榜与行业榜；<code>hithink-finance</code>（同花顺）提供人气热榜、涨停池、连板天梯、炸板池与异动解读；同花顺黄金数据中心提供宏观风向四指标（日更），10jqka 报价聚合提供黄金行情六品种。各源均不可用时对应模块自动降级（隐藏卡片），不影响核心行情与回测功能。</p>' +
       '<p>· 行情缓存：股票池快照约 3 分钟自动刷新，个股数据实时请求。</p>' +
       moduleHtml +
       adminHtml +
@@ -8482,6 +8504,111 @@ function renderMarketPhase(){
 }
 
 /* =========================================================================
+   宏观风向（同花顺黄金数据中心 · 日更 T-1）
+   -------------------------------------------------------------------------
+   /api/macro：降息概率 / 10Y 美债实际利率 / 10Y-2Y 期限利差 / 恐慌指数。
+   日更数据不参与盘中轮询，整卡标「盘后」；接口无数据（{}）时整卡隐藏。
+   ========================================================================= */
+function hideCard(id){ var c = $(id); if(c) c.style.display = 'none'; }
+
+function loadMacro(){
+  var card = $('macroCard'), body = $('macroBody'), meta = $('macroMeta');
+  if(!body || !card) return;
+  api('/api/macro').then(function(d){
+    if(!d || !d.ok || (!d.fed_rate && !d.real_yield && !d.term_spread && !d.fear_index)){
+      hideCard('macroCard'); return;
+    }
+    card.style.display = '';
+    var asOf = (d.real_yield && d.real_yield.date) || (d.term_spread && d.term_spread.date)
+      || (d.fear_index && d.fear_index.date) || '—';
+    meta.innerHTML = '<span class="ktag ktag-eod" title="日更数据，滞后一个交易日">盘后</span>'
+      + ' 数据日 ' + asOf + ' · 来源：同花顺黄金数据中心';
+
+    function delta(x){
+      if(x == null || x.prev == null) return '前值 —';
+      var dv = x.value - x.prev;
+      return '较前值 ' + (dv > 0 ? '+' : '') + dv.toFixed(2);
+    }
+    var h = '<div class="tempgrid">';
+    // 降息概率：最近一场会议的最高概率区间
+    var fr = d.fed_rate;
+    if(fr){
+      var frSub = fr.meeting + ' 会议 · ' + fr.top_range + 'bp' + (fr.is_in_range ? '（当前区间）' : '')
+        + (fr.second_range ? ' · 次选 ' + fr.second_range + 'bp ' + fmt(fr.second_prob, 1) + '%' : '');
+      h += '<div class="tempkpi" title="CME 联邦基金利率概率：' + esc(frSub) + '"><div class="k">降息概率（' + esc(fr.top_range) + 'bp）</div>'
+        + '<div class="v up">' + fmt(fr.top_prob, 1) + '%</div><div class="s">' + esc(frSub) + '</div></div>';
+    }
+    // 实际利率：与金价天然负相关，附对照金价
+    var ry = d.real_yield;
+    if(ry && ry.value != null){
+      h += '<div class="tempkpi" title="10Y 美债 TIPS 实际利率，与金价通常负相关"><div class="k">10Y 实际利率</div>'
+        + '<div class="v">' + fmt(ry.value, 2) + '%</div><div class="s">' + delta(ry)
+        + (ry.gold != null ? ' · 伦敦金 ' + fmt(ry.gold, 2) : '') + '</div></div>';
+    }
+    // 期限利差
+    var ts = d.term_spread;
+    if(ts && ts.value != null){
+      h += '<div class="tempkpi" title="10Y-2Y 美债期限利差，深度倒挂常伴随衰退担忧"><div class="k">10Y-2Y 期限利差</div>'
+        + '<div class="v">' + fmt(ts.value, 2) + '%</div><div class="s">' + delta(ts) + '</div></div>';
+    }
+    // 恐慌指数
+    var fx = d.fear_index;
+    if(fx && fx.value != null){
+      var lvl = fx.value >= 30 ? '高恐慌区' : (fx.value >= 20 ? '中性波动区' : '低恐慌区');
+      h += '<div class="tempkpi" title="VIX 恐慌指数：<20 低恐慌 / 20~30 中性 / >30 高恐慌"><div class="k">恐慌指数（VIX）</div>'
+        + '<div class="v">' + fmt(fx.value, 2) + '</div><div class="s">' + delta(fx) + ' · ' + lvl + '</div></div>';
+    }
+    h += '</div>';
+    h += '<div style="margin-top:10px;font-size:12px;color:var(--tx3)">利率与避险指标日更（T-1），'
+      + '实际利率下行、恐慌升温通常利多黄金；数据仅供参考，不构成投资建议。</div>';
+    body.innerHTML = h;
+  }).catch(function(){ hideCard('macroCard'); });
+}
+
+/* =========================================================================
+   黄金行情（10jqka 报价聚合 · 盘中）
+   -------------------------------------------------------------------------
+   /api/gold_quotes：伦敦金现 + 3 家银行积存金 + AU9999 + AUTD 六品种。
+   按最新行情时间与当前时间的差距标「实时/盘后」，60s 轮询；
+   接口无数据（{}）时整卡隐藏。
+   ========================================================================= */
+function loadGold(){
+  var card = $('goldCard'), body = $('goldBody'), meta = $('goldMeta');
+  if(!body || !card) return;
+  api('/api/gold_quotes').then(function(d){
+    var quotes = ((d && d.quotes) || []).filter(function(q){ return q['最新价'] != null; });
+    if(!quotes.length){ hideCard('goldCard'); return; }
+    card.style.display = '';
+    // 最新行情时间（ISO 串可直接字典序比大小）
+    var latest = quotes.reduce(function(a, q){ return (q['行情时间'] || '') > (a || '') ? (q['行情时间'] || '') : a; }, '');
+    var fresh = false;
+    if(latest){
+      var t = new Date(latest.replace(' ', 'T')).getTime();
+      fresh = isNaN(t) ? false : (Date.now() - t) < 15 * 60 * 1000;
+    }
+    meta.innerHTML = (fresh
+        ? '<span class="ktag ktag-live" title="行情时间距现在 15 分钟内">实时</span>'
+        : '<span class="ktag ktag-eod" title="最新行情时间已超过 15 分钟（休市或数据源停更）">盘后</span>')
+      + ' 行情时间 ' + (latest ? latest.slice(5) : '—') + ' · 60s 刷新';
+    var h = '<table><thead><tr><th class="l">品种</th><th>最新价</th><th>涨跌幅</th><th>涨跌额</th>'
+      + '<th>昨收</th><th>行情时间</th></tr></thead><tbody>';
+    quotes.forEach(function(q){
+      var pct = q['涨跌幅'];
+      h += '<tr><td class="l"><b>' + esc(q['品种']) + '</b></td>'
+        + '<td class="' + cls(pct) + '">' + fmt(q['最新价'], 2) + '</td>'
+        + '<td class="' + cls(pct) + '"><b>' + (pct == null ? '—' : sign(pct) + '%') + '</b></td>'
+        + '<td class="' + cls(pct) + '">' + (q['涨跌额'] == null ? '—' : sign(q['涨跌额'], 2)) + '</td>'
+        + '<td>' + (q['昨收价'] == null ? '—' : fmt(q['昨收价'], 2)) + '</td>'
+        + '<td style="color:var(--tx3)">' + esc(q['行情时间'] || '—') + '</td></tr>';
+    });
+    h += '</tbody></table>';
+    h += '<div style="margin-top:8px;font-size:11.5px;color:var(--tx3)">积存金为银行报价（按克），'
+      + '伦敦金现/AU9999/AUTD 为交易所行情；夜盘时段正常更新。数据仅供参考，不构成投资建议。</div>';
+    body.innerHTML = h;
+  }).catch(function(){ hideCard('goldCard'); });
+}
+
+/* =========================================================================
    市场热点（同花顺特色数据 + westock 榜单）
    ========================================================================= */
 var hotState = { loaded: false, cur: 'hotrank', data: null };
@@ -9744,14 +9871,18 @@ loadStrategyList();
 loadPatternDims();
 loadMoves();       // 预取异动计数（表格默认隐藏，切到该项时再渲染）
 loadMarketTemp();
+loadMacro();       // 宏观风向（日更，只拉一次）
+loadGold();        // 黄金行情（盘中，60s 轮询）
 // 市场温度 / 市场宽度：今日已有盘中数据的时段（竞价/交易/午休/收盘后当日）
 // 每 60s 刷新，让「盘中综合评分」「今日实时广度」真正跳动；收盘后数据冻结
 // 但仍刷新一次以把标签从「实时」翻成「收盘」。盘前/周末/节假日 changedist
 // 是上一交易日快照，没必要轮询，故这些时段不刷。
+// 黄金行情是近 24h 连续市场，不设时段门控；服务端有 60s 缓存兜底。
 (function(){
   setInterval(function(){
     var open = !!(window.mktHasToday && window.mktHasToday());
     if(open){ loadMarketTemp(); loadBreadth(); }
+    loadGold();
   }, 60000);
 })();
 
