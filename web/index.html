@@ -11131,14 +11131,26 @@ function fmtTime(ts){
 }
 
 /* 解析代码/名称 → 规范代码 */
+/* 交易时段判定在两处用：本块（doBuy/doSell）和末尾 IIFE（时钟＋按钮禁用）。
+   实现在 IIFE 里，此处通过 window 取；取不到（脚本顺序意外）时**放行**，
+   让后端 market_state 守卫做硬拦截——比前端静默失效好。 */
+function ppTradable(){
+  var f = window.mktPaperTradable;
+  return (typeof f === 'function') ? f() : true;
+}
+function ppSessionLine(){
+  var f = window.mktPaperSessionLine;
+  return (typeof f === 'function') ? f() : '非交易时段';
+}
+
 function doBuy(){
   var q = ($('ppBuyCode').value || '').trim();
   var qty = parseInt($('ppBuyQty').value, 10);
   var price = ($('ppBuyPrice').value || '').trim();
   if(!q){ wtToast('请填写股票代码或名称'); return; }
   if(!qty || qty <= 0){ wtToast('请填写买入数量'); return; }
-  if(!paperTradable()){
-    wtToast('当前' + paperSessionLine() + '，虚拟盘仅在交易时段可买卖'); return;
+  if(!ppTradable()){
+    wtToast('当前' + ppSessionLine() + '，虚拟盘仅在交易时段可买卖'); return;
   }
   resolveStock(q).then(function(it){
     if(!it) { wtToast('没找到「' + q + '」'); return; }
@@ -11160,8 +11172,8 @@ function doBuy(){
 }
 
 function doSell(code, name, qty, priceStr){
-  if(!paperTradable()){
-    wtToast('当前' + paperSessionLine() + '，虚拟盘仅在交易时段可买卖'); return;
+  if(!ppTradable()){
+    wtToast('当前' + ppSessionLine() + '，虚拟盘仅在交易时段可买卖'); return;
   }
   var body = { code: code, qty: qty };
   if(priceStr) body.price = parseFloat(priceStr);
@@ -11507,6 +11519,11 @@ document.addEventListener('click', function(ev){
       note.style.color = on ? '' : 'var(--tx3)';
     }
   }
+  // ponytail: doBuy/doSell 在另一个 <script> 块（独立顶层作用域），拿不到本 IIFE
+  // 内的私有函数——曾因此让「买入」静默失效（点下去只抛 ReferenceError）。
+  // 挂到 window 上跨块共享；比把 doBuy/doSell 搬进来改动小得多。
+  window.mktPaperTradable = paperTradable;
+  window.mktPaperSessionLine = paperSessionLine;
   var clockEl=document.getElementById('mktClock');
   function renderMktClock(){
     if(!clockEl) return;

@@ -78,7 +78,11 @@ def _tradable():
          "print(app.ds.market_state().get('state'))"],
         capture_output=True, text=True,
         cwd="/workspace/tick-stock-panel").stdout.strip()
-    return out in ("trading", "auction")
+    # 只认第一行：import app 会顺带往 stdout 打日志（如 "[history-md] ..."），
+    # 整串比 'trading' 永远不相等 —— 这个 bug 让 _tradable() 恒为 False，
+    # 盘中跑也总走「非交易时段」分支，把 3 个用例刷成假 FAIL。
+    first = out.splitlines()[0].strip() if out else ""
+    return first in ("trading", "auction")
 
 
 def main():
@@ -152,17 +156,30 @@ def main():
     # ---------- 3. ETF 免印花税 ----------
     # 价格不能写死：虚拟盘按当日真实成交区间校验，隔天价格一漂就会
     # 报「买入价超出当日成交区间」，看着像功能坏了，其实是用了昨天的价。
+    def _last_json(out):
+        """取子进程 stdout 里最后一行能解析成 JSON 的作为结果。
+
+        import app 会往 stdout 打日志（"[history-md] ..."），直接
+        json.loads(整体) 必然抛异常 —— 之前这让 day_mid() 恒返回 None，
+        测试退化到写死价（4.0），盘中一开区间校验就假 FAIL。
+        """
+        for line in reversed((out or "").splitlines()):
+            line = line.strip()
+            if line[:1] in "{[":
+                try:
+                    return json.loads(line)
+                except Exception:
+                    continue
+        return None
+
     def day_mid(code):
         out = subprocess.run(
             [sys.executable, "-c",
              "import sys; sys.path.insert(0,'server'); import app, json;"
              f"print(json.dumps(app._day_range('{code}')))"],
             capture_output=True, text=True,
-            cwd="/workspace/tick-stock-panel").stdout.strip()
-        try:
-            r0 = json.loads(out)
-        except Exception:
-            return None
+            cwd="/workspace/tick-stock-panel").stdout
+        r0 = _last_json(out)
         return round((r0["low"] + r0["high"]) / 2, 2) if r0 else None
 
     etf_px = day_mid("sh510300") or 4.0
@@ -177,7 +194,7 @@ def main():
          f"print(store.seed_test_position({uid},'sh600519',100,{stk_px},'贵州茅台'))"],
         capture_output=True, text=True, cwd="/workspace/tick-stock-panel")
     rec("造昨日仓（ETF + 股票，供费率断言）",
-        seed.stdout.strip().count("'ok': True") == 2,
+        seed.stdout.count("'ok': True") == 2,
         seed.stderr[-160:] or seed.stdout.strip()[:160])
 
     st, d = req("POST", "/api/trade/sell",
@@ -197,6 +214,15 @@ def main():
         f"股票卖 {stk_fee_at} / ETF卖 {etf_fee_at} / 差额 {stk_fee_at - etf_fee_at:.2f}")
 
     # ---------- 4. T+1：当日买入当日不可卖 ----------
+    # 前置：上面两只昨日仓必须已卖光（取决于第 3 段断言真的通过）。
+    # 否则「可卖量」里还留着昨日仓，当日买入的 100 股就不是唯一可卖来源，
+    # T+1 断言会被持仓污染成假 FAIL —— 显式前置，别让失败伪装成通过。
+    st, pos = req("GET", "/api/trade/positions")
+    held = next((it.get("qty") for it in (pos.get("items") or [])
+                 if it.get("code") == "sh600519"), 0)
+    rec("T+1 前置：昨日茅台仓已清空", not held,
+        f"sh600519 持有={held}（应为 0）")
+
     # 用实时价买入（不传 price，避开手填价区间校验），再立即卖出应被 400 拦下
     st, d = req("POST", "/api/trade/buy", {"code": "sh600519", "qty": 100})
     rec("当日买入成功（实时价）", st == 200, f"status={st} {d}")
