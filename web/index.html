@@ -755,6 +755,7 @@ td .starbtn{font-size:16px}
   font-size:12px;padding:3px 9px;border-radius:6px;cursor:pointer}
 .pprow button.buy:hover{border-color:var(--accent);color:var(--accent)}
 .pprow button.sell:hover{border-color:var(--up);color:var(--up)}
+.pprow button.detail:hover{border-color:var(--tx3);color:var(--tx)}
 /* 虚拟盘登录遮罩 */
 .ppg{text-align:center;padding:28px 16px}
 .ppg .ppgi{font-size:34px;margin-bottom:10px}
@@ -978,16 +979,6 @@ td .starbtn{font-size:16px}
 .gs-wrap.open .gs-h .gs-ar{transform:rotate(90deg)}
 .gs-b{display:none;padding:13px 15px}
 .gs-wrap.open .gs-b{display:block}
-.gs-sec{margin-bottom:16px}
-.gs-sec:last-child{margin-bottom:0}
-.gs-sec-h{display:flex;align-items:baseline;gap:8px;font-size:13px;font-weight:700;
-  color:var(--tx);padding-bottom:6px;border-bottom:1px solid var(--line2);margin-bottom:8px}
-.gs-sec-h .gs-cnt{font-size:11.5px;font-weight:400;color:var(--tx3);margin-left:auto}
-.gs-sec-h .gs-net{font-size:11px;font-weight:700;padding:1px 6px;border-radius:20px;
-  white-space:nowrap}
-.gs-net.pos{background:color-mix(in srgb,var(--up) 16%,transparent);color:var(--up)}
-.gs-net.neg{background:color-mix(in srgb,var(--down) 16%,transparent);color:var(--down)}
-.gs-net.neu{background:var(--line);color:var(--tx3);font-weight:400}
 .gs-pt{list-style:none;font-size:12.8px;line-height:1.62;color:var(--tx2);
   padding-left:16px;position:relative;margin-bottom:5px}
 .gs-pt::before{content:'▸';position:absolute;left:2px;color:var(--accent)}
@@ -1025,6 +1016,9 @@ td .starbtn{font-size:16px}
 .st-name:hover{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
 .st-jump{font-style:normal;font-size:11px;color:var(--accent);opacity:.7;font-weight:700}
 .st-name:hover .st-jump{opacity:1}
+/* 板块名不可跳转时（全球领先信号卡片）：去掉指针与 hover 变色，避免误导点击 */
+.st-name.nojump{cursor:default}
+.st-name.nojump:hover{color:var(--tx);text-decoration:none}
 
 /* ============ 板块成分股弹窗 ============ */
 .modal{position:fixed;inset:0;z-index:1000;display:none;align-items:center;justify-content:center}
@@ -6882,40 +6876,63 @@ function loadGlobalSignals(){
     function dirLbl(x){ return x==='pos' ? '<span class="gs-dir pos">利好</span>'
                         : x==='neg' ? '<span class="gs-dir neg">利空</span>'
                         : '<span class="gs-dir neu">中性</span>'; }
-    function netBadge(v){
-      var n = parseFloat(v)||0;
-      var cls = n > 0.15 ? 'pos' : (n < -0.15 ? 'neg' : 'neu');
-      var txt = cls==='pos' ? '偏多 +'+n.toFixed(2) : cls==='neg' ? '偏空 '+n.toFixed(2) : '中性';
-      return '<span class="gs-net '+cls+'" title="板块净方向 = Σw(利好) − Σw(利空) 再除以总权重；'
-        + 'w 为多源共识权重（N 家报同一条 → w=1+0.35·log₂N）">'+txt+'</span>';
-    }
-    var h = '';
+    var cards = '';
     secs.forEach(function(s){
-      h += '<div class="gs-sec"><div class="gs-sec-h">' + esc(s.sector)
-        + netBadge(s.net)
-        + '<span class="gs-cnt">' + (s.count||0) + ' 条故事</span></div>';
-      (s.points || []).forEach(function(p){
-        var w = (p.w && p.w > 1) ? '<span class="gs-w" title="多源共识权重">'+p.w.toFixed(2)+'×</span>' : '';
-        h += '<li class="gs-pt">' + dirLbl(p.dir) + w + (p.url
-          ? '<a href="' + attr(p.url) + '" target="_blank" rel="noopener">' + esc(p.t) + ' ↗</a>'
-          : esc(p.t)) + '</li>';
+      var pts = s.points || [];
+      var net = parseFloat(s.net) || 0;
+      // 与板块舆情同一套配色口径：净情绪 >0.1 红（涨/利好）、<-0.1 绿、中间灰
+      var col = net < -0.1 ? 'var(--down)' : (net > 0.1 ? 'var(--up)' : 'var(--flat)');
+      var arrow = net < -0.1 ? '▼' : (net > 0.1 ? '▲' : '─');
+      // 三色条按 AI 要点的方向分布；AI 关时 points 为空 → 全中性
+      var nPos = 0, nNeg = 0, nNeu = 0;
+      pts.forEach(function(p){
+        if(p.dir === 'pos') nPos++;
+        else if(p.dir === 'neg') nNeg++;
+        else nNeu++;
       });
+      var tot = nPos + nNeu + nNeg;
+      var posP = tot ? Math.round(nPos / tot * 100) : 0;
+      var negP = tot ? Math.round(nNeg / tot * 100) : 0;
+      var neuP = tot ? Math.max(0, 100 - posP - negP) : 100;
+      cards += '<div class="st-card"><div class="st-head">'
+        + '<span class="st-name nojump">' + esc(s.sector) + '</span>'
+        + '<span class="st-net" style="color:' + col + '" title="板块净方向 = Σw(利好) − Σw(利空) 再除以总权重；'
+        + 'w 为多源共识权重（N 家报同一条 → w=1+0.35·log₂N）">'
+        + arrow + ' ' + net.toFixed(2) + '</span></div>'
+        + '<div class="st-bar"><span class="st-seg pos" style="width:' + posP + '%"></span>'
+        + '<span class="st-seg neu" style="width:' + neuP + '%"></span>'
+        + '<span class="st-seg neg" style="width:' + negP + '%"></span></div>'
+        + '<div class="st-counts"><b style="color:var(--up)">利好 ' + nPos + '</b> · '
+        + '<span style="color:var(--flat)">中性 ' + nNeu + '</span> · '
+        + '<b style="color:var(--down)">利空 ' + nNeg + '</b>'
+        + (tot ? ' · 共 ' + tot + ' 条要点' : ' · AI 未启用') + '</div>';
+      if(pts.length){
+        cards += '<ul class="st-samples">';
+        pts.forEach(function(p){
+          var w = (p.w && p.w > 1) ? '<span class="gs-w" title="多源共识权重">'+p.w.toFixed(2)+'×</span>' : '';
+          cards += '<li class="gs-pt">' + dirLbl(p.dir) + w + (p.url
+            ? '<a href="' + attr(p.url) + '" target="_blank" rel="noopener">' + esc(p.t) + ' ↗</a>'
+            : esc(p.t)) + '</li>';
+        });
+        cards += '</ul>';
+      }
       var items = s.items || [];
       if(items.length){
-        h += '<div class="gs-items">';
+        cards += '<div class="gs-items">';
         items.slice(0, 8).forEach(function(it){
           var n = it.src_n || 1;
           var tag = n > 1
             ? '<span class="gs-src multi" title="' + esc((it.sources||[]).join('、')) + '">' + n + '源</span>'
             : '<span class="gs-src">' + esc((it.sources||[''])[0]) + '</span>';
-          h += '<div class="gs-it">' + tag + '<span>' + esc(it.title || it.orig || '') + '</span></div>';
+          cards += '<div class="gs-it">' + tag + '<span>' + esc(it.title || it.orig || '') + '</span></div>';
         });
-        h += '</div>';
+        cards += '</div>';
       }
-      h += '</div>';
+      cards += '</div>';
     });
     var m = d.meta || {};
-    h += '<div class="gs-meta">源 ' + (m.sources_ok||0) + '/' + (m.sources_total||0)
+    var h = '<div class="st-grid">' + cards + '</div>'
+      + '<div class="gs-meta">源 ' + (m.sources_ok||0) + '/' + (m.sources_total||0)
       + ' · 故事 ' + (m.stories||0) + ' 条 · 抓取于 ' + esc(m.fetched_at||'—')
       + (m.ai ? ' · <b>AI 提炼</b>' : ' · 未启用 AI')
       + '<br>「N源」= 有 N 家媒体在报同一条（共识级信号）；「利好/利空」为 AI 按产业基本面'
@@ -11034,7 +11051,7 @@ function renderPositions(items){
     '<th class="l">股票</th><th>持仓</th><th>成本价</th><th>现价</th><th>涨跌幅</th>' +
     '<th>市值</th><th>浮动盈亏</th><th>盈亏比例</th>' +
     '<th title="吊灯止损：近22日最高价 − 3×ATR(22)，随波动率移动">建议止损</th>' +
-    '<th class="ctr" style="width:132px">操作</th>' +
+    '<th class="ctr" style="width:152px">操作</th>' +
     '</tr></thead><tbody>';
   items.forEach(function(p){
     var pc = p.pnl == null ? 'flat' : (p.pnl > 0 ? 'up' : (p.pnl < 0 ? 'down' : 'flat'));
@@ -11052,11 +11069,15 @@ function renderPositions(items){
       '<td class="ctr"><div class="pprow">' +
         '<button class="buy" data-ppbuy="' + attr(p.code) + '" data-ppname="' + attr(p.name) + '">加仓</button>' +
         '<button class="sell" data-ppsell="' + attr(p.code) + '" data-ppname="' + attr(p.name) + '" data-ppqty="' + p.qty + '">卖出</button>' +
+        '<button class="detail" data-ppgo="' + attr(p.code) + '" title="查看 ' + attr(p.name) + ' 的个股分析">详情</button>' +
       '</div></td>' +
       '</tr>';
   });
   b.innerHTML = h + '</tbody></table>';
 
+  b.querySelectorAll('[data-ppgo]').forEach(function(el){
+    el.onclick = function(){ openStock(el.dataset.ppgo); };
+  });
   b.querySelectorAll('[data-ppbuy]').forEach(function(el){
     el.onclick = function(){
       $('ppBuyCode').value = el.dataset.ppbuy;
