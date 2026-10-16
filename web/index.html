@@ -975,6 +975,10 @@ td .starbtn{font-size:16px}
 .gs-h .gs-ic{font-size:16px}
 .gs-h .gs-t{font-size:14px;font-weight:650;color:var(--tx)}
 .gs-h .gs-sub{font-size:11.5px;color:var(--tx3);margin-left:auto}
+.gs-h .gs-at{font-size:11.5px;color:var(--tx3);white-space:nowrap;margin-left:10px;
+  font-variant-numeric:tabular-nums;cursor:help}
+/* 窄屏先保抓取时间（用户要能看出资讯新旧），副标题让位 */
+@media(max-width:640px){.gs-h .gs-sub{display:none}}
 .gs-h .gs-ar{font-size:11px;color:var(--tx3);transition:.2s}
 .gs-wrap.open .gs-h .gs-ar{transform:rotate(90deg)}
 .gs-b{display:none;padding:13px 15px}
@@ -6856,6 +6860,7 @@ function gsShellHtml(){
   return '<div class="gs-wrap" id="gsWrap"><div class="gs-h" id="gsHead">'
     + '<span class="gs-ic">🌐</span><span class="gs-t">全球领先信号</span>'
     + '<span class="gs-sub">海外权威源 · 中文要点 + 利好利空</span>'
+    + '<span class="gs-at" id="gsAt"></span>'
     + '<span class="gs-ar">▶</span></div>'
     + '<div class="gs-b" id="gsBody"><div class="load"><span class="spin"></span>加载中…</div></div></div>';
 }
@@ -6931,6 +6936,14 @@ function loadGlobalSignals(){
       cards += '</div>';
     });
     var m = d.meta || {};
+    // 抓取时间同步到折叠头：不展开也能看出资讯是什么时候的（收起态唯一可见处）
+    var at = $('gsAt');
+    if(at){
+      var raw = m.fetched_at || '';
+      var short = raw.length >= 16 ? raw.slice(5, 16) : (raw || '—');
+      at.textContent = '抓取于 ' + short;
+      at.title = '抓取于 ' + (raw || '未知') + ' · 交易日 09:15 与 12:45 各抓一次';
+    }
     var h = '<div class="st-grid">' + cards + '</div>'
       + '<div class="gs-meta">源 ' + (m.sources_ok||0) + '/' + (m.sources_total||0)
       + ' · 故事 ' + (m.stories||0) + ' 条 · 抓取于 ' + esc(m.fetched_at||'—')
