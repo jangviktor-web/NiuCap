@@ -377,6 +377,18 @@ def get_bars_batch(codes: Sequence[str], count: int = 500,
                     dropped += 1
                     continue
                 out.setdefault(code, []).append(r)
+
+    # 按日期升序重排（旧 → 新）。
+    # 翻页是 start=0/800/1600… 顺序累加的，每页内部是「旧→新」，但页与页
+    # 之间是「较新的一段在前、更早的一段在后」——直接拼接出来的序列不单调
+    # （实测 sh600519 count=2000：第 800 条是 2026-10-16，第 801 条跳回
+    # 2020-03-11）。调用方普遍按「列表首=最早、尾=最新」用：
+    # sync_bars 取 payload[-1]["date"] 记同步进度，翻页时就会把进度记成
+    # 最老的日期，导致下一轮增量预筛误判「根数不足」反复全量重拉。
+    # 排序同时让「护栏」的负值检查与入库顺序都稳定，成本 O(n log n)，n≤2700。
+    for _rows in out.values():
+        _rows.sort(key=lambda x: x.get("date") or "")
+
     # 护栏：qfq 复权在「历史分页段」(start>0) 复权因子损坏，会产出负值价格
     # （实测茅台 2015 段 714 根成块为负）。补多年历史务必用 adjust='hfq'
     # （锚定上市首日，分页安全）或 'none'；qfq 仅适合取最新段(count<=800)。
@@ -634,6 +646,18 @@ def selfcheck(verbose: bool = True) -> Dict[str, Any]:
     except Exception as e:
         step("单位校验", False, str(e)[:120])
         return out
+
+    # 翻页顺序：count>800 会走 start 翻页，必须合并成「旧→新」单调序列。
+    # 不查这个的话，调用方按「尾=最新」取的进度会被记成最老日期，
+    # 表现为增量同步反复全量重拉，而数据本身看着没错——很难发现。
+    try:
+        deep = get_bars_batch(["sh600519"], count=900)[("sh600519")]
+        ds = [b.get("date") or "" for b in deep]
+        step("翻页后按日期单调递增（旧→新）",
+             len(ds) > 800 and all(ds[i] <= ds[i + 1] for i in range(len(ds) - 1)),
+             f"{len(ds)} 根  {ds[0]} → {ds[-1]}")
+    except Exception as e:
+        step("翻页顺序校验", False, str(e)[:120])
 
     out["ok"] = all(s["ok"] for s in out["steps"])
     out["sample"] = data.get("sh600519", [])[-1:] or []

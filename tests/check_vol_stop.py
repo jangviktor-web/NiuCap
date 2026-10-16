@@ -88,8 +88,10 @@ def main():
     rec("注册测试账号", True, f"{uname}")
 
     # ---------- 1. 买入一只本地有日线的票 ----------
+    # 不传 price：写死价会随行情漂出「当日成交区间」被 400 拦下，
+    # 隔天跑就假 FAIL。不传则按实时价成交，正是本用例要的「真实持仓」。
     code = "sh600519"
-    st, d = req("POST", "/api/trade/buy", {"code": code, "qty": 100, "price": 1250})
+    st, d = req("POST", "/api/trade/buy", {"code": code, "qty": 100})
     if st != 200:
         rec(f"买入 {code}", False, f"status={st} {d}")
         return summary()
