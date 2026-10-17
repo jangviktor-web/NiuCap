@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
 <title>牛来选股面板 · A股量化选股与择时分析</title>
+<script>
+/* 主题必须在样式表之前定好，否则暗色用户首屏会闪一下白底 */
+try{ document.documentElement.dataset.theme = localStorage.getItem('npTheme') || 'dark'; }catch(e){}
+</script>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23f6465d'/%3E%3Cpath d='M7 22l6-8 5 5 7-11' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
 <script src="/static/vendor/echarts.min.js"></script>
 <script>
@@ -46,6 +50,32 @@ if (typeof echarts === 'undefined') {
   /* ponytail: 以下 4 个令牌此前从未定义却被引用 64 处，导致 var() 计算失败、
      全站次级文字/边框回退成近黑。补齐到既有语义色，消除根因 */
   --muted:var(--tx3); --tx1:var(--tx); --bg2:#161b21; --border:var(--line);
+  /* 图表（ECharts）配色令牌：JS 侧 ecv() 读取，切主题时图表随之换色 */
+  --ec-tip-bg:rgba(30,35,41,.97);  /* tooltip 背景 */
+  --ec-line:#2b3139;               /* tooltip 边框 + 坐标轴线 */
+  --ec-split:#2b3139;              /* 网格线 */
+  --ec-text:#929aa5;               /* 轴标签 / 图例文字 */
+  --focus-wash:rgba(252,213,53,.18);  /* 聚焦/选中着色（暗底用主强调黄） */
+  --on-primary:#181a20;         /* 主强调底上的字（暗：黄底黑字） */
+}
+/* 白天模式：只覆盖令牌，其余样式零改动。tint 回到「浅底 + 深字」——
+   暗色那套半透明叠加在白底上会发灰，深字也看不清。 */
+:root[data-theme="light"]{
+  --bg:#f5f6f8; --card:#ffffff; --line:#e6e8ec; --line2:#eef0f3;
+  --tx:#1a1d23; --tx2:#5a6270; --tx3:#8b93a1;
+  --up:#d9342b; --down:#12a15c; --flat:#8b93a1;
+  --accent:#1f5fd6; --accent-bg:#eef3fd; --accent-line:#d8e3ff;
+  --warn:#e08c1a; --warn-bg:#fff5e6; --warn-line:#f5dfb0;
+  --primary-active:#1a52bd;
+  --bg2:#f7f8fa;
+  --up-bg:#fdecec;   --up-line:#f8c9c9;   --up-bg-hi:#fbdcdc;   --up-on:#c62828;
+  --down-bg:#e9f7ee; --down-line:#c6e8d2; --down-bg-hi:#dff2e6; --down-on:#1f7a3d;
+  --warn-on:#8a5a08;
+  --neutral-bg:#f2f3f5; --neutral-line:#e2e4e8;
+  --shadow:0 1px 3px rgba(20,26,40,.06),0 1px 2px rgba(20,26,40,.04);
+  --ec-tip-bg:rgba(255,255,255,.97); --ec-line:#e6e8ec; --ec-split:#f0f2f5; --ec-text:#707a8a;
+  --focus-wash:rgba(31,95,214,.09);
+  --on-primary:#ffffff;         /* 浅：蓝底白字 */
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:var(--bg);color:var(--tx);
@@ -66,7 +96,7 @@ header{background:var(--card);border-bottom:1px solid var(--line);position:stick
 .searchbox{position:relative;flex:1;min-width:190px;max-width:380px}
 .searchbox input{width:100%;padding:8px 12px 8px 32px;border:1px solid var(--line);
   border-radius:8px;font-size:13px;background:var(--bg2);outline:none;transition:.15s;font-family:inherit}
-.searchbox input:focus{border-color:var(--accent);background:var(--card);box-shadow:0 0 0 3px rgba(252,213,53,.18)}
+.searchbox input:focus{border-color:var(--accent);background:var(--card);box-shadow:0 0 0 3px var(--focus-wash)}
 .searchbox .ico{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--tx3);font-size:13px}
 .sug{position:absolute;top:calc(100% + 4px);left:0;right:0;background:var(--card);border:1px solid var(--line);
   border-radius:8px;box-shadow:0 6px 22px rgba(20,26,40,.13);max-height:320px;overflow:auto;display:none;z-index:200}
@@ -178,8 +208,8 @@ tbody tr:hover{background:#f7f9fc}
 .btn{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:6px 12px;font-size:12.5px;
   color:var(--tx2);cursor:pointer;font-family:inherit;transition:.15s;white-space:nowrap}
 .btn:hover{border-color:var(--accent);color:var(--accent)}
-.btn.on{background:var(--accent);border-color:var(--accent);color:#181a20;font-weight:600}
-.btn.pri{background:var(--accent);border-color:var(--accent);color:#181a20;font-weight:600}
+.btn.on{background:var(--accent);border-color:var(--accent);color:var(--on-primary);font-weight:600}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:var(--on-primary);font-weight:600}
 .btn.pri:hover{background:var(--primary-active)}
 .btn:disabled{opacity:.5;cursor:not-allowed}
 
@@ -198,7 +228,7 @@ tbody tr:hover{background:#f7f9fc}
 .fg input,.fg select{width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:8px;
   font-size:13px;font-family:inherit;outline:none;background:var(--bg2);transition:.15s;min-width:0}
 .fg input:focus,.fg select:focus{border-color:var(--accent);background:var(--card);
-  box-shadow:0 0 0 3px rgba(252,213,53,.18)}
+  box-shadow:0 0 0 3px var(--focus-wash)}
 .fg .row span{color:var(--tx3);font-size:12px;flex-shrink:0}
 .presets{display:flex;gap:7px;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px dashed var(--line)}
 /* 条件选股筛选卡：基础指标/一句话/高级条件 三段之间的分区线
@@ -340,7 +370,7 @@ tbody tr:hover{background:#f7f9fc}
 .stratitem{border:1px solid var(--line);border-radius:8px;padding:9px 11px;cursor:pointer;
   background:var(--card);transition:.15s;position:relative}
 .stratitem:hover{border-color:var(--accent)}
-.stratitem.on{background:var(--accent);border-color:var(--accent);color:#181a20}
+.stratitem.on{background:var(--accent);border-color:var(--accent);color:var(--on-primary)}
 .stratitem.on .sd{color:rgba(255,255,255,.85)}
 .stratitem .sn{font-size:13px;font-weight:600;margin-bottom:3px}
 .stratitem .sd{font-size:11px;color:var(--muted);line-height:1.35}
@@ -630,7 +660,7 @@ tbody tr:hover{background:#f7f9fc}
   padding-left:18px;position:relative;margin-bottom:3px}
 .nbai-wt li::before{content:'⚠';position:absolute;left:0;color:#e08e1a}
 .nbai-st{padding:1px 8px;border-radius:9999px;font-size:11px;font-weight:700;
-  background:var(--accent);color:#181a20;margin-left:auto}
+  background:var(--accent);color:var(--on-primary);margin-left:auto}
 .nbai-q{margin-top:7px;font-size:12px;color:var(--tx3)}
 
 /* ===== 我的自选 ===== */
@@ -700,10 +730,10 @@ td .starbtn{font-size:16px}
 .ubtn{border:1px solid var(--line);background:var(--bg2,#fff);color:var(--tx1);
   font-size:13px;padding:7px 14px;border-radius:8px;cursor:pointer;white-space:nowrap}
 .ubtn:hover{border-color:var(--accent);color:var(--accent)}
-.ubtn.reg{background:var(--accent);color:#181a20;border-color:var(--accent)}
+.ubtn.reg{background:var(--accent);color:var(--on-primary);border-color:var(--accent)}
 .uinfo{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--tx2)}
 .uinfo b{color:var(--tx1);font-weight:600}
-.uavt{width:26px;height:26px;border-radius:50%;background:var(--accent);color:#181a20;
+.uavt{width:26px;height:26px;border-radius:50%;background:var(--accent);color:var(--on-primary);
   display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600}
 .uname{cursor:default}
 .ulogout{color:var(--tx3);cursor:pointer;font-size:12px}
@@ -1018,7 +1048,7 @@ td .starbtn{font-size:16px}
   display:flex;gap:6px;align-items:baseline}
 .gs-it .gs-src{flex:none;font-size:11px;padding:1px 5px;border-radius:4px;
   background:var(--line);color:var(--tx2)}
-.gs-it .gs-src.multi{background:var(--accent);color:#181a20;font-weight:700}
+.gs-it .gs-src.multi{background:var(--accent);color:var(--on-primary);font-weight:700}
 .gs-meta{font-size:12px;color:var(--tx3);margin-top:12px;padding-top:10px;
   border-top:1px solid var(--line2);line-height:1.6}
 /* 板块级催化剂（利空/利好词解析） */
@@ -1034,7 +1064,7 @@ td .starbtn{font-size:16px}
   background:var(--card);color:var(--tx2);border-radius:999px;cursor:pointer;
   transition:all .12s;font-family:inherit}
 .st-rbtn:hover{border-color:var(--tx3);color:var(--tx)}
-.st-rbtn.active{background:var(--accent);border-color:var(--accent);color:#181a20;font-weight:600}
+.st-rbtn.active{background:var(--accent);border-color:var(--accent);color:var(--on-primary);font-weight:600}
 /* 板块名可点击 → 跳成分股 */
 .st-name{cursor:pointer;transition:color .12s}
 .st-name:hover{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
@@ -1088,6 +1118,7 @@ td .starbtn{font-size:16px}
     <div class="uarea" id="uArea">
       <button class="ubtn" id="uLogin">登录 / 注册</button>
     </div>
+    <button class="ubtn" id="themeBtn" title="切换白天 / 夜间模式">☀ 白天</button>
   </div>
   <!-- ponytail: nav 原在 header 外（仅 header 吸顶）→ 页面一滚动，19 个页签的
        导航条就滚出视野，切页签必须回滚到顶。现挪进 header 内整体吸顶；
@@ -3912,23 +3943,23 @@ function drawStockMinute(d){
       openLine.push(String(dates[i]).slice(0, 10) === day ? m.day_open : null);
     }
     series.push({ name: '当日开盘', type: 'line', data: openLine, symbol: 'none',
-      lineStyle: { width: 1, color: '#707a8a', type: 'dashed' },
-      itemStyle: { color: '#707a8a' } });
+      lineStyle: { width: 1, color: ecv('--ec-text'), type: 'dashed' },
+      itemStyle: { color: ecv('--ec-text') } });
   }
   c.setOption({
     animation: false,
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' },
-      backgroundColor: 'rgba(255,255,255,.97)', borderColor: '#e6e8ec',
+      backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
       textStyle: { color: '#eaecef', fontSize: 12 } },
     legend: { data: ['K线','MA5','MA10','MA20'].concat(m.day_open ? ['当日开盘'] : []),
-      top: 0, textStyle: { fontSize: 11, color: '#929aa5' } },
+      top: 0, textStyle: { fontSize: 11, color: ecv('--ec-text') } },
     grid: { left: 56, right: 16, top: 32, bottom: 30 },
     xAxis: { type: 'category', data: dates, boundaryGap: true,
-      axisLine: { lineStyle: { color: '#e6e8ec' } },
-      axisLabel: { fontSize: 10.5, color: '#707a8a',
+      axisLine: { lineStyle: { color: ecv('--ec-line') } },
+      axisLabel: { fontSize: 10.5, color: ecv('--ec-text'),
         formatter: function(v){ return String(v).slice(5); } } },
-    yAxis: { scale: true, splitLine: { lineStyle: { color: '#f0f2f5' } },
-      axisLabel: { fontSize: 10.5, color: '#707a8a' } },
+    yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
+      axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
     dataZoom: [ { type: 'inside' }, { type: 'slider', height: 15, bottom: 4 } ],
     series: series
   }, true);
@@ -3954,6 +3985,25 @@ function kdjText(j){
 /* =========================================================================
    图表（ECharts）
    ========================================================================= */
+/* 读一个 CSS 变量当前计算值：图表配色随主题走，JS 不自己存一份色表 */
+function ecv(k){
+  return getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+}
+function renderThemeBtn(){
+  var b = $('themeBtn');
+  if(!b) return;
+  b.textContent = document.documentElement.dataset.theme === 'light' ? '🌙 夜间' : '☀ 白天';
+}
+function toggleTheme(){
+  var next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  document.documentElement.dataset.theme = next;
+  try{ localStorage.setItem('npTheme', next); }catch(e){}
+  renderThemeBtn();
+  /* ponytail: 图表数据没有缓存在 state 里（只有 minute 模式有），按主题重画要重新
+     取数，干脆整体 reload——<head> 已同步 data-theme，不会闪错主题。
+     要改成"只重画不刷页面"的话，先把最近一次 d/分钟响应存进 state.chartData 再调用各 draw*。 */
+  location.reload();
+}
 function ec(id){
   var dom = $(id);
   if(!dom) return null;
@@ -4047,16 +4097,16 @@ function drawCharts(d){
     c1.setOption({
       animation: false,
       tooltip: { trigger: 'axis', axisPointer: { type: 'cross' },
-        backgroundColor: 'rgba(255,255,255,.97)', borderColor: '#e6e8ec',
+        backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
         textStyle: { color: '#eaecef', fontSize: 12 } },
       legend: { data: ['K线','MA5','MA10','MA20','MA60'].concat(chanNames), top: 0,
-        textStyle: { fontSize: 11, color: '#929aa5' } },
+        textStyle: { fontSize: 11, color: ecv('--ec-text') } },
       grid: { left: 52, right: 16, top: 34, bottom: 34 },
       xAxis: { type: 'category', data: dates, boundaryGap: true,
-        axisLine: { lineStyle: { color: '#e6e8ec' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
-      yAxis: { scale: true, splitLine: { lineStyle: { color: '#f0f2f5' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
+        axisLine: { lineStyle: { color: ecv('--ec-line') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+      yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       dataZoom: [ { type: 'inside' }, { type: 'slider', height: 16, bottom: 4 } ],
       series: [ { name: 'K线', type: 'candlestick', data: ohlc,
         itemStyle: { color: '#f6465d', color0: '#0ecb81',
@@ -4070,16 +4120,16 @@ function drawCharts(d){
   if(c2){
     c2.setOption({
       animation: false,
-      title: { text: '成交量（手）', left: 0, top: 0, textStyle: { fontSize: 12, color: '#929aa5', fontWeight: 600 } },
+      title: { text: '成交量（手）', left: 0, top: 0, textStyle: { fontSize: 12, color: ecv('--ec-text'), fontWeight: 600 } },
       tooltip: { trigger: 'axis',
-        backgroundColor: 'rgba(255,255,255,.97)', borderColor: '#e6e8ec',
+        backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
         textStyle: { color: '#eaecef', fontSize: 12 } },
       grid: { left: 52, right: 16, top: 28, bottom: 28 },
       xAxis: { type: 'category', data: S.dates,
-        axisLine: { lineStyle: { color: '#e6e8ec' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
-      yAxis: { scale: true, splitLine: { lineStyle: { color: '#f0f2f5' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
+        axisLine: { lineStyle: { color: ecv('--ec-line') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+      yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       series: [ { name: '成交量', type: 'bar', data: S.volume.slice(-S.dates.length),
         itemStyle: { color: '#9aa3b0' } } ]
     });
@@ -4090,17 +4140,17 @@ function drawCharts(d){
   if(c3){
     c3.setOption({
       animation: false,
-      title: { text: 'MACD (12,26,9)', left: 0, top: 0, textStyle: { fontSize: 12, color: '#929aa5', fontWeight: 600 } },
+      title: { text: 'MACD (12,26,9)', left: 0, top: 0, textStyle: { fontSize: 12, color: ecv('--ec-text'), fontWeight: 600 } },
       tooltip: { trigger: 'axis',
-        backgroundColor: 'rgba(255,255,255,.97)', borderColor: '#e6e8ec',
+        backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
         textStyle: { color: '#eaecef', fontSize: 12 } },
-      legend: { data: ['DIF','DEA','MACD'], top: 0, right: 0, textStyle: { fontSize: 11, color: '#929aa5' } },
+      legend: { data: ['DIF','DEA','MACD'], top: 0, right: 0, textStyle: { fontSize: 11, color: ecv('--ec-text') } },
       grid: { left: 52, right: 16, top: 32, bottom: 28 },
       xAxis: { type: 'category', data: S.dates,
-        axisLine: { lineStyle: { color: '#e6e8ec' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
-      yAxis: { scale: true, splitLine: { lineStyle: { color: '#f0f2f5' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
+        axisLine: { lineStyle: { color: ecv('--ec-line') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+      yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       series: [
         { name: 'DIF', type: 'line', data: S.dif, symbol: 'none', lineStyle: { width: 1.2, color: '#1f5fd6' }, itemStyle: { color: '#1f5fd6' } },
         { name: 'DEA', type: 'line', data: S.dea, symbol: 'none', lineStyle: { width: 1.2, color: '#e08c1a' }, itemStyle: { color: '#e08c1a' } },
@@ -4116,17 +4166,17 @@ function drawCharts(d){
   if(c4){
     c4.setOption({
       animation: false,
-      title: { text: 'RSI (6,14)', left: 0, top: 0, textStyle: { fontSize: 12, color: '#929aa5', fontWeight: 600 } },
+      title: { text: 'RSI (6,14)', left: 0, top: 0, textStyle: { fontSize: 12, color: ecv('--ec-text'), fontWeight: 600 } },
       tooltip: { trigger: 'axis',
-        backgroundColor: 'rgba(255,255,255,.97)', borderColor: '#e6e8ec',
+        backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
         textStyle: { color: '#eaecef', fontSize: 12 } },
-      legend: { data: ['RSI6','RSI14'], top: 0, right: 0, textStyle: { fontSize: 11, color: '#929aa5' } },
+      legend: { data: ['RSI6','RSI14'], top: 0, right: 0, textStyle: { fontSize: 11, color: ecv('--ec-text') } },
       grid: { left: 52, right: 16, top: 32, bottom: 28 },
       xAxis: { type: 'category', data: S.dates,
-        axisLine: { lineStyle: { color: '#e6e8ec' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
-      yAxis: { min: 0, max: 100, splitLine: { lineStyle: { color: '#f0f2f5' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
+        axisLine: { lineStyle: { color: ecv('--ec-line') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+      yAxis: { min: 0, max: 100, splitLine: { lineStyle: { color: ecv('--ec-split') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       series: [
         { name: 'RSI6', type: 'line', data: S.rsi6, symbol: 'none', lineStyle: { width: 1.2, color: '#1f5fd6' }, itemStyle: { color: '#1f5fd6' },
           markLine: { silent: true, symbol: 'none',
@@ -4142,17 +4192,17 @@ function drawCharts(d){
   if(c5){
     c5.setOption({
       animation: false,
-      title: { text: 'KDJ (9,3,3)', left: 0, top: 0, textStyle: { fontSize: 12, color: '#929aa5', fontWeight: 600 } },
+      title: { text: 'KDJ (9,3,3)', left: 0, top: 0, textStyle: { fontSize: 12, color: ecv('--ec-text'), fontWeight: 600 } },
       tooltip: { trigger: 'axis',
-        backgroundColor: 'rgba(255,255,255,.97)', borderColor: '#e6e8ec',
+        backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
         textStyle: { color: '#eaecef', fontSize: 12 } },
-      legend: { data: ['K','D','J'], top: 0, right: 0, textStyle: { fontSize: 11, color: '#929aa5' } },
+      legend: { data: ['K','D','J'], top: 0, right: 0, textStyle: { fontSize: 11, color: ecv('--ec-text') } },
       grid: { left: 52, right: 16, top: 32, bottom: 28 },
       xAxis: { type: 'category', data: S.dates,
-        axisLine: { lineStyle: { color: '#e6e8ec' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
-      yAxis: { scale: true, splitLine: { lineStyle: { color: '#f0f2f5' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
+        axisLine: { lineStyle: { color: ecv('--ec-line') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+      yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       series: [
         { name: 'K', type: 'line', data: S.k, symbol: 'none', lineStyle: { width: 1.2, color: '#1f5fd6' }, itemStyle: { color: '#1f5fd6' } },
         { name: 'D', type: 'line', data: S.d, symbol: 'none', lineStyle: { width: 1.2, color: '#e08c1a' }, itemStyle: { color: '#e08c1a' } },
@@ -9128,10 +9178,10 @@ function renderBacktest(d, target){
       grid: { left: 62, right: 20, top: 26, bottom: 46 },
       tooltip: { trigger: 'axis', valueFormatter: function(v){ return Number(v).toFixed(2); } },
       xAxis: { type: 'category', data: navData.map(function(p){ return p[0]; }),
-               axisLabel: { fontSize: 11, color: '#707a8a' } },
+               axisLabel: { fontSize: 11, color: ecv('--ec-text') } },
       yAxis: { type: 'value', scale: true, name: '净值(初始=100)',
-               nameTextStyle: { fontSize: 11, color: '#707a8a' },
-               axisLabel: { fontSize: 11, color: '#707a8a' }, splitLine: { lineStyle: { color: '#eef0f3' } } },
+               nameTextStyle: { fontSize: 11, color: ecv('--ec-text') },
+               axisLabel: { fontSize: 11, color: ecv('--ec-text') }, splitLine: { lineStyle: { color: '#eef0f3' } } },
       series: [{
         type: 'line', showSymbol: false, smooth: true,
         data: navData.map(function(p){ return p[1]; }),
@@ -9139,7 +9189,7 @@ function renderBacktest(d, target){
         areaStyle: { color: 'rgba(252,213,53,.08)' },
         markLine: { silent: true, symbol: 'none',
           data: [{ yAxis: 100, lineStyle: { color: '#c8ccd4', type: 'dashed' },
-                   label: { formatter: '成本线', fontSize: 10, color: '#707a8a' } }] }
+                   label: { formatter: '成本线', fontSize: 10, color: ecv('--ec-text') } }] }
       }]
     });
     state.charts[target + 'Nav'] = c;
@@ -9543,7 +9593,7 @@ function renderGrid(d, el){
     // 档位水平线：上界/基准/下界，方便看价格相对档位的位置
     var bnd = [
       { yAxis: r.upper, name: '上界', color: '#f6465d' },
-      { yAxis: r.base_price, name: '基准', color: '#707a8a' },
+      { yAxis: r.base_price, name: '基准', color: ecv('--ec-text') },
       { yAxis: r.lower, name: '下界', color: '#0ecb81' }
     ].map(function(b){
       return { yAxis: b.yAxis,
@@ -9566,16 +9616,16 @@ function renderGrid(d, el){
     }].concat(mk);
     ck.setOption({
       animation: false,
-      legend: { data: ['K线', '买入', '卖出'], top: 0, textStyle: { fontSize: 11, color: '#929aa5' } },
+      legend: { data: ['K线', '买入', '卖出'], top: 0, textStyle: { fontSize: 11, color: ecv('--ec-text') } },
       tooltip: { trigger: 'axis', axisPointer: { type: 'cross' },
-        backgroundColor: 'rgba(255,255,255,.97)', borderColor: '#e6e8ec',
+        backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
         textStyle: { color: '#eaecef', fontSize: 12 } },
       grid: { left: 56, right: 20, top: 30, bottom: 44 },
       xAxis: { type: 'category', data: kd, boundaryGap: true,
-        axisLine: { lineStyle: { color: '#e6e8ec' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
-      yAxis: { scale: true, splitLine: { lineStyle: { color: '#f0f2f5' } },
-        axisLabel: { fontSize: 10.5, color: '#707a8a' } },
+        axisLine: { lineStyle: { color: ecv('--ec-line') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+      yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       dataZoom: [{ type: 'inside', start: zoomStart, end: 100 },
                  { type: 'slider', height: 16, bottom: 4, start: zoomStart, end: 100 }],
       series: sers
@@ -9599,10 +9649,10 @@ function renderGrid(d, el){
       grid: { left: 62, right: 20, top: 26, bottom: 46 },
       tooltip: { trigger: 'axis', valueFormatter: function(v){ return Number(v).toFixed(2); } },
       legend: { data: ['网格', '买入持有'], bottom: 0, textStyle: { fontSize: 11 } },
-      xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11, color: '#707a8a' } },
+      xAxis: { type: 'category', data: dates, axisLabel: { fontSize: 11, color: ecv('--ec-text') } },
       yAxis: { type: 'value', scale: true, name: '净值(初始=100)',
-               nameTextStyle: { fontSize: 11, color: '#707a8a' },
-               axisLabel: { fontSize: 11, color: '#707a8a' }, splitLine: { lineStyle: { color: '#eef0f3' } } },
+               nameTextStyle: { fontSize: 11, color: ecv('--ec-text') },
+               axisLabel: { fontSize: 11, color: ecv('--ec-text') }, splitLine: { lineStyle: { color: '#eef0f3' } } },
       series: [
         { name: '网格', type: 'line', showSymbol: false, smooth: true, data: nav,
           lineStyle: { width: 2, color: '#1f5fd6' }, areaStyle: { color: 'rgba(252,213,53,.08)' } },
@@ -10607,7 +10657,7 @@ function nbScoreColor(v){
   if(v >= 85) return '#0ecb81';
   if(v >= 70) return '#3f9e42';
   if(v >= 55) return '#d38b1f';
-  return '#929aa5';
+  return ecv('--ec-text');
 }
 
 function loadNewbiePresets(){
@@ -11111,6 +11161,9 @@ function afterLogin(){
     else fn();
   }
   ready(function(){
+    renderThemeBtn();
+    var tb = $('themeBtn');
+    if(tb) tb.onclick = toggleTheme;
     var lg = $('uLogin');
     if(lg) lg.onclick = function(){ openAuth('login'); };
     var cl = $('authClose');
