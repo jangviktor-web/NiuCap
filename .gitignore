@@ -26,3 +26,6 @@ cloudflared.tgz
 
 # codegraph 代码索引（由 codegraph init 生成，纯本地缓存）
 .codegraph/
+
+# 带时间戳的编辑前备份（bak_YYYYmmdd_*）
+*.bak_*
