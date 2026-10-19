@@ -556,6 +556,25 @@ CREATE TABLE IF NOT EXISTS daily_bars (
 CREATE INDEX IF NOT EXISTS idx_bars_code_date ON daily_bars(code, date DESC);
 CREATE INDEX IF NOT EXISTS idx_bars_date      ON daily_bars(date);
 
+-- 牛熊温度日序列：每天收盘后落一行，供趋势回看。
+-- 日期取上游画像自己的 date（不是今天）——上游画像可能落后一天，
+-- 用今天落库会把「昨天的数据」标成今天，趋势线就错了一格。
+CREATE TABLE IF NOT EXISTS bullbear_daily (
+    date         TEXT PRIMARY KEY,
+    score        REAL NOT NULL,
+    val_score    REAL,
+    cap_score    REAL,
+    emo_score    REAL,
+    tech_score   REAL,
+    band         TEXT,
+    pos_text     TEXT,
+    have         INTEGER,
+    total        INTEGER,
+    upstream_raw REAL,
+    updated_at   REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_bb_date ON bullbear_daily(date DESC);
+
 -- 落库任务进度（记录每只股票已同步到哪一天，支持增量拉取）
 CREATE TABLE IF NOT EXISTS bar_sync (
     code        TEXT PRIMARY KEY,
@@ -748,6 +767,22 @@ CREATE TABLE IF NOT EXISTS daily_bars (
 );
 
 -- 落库进度：记录每只股票已同步到哪一天，支持增量拉取
+CREATE TABLE IF NOT EXISTS bullbear_daily (
+    date         VARCHAR(10) PRIMARY KEY,
+    score        DOUBLE NOT NULL,
+    val_score    DOUBLE NULL,
+    cap_score    DOUBLE NULL,
+    emo_score    DOUBLE NULL,
+    tech_score   DOUBLE NULL,
+    band         VARCHAR(16) NULL,
+    pos_text     VARCHAR(32) NULL,
+    have         INT NULL,
+    total        INT NULL,
+    upstream_raw DOUBLE NULL,
+    updated_at   DOUBLE NOT NULL
+);
+CREATE INDEX idx_bb_date ON bullbear_daily(date DESC);
+
 CREATE TABLE IF NOT EXISTS bar_sync (
     code        VARCHAR(32) PRIMARY KEY,
     last_date   VARCHAR(16) NOT NULL DEFAULT '',
@@ -1207,6 +1242,33 @@ def purge_sessions(user_id: int) -> int:
 
 # meta 键值存取。配置项（数据源参数等）落这里，读时优先于环境变量。
 # 注意：_conn() 在 SQLite 下是 thread-local，管理页在请求线程里调用是安全的。
+
+def bullbear_daily_save(row: Dict[str, Any]) -> None:
+    """牛熊温度日序列落一行；同日重复调用覆盖（收盘后可能补跑/重算）。"""
+    c = _conn()
+    c.execute(
+        "REPLACE INTO bullbear_daily"
+        "(date,score,val_score,cap_score,emo_score,tech_score,band,pos_text,"
+        " have,total,upstream_raw,updated_at) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+        (row.get("date"), row.get("score"), row.get("val_score"),
+         row.get("cap_score"), row.get("emo_score"), row.get("tech_score"),
+         row.get("band"), row.get("pos_text"), row.get("have"),
+         row.get("total"), row.get("upstream_raw"), row.get("updated_at")))
+    c.commit()
+
+
+def bullbear_daily_list(days: int = 365) -> List[Dict[str, Any]]:
+    """最近 N 天的牛熊温度序列，按日期升序（画图用）。"""
+    c = _conn()
+    rows = c.execute(
+        "SELECT date,score,val_score,cap_score,emo_score,tech_score,band,pos_text,"
+        "have,total,upstream_raw FROM bullbear_daily "
+        "ORDER BY date DESC LIMIT ?", (int(days),)).fetchall()
+    out = [dict(r) for r in rows]
+    out.reverse()          # 上层画图要时间正序
+    return out
+
 
 def meta_get(k: str, default: Optional[str] = None) -> Optional[str]:
     c = _conn()

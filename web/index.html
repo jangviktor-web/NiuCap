@@ -597,6 +597,10 @@ tbody tr:hover{background:#f7f9fc}
 .bbdim .dots i.on{background:var(--accent)}
 .bbdim .st{flex:1;color:var(--tx3);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
 .bbnote{margin-top:14px;font-size:12px;color:var(--tx3);line-height:1.65}
+.bbsec{margin-top:18px}
+.bbh2{font-size:13px;font-weight:650;margin-bottom:8px;display:flex;align-items:baseline;gap:8px}
+.bbh2 .sub{font-size:11px;font-weight:400;color:var(--tx3)}
+.bbchart{height:240px}
 
 /* 关于页·数据时效对照表 */
 .about-tbl{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:6px;background:var(--card)}
@@ -7259,6 +7263,12 @@ function loadBullbear(){
       h += '</div>';
     });
     h += '</div>';
+    h += '<div class="bbsec"><div class="bbh2">情绪面六维' +
+      '<span class="sub">与上面四类是两套切分：六维只看情绪面，估值/量能不在雷达里</span></div>' +
+      '<div id="bbRadar" class="bbchart"></div></div>';
+    h += '<div class="bbsec"><div class="bbh2">温度趋势' +
+      '<span class="sub" id="bbTrendMeta"></span></div>' +
+      '<div id="bbTrend" class="bbchart"></div></div>';
     h += '<div class="bbnote">分数越高代表市场越热，建议仓位越低——90 分以上是「疯狂区」只配 0~10%，' +
       '20 分以下才是「冰点区」配到 60~80%，别按字面把高分当买入信号。' +
       '权重沿用外部模板（估值30/资金25/情绪25/技术20），未经本地拟合；' +
@@ -7268,8 +7278,105 @@ function loadBullbear(){
         ? '上游总评 ' + d.upstream.raw + '，量纲未公开，仅供对照、不参与本页计算。' : '') +
       '以上为统计口径的位置参考，不构成投资建议。</div>';
     el.innerHTML = h;
+    drawBBRadar((r && r.radar) || {});
+    // 历史序列单独取：与实时快照不是一个缓存粒度，且趋势图可以先空着
+    return api('/api/bullbear/history?days=365');
+  }).then(function(hr){
+    drawBBTrend(hr || {});
     scheduleBullbear();
   }).catch(function(e){ die(el, '市场温度加载失败：' + e.message); scheduleBullbear(); });
+}
+
+// 六档区间的背景色带：与温度条同源（--bb-* 的 10%~14% 透明度）
+var BB_BANDS_AREA = [
+  [0, 20, 'rgba(14,203,129,.10)'], [20, 40, 'rgba(126,217,154,.10)'],
+  [40, 60, 'rgba(252,213,53,.12)'], [60, 80, 'rgba(224,140,26,.12)'],
+  [80, 90, 'rgba(246,70,93,.12)'], [90, 100, 'rgba(192,34,57,.14)']
+];
+
+function drawBBRadar(rd){
+  var el = $('bbRadar');
+  if(!el) return;
+  if(!rd.ok){
+    el.innerHTML = '<div class="innote">情绪面维度暂不可用。</div>';
+    return;
+  }
+  var items = rd.items || [];
+  var c = ec('bbRadar');
+  if(!c) return;
+  c.setOption({
+    tooltip: { backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
+      textStyle: { color: ecv('--ec-text'), fontSize: 12 } },
+    radar: {
+      indicator: items.map(function(x){ return {name: x.name, max: 100}; }),
+      radius: '66%', center: ['50%', '54%'],
+      axisName: { fontSize: 12, color: ecv('--ec-text') },
+      axisLine: { lineStyle: { color: ecv('--ec-line') } },
+      splitLine: { lineStyle: { color: ecv('--ec-line') } },
+      splitArea: { areaStyle: { color: [ecv('--ec-split'), 'transparent'] } }
+    },
+    series: [{
+      type: 'radar', symbolSize: 4,
+      // 缺数维度回落 0 会把「没取到」画成「跌到谷底」，用 tooltip 说明即可，
+      // 但雷达会把 0 显示成塌陷的角——所以缺数时按 0 画并在标题标出 have/total
+      data: [{ name: '情绪面', value: items.map(function(x){
+          return x.score == null ? 0 : x.score; }),
+        itemStyle: { color: 'rgba(252,213,53,.9)' },
+        areaStyle: { color: 'rgba(252,213,53,.18)' },
+        lineStyle: { width: 2, color: 'rgba(252,213,53,.9)' } }]
+    }]
+  }, true);
+}
+
+function drawBBTrend(hr){
+  var el = $('bbTrend'), mt = $('bbTrendMeta');
+  if(!el) return;
+  var items = (hr && hr.items) || [];
+  if(!items.length){
+    el.innerHTML = '<div class="innote">温度序列尚无数据（收盘后自动落库，' +
+      '首次启用当天起开始积累）。</div>';
+    if(mt) mt.textContent = '尚未积累';
+    return;
+  }
+  if(mt) mt.textContent = items.length + ' 天 · ' + items[0].date + ' 起';
+  if(items.length < 2){
+    // 一个点画不出趋势线。13 维历史从未落过库，无法回补——与其画一条假线，
+    // 不如明说要攒几天。
+    el.innerHTML = '<div class="innote">已积累 ' + items.length + ' 天（' +
+      items[0].date + '，分数 ' + items[0].score + '）。' +
+      '温度序列每天收盘后落一行，攒够 2 天开始画趋势线；' +
+      '历史 13 维此前从未入库，无法回补。</div>';
+    return;
+  }
+  var c = ec('bbTrend');
+  if(!c) return;
+  c.setOption({
+    tooltip: { trigger: 'axis', backgroundColor: ecv('--ec-tip-bg'),
+      borderColor: ecv('--ec-line'),
+      textStyle: { color: ecv('--ec-text'), fontSize: 12 },
+      formatter: function(ps){
+        var p = ps && ps[0]; if(!p) return '';
+        return p.axisValue + '<br/>温度 ' + p.data + '（' +
+          (items[p.dataIndex] ? (items[p.dataIndex].band || '') : '') + '）';
+      } },
+    grid: { left: 44, right: 18, top: 16, bottom: 26 },
+    xAxis: { type: 'category', boundaryGap: false,
+      data: items.map(function(x){ return x.date; }),
+      axisLine: { lineStyle: { color: ecv('--ec-line') } },
+      axisLabel: { fontSize: 10.5, color: ecv('--ec-text'),
+        formatter: function(v){ return String(v).slice(5); } } },
+    yAxis: { min: 0, max: 100, splitLine: { lineStyle: { color: ecv('--ec-split') } },
+      axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+    series: [{
+      type: 'line', smooth: true, symbolSize: 4,
+      data: items.map(function(x){ return x.score; }),
+      lineStyle: { width: 2, color: 'rgba(252,213,53,.9)' },
+      itemStyle: { color: 'rgba(252,213,53,.9)' },
+      areaStyle: { color: 'rgba(252,213,53,.10)' },
+      markArea: { silent: true, data: BB_BANDS_AREA.map(function(b){
+          return [{ yAxis: b[0], itemStyle: { color: b[2] } }, { yAxis: b[1] }]; }) }
+    }]
+  }, true);
 }
 function scheduleBullbear(){
   if(bbState.timer) clearTimeout(bbState.timer);

@@ -255,6 +255,13 @@ def startup():
     except Exception as e:
         print(f"[sector-verify] 每日对账调度启动失败（不影响其他功能）：{e}")
 
+    # 牛熊温度日序列：收盘后落一行供趋势回看。历史只能从今天起攒，
+    # 启动时先补跑一次（后台线程），首日只有一个点属正常。
+    try:
+        bb.start_daily()
+    except Exception as e:
+        print(f"[bullbear] 每日落库调度启动失败（不影响其他功能）：{e}")
+
     # 服务启动补跑。原来是「今天必须已落库成功才补」——于是白天重启、
     # 或落库失败的次日重启，缓存就一直空着，要等到 16:30 才有数据。
     # 改成按缓存自身状态决定：
@@ -2904,13 +2911,25 @@ def api_market_overview():
 
 @app.get("/api/bullbear")
 def api_bullbear():
-    """牛熊温度 0-100 + 六档仓位建议（复用上游 13 维，不再单独取数）。"""
+    """牛熊温度 0-100 + 六档仓位建议 + 情绪面六维（复用上游 13 维，不再单独取数）。"""
     # 与 /api/market_overview 共用同一次上游结果：这里单独调一次是各自缓存命中，
     # 成本相同且互不阻塞——合并成一个接口会让「只要牛熊分」的请求白等涨跌分布。
+    ov = wst.market_overview()
     return {
-        "data": bb.score(wst.market_overview()),
+        "data": bb.score(ov),
+        "radar": bb.radar(ov),
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
+
+
+@app.get("/api/bullbear/history")
+def api_bullbear_history(days: int = Query(365, ge=1, le=1825)):
+    """牛熊温度日序列（收盘后落盘，随时间积累）。
+
+    注意：13 维历史此前从未落过库，序列只能从启用当天往后攒，
+    初期点数很少，前端按 count 判断并提示，不画假趋势。
+    """
+    return bb.history(days)
 
 
 @app.get("/api/lhb")
