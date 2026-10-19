@@ -2665,7 +2665,7 @@ function setupNavDrawer(){
   if(!drawer || !list || !toggles.length) return;
   // 按功能分组渲染（浅灰小标题），跳过 display:none 的隐藏项（hot/moves/未登录 admin）。
   var NAV_GROUPS = [
-    {label:'📊 看盘', items:['rank','theme','limitup','news']},
+    {label:'📊 看盘', items:['rank','bullbear','theme','limitup','news']},
     {label:'🔍 选股', items:['newbie','strategy','screen','etf','history']},
     {label:'📈 分析', items:['stock','compare','backtest']},
     {label:'⭐ 我的', items:['watch','paper','alerts','admin','about']},
@@ -2681,6 +2681,20 @@ function setupNavDrawer(){
     if(!its.length) return;
     html += '<div class="nd-group-h"><span class="gl">' + g.label + '</span></div>' + its.join('');
   });
+  // 兜底：NAV_GROUPS 是硬编码白名单，而 .tabs 栏默认 display:none
+  // （桌面端导航全走这个抽屉）——新增页签忘了同步到这里，就会「页面存在但
+  // 根本点不到」。把漏登记的可见页签自动补到末尾：归类粗糙点没关系，
+  // 入口够不着才是真问题。hot/moves 之类内联 display:none 的照旧跳过。
+  var listed = {};
+  NAV_GROUPS.forEach(function(g){ g.items.forEach(function(t){ listed[t] = 1; }); });
+  var extra = [];
+  document.querySelectorAll('.tabs button[data-tab]').forEach(function(b){
+    if(listed[b.dataset.tab] || b.style.display === 'none') return;
+    extra.push('<button class="nd-item" data-tab="' + b.dataset.tab + '">' + b.innerHTML + '</button>');
+  });
+  if(extra.length){
+    html += '<div class="nd-group-h"><span class="gl">🧩 其他</span></div>' + extra.join('');
+  }
   list.innerHTML = html;
   list.querySelectorAll('.nd-item').forEach(function(el){
     el.onclick = function(){ switchTab(el.dataset.tab); closeNavDrawer(); };
