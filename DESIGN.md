@@ -28,6 +28,13 @@ colors:
   accent-turquoise: "#2dbdb6"
   info: "#3b82f6"
   info-ring: "#3b82f6"
+  # ---- 温度仪表专用色（牛熊速查）：跨主题恒定，温度语义不随涨跌/强调色漂移 ----
+  gauge-cold: "#0ecb81"
+  gauge-mild: "#7ed99a"
+  gauge-warm: "#fcd535"
+  gauge-hot: "#e08c1a"
+  gauge-over: "#f6465d"
+  gauge-mad: "#c02239"
   # ---- 本项目暗色实现扩展（tick-stock-panel）----
   canvas-elevated: "#161b21"
   hairline-secondary: "#232a31"

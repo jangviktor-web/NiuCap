@@ -56,6 +56,10 @@ if (typeof echarts === 'undefined') {
   --ec-split:#2b3139;              /* 网格线 */
   --ec-text:#929aa5;               /* 轴标签 / 图例文字 */
   --focus-wash:rgba(252,213,53,.18);  /* 聚焦/选中着色（暗底用主强调黄） */
+  /* 温度仪表专用色（牛熊速查）：跨主题恒定——温度语义（绿=冷→红=热）不随
+     涨跌/强调色主题漂移，否则浅色下「黄档」会变成蓝（accent 是信息蓝） */
+  --bb-cold:#0ecb81; --bb-mild:#7ed99a; --bb-warm:#fcd535;
+  --bb-hot:#e08c1a; --bb-over:#f6465d; --bb-mad:#c02239;
   --on-primary:#181a20;         /* 主强调底上的字（暗：黄底黑字） */
 }
 /* 白天模式：只覆盖令牌，其余样式零改动。tint 回到「浅底 + 深字」——
@@ -567,6 +571,32 @@ tbody tr:hover{background:#f7f9fc}
 .dimcell .dots i.on{background:var(--accent)}
 .dimcell .st{font-size:11px;color:var(--tx3);max-width:100px;white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis;text-align:right}
+
+/* 牛熊速查：温度 0-100 + 六档仓位（配色全部走语义令牌，02/12 档共用令牌仅靠透明度区分） */
+.bbhero{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.bbhero .n{font-size:40px;font-weight:750;line-height:1;font-variant-numeric:tabular-nums;letter-spacing:-1px}
+.bbhero .band{display:flex;align-items:center;gap:7px;font-size:15px;font-weight:650}
+.bblight{width:12px;height:12px;border-radius:9999px;flex:none}
+.bblight.crimson{box-shadow:0 0 0 3px var(--up-bg)}
+.bbpos{font-size:13px;color:var(--tx2)}
+/* 温度条：6 个分段色块 + 指针。分段而非渐变——每段的边界就是档位切换点，是数据不是装饰 */
+.bbbar{position:relative;display:flex;height:9px;border-radius:9999px;overflow:hidden;margin-top:14px}
+.bbbar i{display:block;height:100%}
+.bbpin{position:absolute;top:-3px;width:3px;height:15px;border-radius:2px;background:var(--tx)}
+/* 四类明细：无边框分组，避免卡片里套卡片 */
+.bbgrp{display:grid;grid-template-columns:repeat(auto-fit,minmax(232px,1fr));gap:14px 22px;margin-top:16px}
+.bbh{display:flex;align-items:baseline;gap:8px;padding-bottom:6px;border-bottom:1px solid var(--line)}
+.bbh .nm{font-size:13px;font-weight:650}
+.bbh .w{font-size:11px;color:var(--tx3)}
+.bbh .sc{margin-left:auto;font-size:15px;font-weight:700;font-variant-numeric:tabular-nums}
+.bbdim{display:flex;align-items:center;gap:8px;font-size:12px;padding:5px 0;border-bottom:1px solid var(--line2)}
+.bbdim:last-child{border-bottom:none}
+.bbdim .nm{width:74px;color:var(--tx2);flex:none}
+.bbdim .dots{display:flex;gap:2px;flex:none}
+.bbdim .dots i{width:6px;height:6px;border-radius:2px;background:var(--line);display:block}
+.bbdim .dots i.on{background:var(--accent)}
+.bbdim .st{flex:1;color:var(--tx3);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+.bbnote{margin-top:14px;font-size:12px;color:var(--tx3);line-height:1.65}
 
 /* 关于页·数据时效对照表 */
 .about-tbl{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:6px;background:var(--card)}
@@ -1142,6 +1172,7 @@ td .starbtn{font-size:16px}
     <button data-tab="screen" data-group="pick">🎯 条件选股</button>
     <button data-tab="history" data-group="pick">📜 历史选股</button>
     <button data-tab="stock" data-group="analysis">📈 个股分析</button>
+    <button data-tab="bullbear" data-group="watch">🐂 牛熊速查</button>
     <button data-tab="limitup" data-group="watch">🔥 连板梯队</button>
     <button data-tab="theme" data-group="watch">🎯 题材雷达</button>
     <button data-tab="compare" data-group="analysis">⚖️ 多股对比</button>
@@ -2174,6 +2205,19 @@ td .starbtn{font-size:16px}
     </div>
   </div>
 
+  <!-- ================= 牛熊速查（温度 0-100 + 六档仓位） ================= -->
+  <div class="tab" id="tab-bullbear">
+    <div class="card">
+      <div class="card-h">
+        <h2>🐂 牛熊速查</h2>
+        <div class="meta" id="bbMeta">加载中…</div>
+      </div>
+      <div class="card-b" id="bbBody">
+        <div class="load"><span class="spin"></span>读取市场温度…</div>
+      </div>
+    </div>
+  </div>
+
   <!-- ================= 连板梯队 + 情绪周期（#100） ================= -->
   <div class="tab" id="tab-limitup">
     <div class="card">
@@ -2593,6 +2637,8 @@ function switchTab(want){
   // 懒加载：首次进入「条件选股」时拉取分钟扫描的预设条件
   // （扫描器已并入本页，不再是独立页签）
   if(want === 'screen' && !idState.presetLoaded) loadIntradayPresets();
+  // 懒加载：首次进入「牛熊速查」时拉取（#bullbear）
+  if(want === 'bullbear' && !bbState.loaded) loadBullbear();
   // 懒加载：首次进入「连板梯队」时拉取（#100）
   if(want === 'limitup' && !luState.loaded) loadLimitup();
   // 懒加载：首次进入「题材雷达」时拉取（#100）
@@ -7152,6 +7198,88 @@ var luState = { loaded: false, timer: null };
 var thState = { loaded: false, timer: null };
 var PHASE_LABEL = {ice:"冰点", ignite:"启动", rally:"主升", climax:"高潮", ebb:"退潮", repair:"修复"};
 var PHASE_COLOR = {ice:"#3b82f6", ignite:"#22c55e", rally:"#ef4444", climax:"#b91c1c", ebb:"#f59e0b", repair:"#94a3b8"};
+
+/* =========================================================================
+   牛熊速查：温度 0-100 + 六档仓位（#bullbear）
+   ========================================================================= */
+var bbState = {loaded:false, timer:null};
+// 信号灯与温度条配色：温度是独立语义（绿=冷→红=热），走跨主题恒定的
+// --bb-* 令牌，不随涨跌/强调色主题漂移
+var BB_LIGHT = {green:'var(--bb-cold)', lime:'var(--bb-mild)', yellow:'var(--bb-warm)',
+                orange:'var(--bb-hot)', red:'var(--bb-over)', crimson:'var(--bb-mad)'};
+// 与后端 bullbear._BANDS 一一对应，改档位必须两边一起改
+var BB_SEGS = [['green',20],['lime',20],['yellow',20],['orange',20],['red',10],['crimson',10]];
+
+function loadBullbear(){
+  var el = $('bbBody'), meta = $('bbMeta');
+  if(!el) return;
+  api('/api/bullbear').then(function(r){
+    bbState.loaded = true;
+    var d = (r && r.data) || {};
+    if(!d.ok){
+      die(el, '市场温度暂不可用：' + (d.error || '上游 13 维未就绪'));
+      meta.textContent = '数据暂缺';
+      scheduleBullbear();
+      return;
+    }
+    var b = d.band || {};
+    var lc = BB_LIGHT[b.light] || 'var(--accent)';
+    meta.innerHTML = (d.date ? esc(d.date) + ' · ' : '') +
+      '覆盖 ' + (d.coverage ? d.coverage.have + '/' + d.coverage.total : '—') + ' 维' +
+      (d.reweighted ? ' <span class="ktag" title="部分维度缺数，权重已按比例摊给其余类别，分数构成与常态不同">权重已重分配</span>' : '') +
+      (d.stale ? ' <span class="ktag ktag-eod">非当日</span>' : '');
+    var h = '<div class="bbhero">' +
+      // 分数/档位文字用中性色：仪表色（黄/橙）在浅色白底上当文字对比度只有 1.6:1，
+      // 温度含义交给旁边的信号灯色块和温度条传达
+      '<span class="n">' + Number(d.score).toFixed(1) + '</span>' +
+      '<span class="band"><span class="bblight ' + b.light + '" style="background:' + lc + '"></span>' + esc(b.name) + '</span>' +
+      '<span class="bbpos">建议仓位 <b>' + esc(b.pos_text) + '</b> · ' + esc(b.note || '') + '</span>' +
+      '</div>';
+    h += '<div class="bbbar">' + BB_SEGS.map(function(s){
+        return '<i class="' + s[0] + '" style="width:' + s[1] + '%;background:' +
+          (BB_LIGHT[s[0]] || 'var(--accent)') + '"></i>';
+      }).join('') +
+      '<span class="bbpin" style="left:calc(' + Number(d.score) + '% - 1px)"></span></div>';
+    h += '<div class="bbgrp">';
+    (d.groups || []).forEach(function(g){
+      h += '<div><div class="bbh"><span class="nm">' + esc(g.name) + '</span>' +
+        '<span class="w">权重 ' + Math.round(g.weight * 100) + '%</span>' +
+        '<span class="sc">' + (g.score == null
+          ? '<span style="color:var(--tx3)">缺数</span>' : Number(g.score).toFixed(0)) + '</span></div>';
+      (g.dims || []).forEach(function(x){
+        var dots = '';
+        for(var i = 1; i <= 5; i++) dots += '<i class="' + (i <= x.raw ? 'on' : '') + '"></i>';
+        h += '<div class="bbdim" title="' + esc(x.status) + '"><span class="nm">' + esc(x.name) +
+          '</span><span class="dots">' + dots + '</span><span class="st">' + esc(x.status) + '</span></div>';
+      });
+      if(g.missing && g.missing.length){
+        h += '<div class="bbdim"><span class="nm" style="color:var(--tx3)">' + esc(g.missing.join('/')) +
+          '</span><span class="st">未取到</span></div>';
+      }
+      h += '</div>';
+    });
+    h += '</div>';
+    h += '<div class="bbnote">分数越高代表市场越热，建议仓位越低——90 分以上是「疯狂区」只配 0~10%，' +
+      '20 分以下才是「冰点区」配到 60~80%，别按字面把高分当买入信号。' +
+      '权重沿用外部模板（估值30/资金25/情绪25/技术20），未经本地拟合；' +
+      '资金面目前只有「成交量能」一个维度撑着（两融/ERP/破净无稳定免费源，北向已停止实时披露），' +
+      '要看懂分数请展开各类明细而不是只盯总分。' +
+      (d.upstream && d.upstream.raw != null
+        ? '上游总评 ' + d.upstream.raw + '，量纲未公开，仅供对照、不参与本页计算。' : '') +
+      '以上为统计口径的位置参考，不构成投资建议。</div>';
+    el.innerHTML = h;
+    scheduleBullbear();
+  }).catch(function(e){ die(el, '市场温度加载失败：' + e.message); scheduleBullbear(); });
+}
+function scheduleBullbear(){
+  if(bbState.timer) clearTimeout(bbState.timer);
+  // 温度是日频画像，5 分钟轮询足够；连板那种 30s 的量级在这里只是白烧上游
+  bbState.timer = setTimeout(function(){
+    var on = $('tab-bullbear') && $('tab-bullbear').classList.contains('on');
+    if(on && !document.hidden && $('autoRef') && $('autoRef').checked) loadBullbear();
+    else scheduleBullbear();
+  }, 300000);
+}
 
 function loadLimitup(){
   var el = $('luBody'), meta = $('luMeta');

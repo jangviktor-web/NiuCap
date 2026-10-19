@@ -66,6 +66,7 @@ import newsfeed as nf
 import sentiment as senti
 import strategies as strat
 import westock as wst
+import bullbear as bb
 import hithink as htk
 import intent as itt
 import tdx as tdxc
@@ -2897,6 +2898,17 @@ def api_market_overview():
         "realtime_score": (wst.realtime_market_score()
                           if ds.today_session_data() else None),
         "available": wst.CLI_AVAILABLE,
+        "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    }
+
+
+@app.get("/api/bullbear")
+def api_bullbear():
+    """牛熊温度 0-100 + 六档仓位建议（复用上游 13 维，不再单独取数）。"""
+    # 与 /api/market_overview 共用同一次上游结果：这里单独调一次是各自缓存命中，
+    # 成本相同且互不阻塞——合并成一个接口会让「只要牛熊分」的请求白等涨跌分布。
+    return {
+        "data": bb.score(wst.market_overview()),
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
