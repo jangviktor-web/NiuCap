@@ -633,22 +633,40 @@ tbody tr:hover{background:#f7f9fc}
 /* 个股因子画像：一行一因子，左名字/中分位条/右值。
    分位条只表达「位置」，不表达好坏——同一个 80% 分位，对低波因子是
    「比历史更波动」，对动量因子是「比历史更强」，颜色若带褒贬会误导。 */
-.fsp-row{display:flex;align-items:center;gap:9px;font-size:12.5px;padding:4px 0;
+.fsp-row{display:flex;align-items:center;gap:10px;font-size:12.5px;padding:5px 0;
   border-bottom:1px solid var(--line2)}
 .fsp-row:last-child{border-bottom:none}
-.fsp-nm{width:120px;flex-shrink:0;color:var(--tx);white-space:nowrap;overflow:hidden;
+/* 140px 是按最长因子名「60日均成交额(对数)」(11 字，含全角括号) 实测定下的，
+   再窄就会截断成「60日均成交额(对...」——之前只有 108px 踩过这个坑 */
+.fsp-nm{width:140px;flex-shrink:0;color:var(--tx);white-space:nowrap;overflow:hidden;
   text-overflow:ellipsis}
-.fsp-cat{width:58px;flex-shrink:0;font-size:11px;color:var(--tx3)}
-.fsp-bar{flex:1;height:6px;background:var(--bg2);border-radius:2px;position:relative;
-  min-width:60px}
+.fsp-cat{width:52px;flex-shrink:0;font-size:11px;color:var(--tx3)}
+/* 分位条定宽而非 flex:1——README / 窄屏里让整行保持紧凑，避免 bar 拉过长
+   把右侧数值推到很远，视线要来回扫 */
+.fsp-bar{width:150px;flex-shrink:0;height:6px;background:var(--bg2);border-radius:2px;
+  position:relative}
 .fsp-bar i{position:absolute;top:0;bottom:0;left:0;border-radius:2px;
   background:var(--accent);opacity:.75}
-.fsp-pct{width:48px;flex-shrink:0;text-align:right;font-size:11.5px;
+.fsp-pct{width:44px;flex-shrink:0;text-align:right;font-size:11.5px;
   font-variant-numeric:tabular-nums;color:var(--tx2)}
-.fsp-val{width:74px;flex-shrink:0;text-align:right;font-variant-numeric:tabular-nums;
+.fsp-val{width:70px;flex-shrink:0;text-align:right;font-variant-numeric:tabular-nums;
   font-weight:600;color:var(--tx)}
 .fsp-lv{width:72px;flex-shrink:0;text-align:right;font-size:11px;color:var(--tx3);
   white-space:nowrap}
+/* 窄屏（手机）改两行布局：原来固定列宽合计 > 380px，会把「当前值 / 档位」
+   整个挤出屏幕——而这两列恰恰是最该看的。改为首行「名字 类别 值 档位」、
+   次行「分位条 百分比」，一行不丢、不用横滚。 */
+@media (max-width: 560px){
+  .fsp-row{flex-wrap:wrap;row-gap:6px;padding:8px 0}
+  .fsp-nm{order:1;width:auto;flex:1 1 auto;min-width:0;font-size:13px}
+  .fsp-cat{display:none}          /* 类别在窄屏信息价值最低，让位给数字 */
+  .fsp-val{order:2;width:70px}
+  .fsp-lv{order:3;width:66px;text-align:right}
+  .fsp-bar{order:4;width:auto;flex:1 1 auto;min-width:50px}
+  .fsp-pct{order:5;width:44px}
+  /* 表头在窄屏会与两行内容错位，直接隐藏——字段本身自解释 */
+  .fsp-head{display:none}
+}
 
 /* 关于页·数据时效对照表 */
 .about-tbl{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:6px;background:var(--card)}
@@ -10424,7 +10442,7 @@ function renderStockFactors(d, out){
     '<div class="meta">近 ' + d.days + ' 个交易日（' + esc(d.span[0]) + ' ~ ' + esc(d.span[1]) +
     '）· 12 个因子</div></div><div class="card-b">';
   // 表头
-  h += '<div class="fsp-row" style="font-size:11px;color:var(--tx3);border-bottom:1px solid var(--line)">' +
+  h += '<div class="fsp-row fsp-head" style="font-size:11px;color:var(--tx3);border-bottom:1px solid var(--line)">' +
     '<span class="fsp-nm">因子</span><span class="fsp-cat">类别</span>' +
     '<span class="fsp-bar" style="background:none;height:auto">历史分位</span>' +
     '<span class="fsp-pct">分位</span><span class="fsp-val">当前值</span>' +
