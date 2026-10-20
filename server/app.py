@@ -4852,6 +4852,89 @@ def api_factor_lab(
     return r
 
 
+@app.post("/api/factor_lab/explain")
+def api_factor_lab_explain(request: Request, body: Dict[str, Any] = Body(...)):
+    """因子实验室「一键 AI 解读」：把 IC/ICIR 检验结果翻译成小白大白话。
+
+    与 /api/newbie/explain（#224）同一范式，三处差异都有意为之：
+
+    1. **前端只传参数，不传结果。** 检验结果由后端 evaluate_cached 重取
+       （与 GET 同 key，前端刚跑过就是 0.07s 命中）。整份结果含 12 因子 ×
+       分层 × 市况分段，让前端回传既胖又给了客户端篡改数字的机会——
+       而解读的立论全在这些数字上，必须以后端算的为准。
+    2. **解读缓存命中不扣配额。** 同一份检验结果的解读 30 分钟内复用；
+       先 peek 再扣配额，命中直接返回。重复 LLM 调用有真实 Token 成本。
+    3. **LLM 未启用不扣配额。** is_ready() 是确定的事前判断，为此扣一次
+       每日限额说不过去（newbie 那边是调了才知道，这里能提前拦）。
+
+    登录与配额同 #216：模块开关默认要求登录（TICK_AUTH_REQ_FACTORAI），
+    登录用户每次扣 1 次当日配额（与「AI 深度分析」「小白讲解」共用配额池，
+    默认 10 次/天，后台「AI 用量」面板可调），先扣后调、失败不退款；
+    超额返回 429。LLM 不可用/输出不过 schema → llm=None + llm_error，
+    前端降级展示（不 500：页面脚注常驻说明口径，解读只是增强）。
+    """
+    import store as _store
+    import factor_ai
+
+    u = _require_module_login(request, "factoriai")
+    pool = str(body.get("pool") or "000300")
+    try:
+        forward = int(body.get("forward") or 5)
+        days = int(body.get("days") or 750)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "参数格式不对：forward/days 应为整数")
+    regime = bool(body.get("regime", True))
+    if not (1 <= forward <= 20):
+        raise HTTPException(400, "收益窗口需在 1~20 个交易日之间")
+    if not (200 <= days <= 4000):
+        raise HTTPException(400, "回看区间需在 200~4000 个交易日之间")
+    try:
+        flm.pool_codes(pool)     # 只读 json 的池 key 校验，不查库
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # 先过门禁再谈解读：availability 是 <1s 的轻量查询。少了这道，
+    # 用户在截面不足的池子上点解读，会先扣配额再等一次几十秒的无效计算。
+    av = flm.availability(pool)
+    if not av.get("ok"):
+        return JSONResponse({"ok": False, "error": av.get("reason", "数据不足"),
+                             "availability": av}, status_code=409)
+    key = (pool, forward, days, regime)
+
+    # 解读缓存命中 → 零成本返回，不扣配额、不调 LLM
+    cached = factor_ai.cache_peek(key)
+    if cached is not None:
+        return {"ok": True, "llm": cached, "from_cache": True}
+
+    # LLM 未启用/未配置：事前就能判断，别为此扣用户的每日配额
+    import llm_client
+    if not llm_client.is_ready():
+        return {"ok": True, "llm": None, "from_cache": False,
+                "llm_error": "LLM 未启用或未配置：请在「设置 → AI 模型」"
+                             "打开开关并填好 Base URL 与模型名后重试"}
+
+    quota_info = None
+    if u:
+        ok, used, quota = _store.ai_quota_consume(u["id"])
+        if not ok:
+            raise HTTPException(
+                429,
+                f"今日 AI 解读次数已用完（每账号每日 {quota} 次），"
+                f"次日 0 点自动恢复；如需调整可让管理员在后台「AI 用量」面板修改配额")
+        quota_info = {"used": used, "quota": quota,
+                      "remaining": max(quota - used, 0)}
+    try:
+        res = flm.evaluate_cached(pool=pool, forward=forward,
+                                  with_regime=regime, days=days)
+        llm_res, _ = factor_ai.explain_cached(key, res)
+    except Exception as e:
+        # LLM 网络错/超时/限流：异常上抛是 factor_ai 的设计（端点要拿原因），
+        # 这里转成人话 + llm=None 降级。配额已扣（先扣后调，同 AI 深度分析）。
+        return {"ok": True, "llm": None, "from_cache": False,
+                "llm_error": f"解读生成失败：{e}", "ai_quota": quota_info}
+    return {"ok": True, "llm": llm_res, "from_cache": False,
+            "ai_quota": quota_info}
+
+
 # ---------------------------------------------------------------------------
 # 策略体检：后台任务（专治网关 504）
 #

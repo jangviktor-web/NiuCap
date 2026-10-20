@@ -121,6 +121,10 @@ ACCESS_MODULES: List[Tuple[str, str, str, bool]] = [
      "每次讲解要把小白选股结果（方案说明/机器理由/行情数据）发给大模型，"
      "翻译成大白话并提示注意事项，有真实的 Token 成本。与「AI 深度分析」"
      "共用同一配额池（默认 10 次/天，后台「AI 用量」面板可调）。", True),
+    ("factoriai", "因子实验室 AI 解读",
+     "每次解读要把因子检验结果（IC/ICIR/分层收益/市况分段）发给大模型，"
+     "翻译成小白能懂的大白话，说明这些因子能怎么用，有真实的 Token 成本。"
+     "与「AI 深度分析」共用同一配额池（默认 10 次/天，后台「AI 用量」面板可调）。", True),
 ]
 
 _MOD_KEY = {m[0]: "TICK_AUTH_REQ_" + m[0].upper() for m in ACCESS_MODULES}

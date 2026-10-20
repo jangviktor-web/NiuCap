@@ -611,6 +611,24 @@ tbody tr:hover{background:#f7f9fc}
 .fllayer .bar{flex:1;height:14px;position:relative;background:var(--bg2);border-radius:2px;overflow:hidden}
 .fllayer .bar i{position:absolute;top:0;bottom:0;border-radius:2px}
 .fllayer .vv{width:64px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;flex-shrink:0}
+/* 因子实验室 AI 解读卡片：与 #224 小白讲解卡片同一视觉语言（accent 描边 + 虚线分隔） */
+.flai{border:1px solid var(--accent);border-radius:8px;background:var(--accent-bg);
+  padding:11px 13px}
+.flai-h{display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:650;
+  color:var(--accent)}
+.flai-st{padding:1px 8px;border-radius:9999px;font-size:11px;font-weight:700;
+  background:var(--accent);color:var(--on-primary);margin-left:auto}
+.flai-ex{font-size:13px;line-height:1.75;color:var(--tx);margin-top:7px}
+.flai-f{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+.flai-fn{font-size:12.5px;font-weight:650;color:var(--tx2)}
+.flai-fw{font-size:12.5px;line-height:1.6;color:var(--tx);margin-top:2px}
+.flai-fu{font-size:12.5px;line-height:1.6;color:var(--accent);margin-top:2px}
+.flai-cov{font-size:12px;color:var(--tx3);margin-top:6px}
+.flai-wt{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line)}
+.flai-wt li{list-style:none;font-size:12.5px;line-height:1.6;color:var(--tx2);
+  padding-left:18px;position:relative;margin-bottom:3px}
+.flai-wt li::before{content:'⚠';position:absolute;left:0;color:#e08e1a}
+.flai-q{margin-top:7px;font-size:12px;color:var(--tx3)}
 
 /* 关于页·数据时效对照表 */
 .about-tbl{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:6px;background:var(--card)}
@@ -2263,6 +2281,8 @@ td .starbtn{font-size:16px}
             </select>
           </label>
           <button class="btn" id="flRun">开始检验</button>
+          <button class="btn" id="flAi" disabled
+            title="把检验结果翻译成大白话：这些因子在算什么、算出来的数说明什么、能怎么用。需先跑一次检验；AI 生成，仅供参考，不构成投资建议">✨ AI 解读</button>
           <span class="meta">首次约 5~10 秒，结果缓存 30 分钟</span>
         </div>
         <div id="flBody"><div class="load"><span class="spin"></span>选好参数后点「开始检验」…</div></div>
@@ -2534,7 +2554,7 @@ function api(path, opts){
         var msg = 'HTTP ' + r.status;
         try{
           var j = JSON.parse(txt);
-          if(j && (j.detail || j.message || j.reason)){
+          if(j && (j.detail || j.message || j.reason || j.error)){
             msg = j.detail || j.message || j.reason || j.error;
           }
         }catch(e){ /* 非 JSON 响应，保留状态码 */ }
@@ -7472,7 +7492,7 @@ function scheduleBullbear(){
       （全无效也可能凭 p<0.05 捞出 0.6 个），所以判定是
       「|ICIR|>=0.3 且 q<=0.1」，两个条件同时满足才算 ✅。
    ========================================================================= */
-var flState = {loaded:false};
+var flState = {loaded:false, last:null};
 
 // q 值常是 3e-07 这种小数，直接显示可读性差，按量级收敛
 function flQ(q){
@@ -7538,6 +7558,13 @@ function runFactorLab(){
   }
   var q = '?pool=' + encodeURIComponent(pool) +
           '&forward=' + $('flForward').value + '&days=' + $('flDays').value;
+  // 参数先记下来：AI 解读端点按同一组参数重取检验结果（后端缓存命中就是
+  // 0.07s），不把整份结果从前端回传——既胖又给了客户端篡改数字的机会。
+  flState.last = {pool: pool,
+                  forward: parseInt($('flForward').value, 10) || 5,
+                  days: parseInt($('flDays').value, 10) || 750};
+  // 重跑中解读按钮置灰：此刻表格正在被加载态替换，旧结果的解读不适用
+  if($('flAi')) $('flAi').disabled = true;
   el.innerHTML = '<div class="load"><span class="spin"></span>正在构造因子矩阵并逐日算 IC…' +
     '（首次约 5~10 秒，池子越大越久）</div>';
   meta.textContent = '计算中…';
@@ -7635,7 +7662,95 @@ function renderFactorLab(d, meta){
     'ICIR 达标的因子才有资格进轮动/组合，没达标的当它不存在，别按 IC 均值大小凑数。' +
     '以上为统计口径的预测力参考，不构成投资建议。</div>';
 
+  // AI 解读卡片占位：按钮在控制条，内容落在这里（再点一次按钮 = 收起）
+  h += '<div id="flAiBox" style="margin-top:10px"></div>';
+
   el.innerHTML = h;
+  // 有结果了才允许解读（解读的立论全在表格数字上）
+  if($('flAi')){ $('flAi').disabled = false; $('flAi').textContent = '✨ AI 解读'; }
+}
+
+/* 因子实验室「一键 AI 解读」：把 IC/ICIR 检验结果翻译成小白大白话。
+   与 #224 小白讲解的差异：① 只传参数不传结果（后端按同参数重取缓存）；
+   ② 走 factorai 模块守卫 + 同一配额池；③ 后端解读缓存命中时不扣次数，
+   响应带 from_cache，卡片上标「缓存复用」。
+   再点一次按钮 = 收起（与小白讲解一致）。参数变化会整块重渲染 flBody，
+   then 里先查盒子还在不在，别对着已移除的节点渲染。 */
+function runFactorAi(){
+  var box = $('flAiBox'), btn = $('flAi');
+  if(!box || !btn) return;
+  if(box.dataset.done === '1'){          // 已展开 → 再点收起
+    box.innerHTML = ''; box.dataset.done = '0';
+    btn.textContent = '✨ AI 解读'; return;
+  }
+  var last = flState.last;
+  if(!last || !last.pool){
+    box.innerHTML = '<div class="empty">⚠️ 请先点「开始检验」跑一次，再来解读。</div>';
+    return;
+  }
+  btn.disabled = true;
+  box.innerHTML = '<div class="load"><span class="spin"></span> AI 解读中…' +
+    '（把统计结论翻译成大白话，约 3~10 秒）</div>';
+  api('/api/factor_lab/explain', {method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({pool: last.pool, forward: last.forward,
+                            days: last.days, regime: true})}).then(function(r){
+    if(!box.isConnected) return;          // 参数已变化，整块被重渲染掉，丢弃
+    btn.disabled = false;
+    if(!r || !r.ok){
+      box.innerHTML = '<div class="empty">⚠️ ' +
+        esc((r && (r.error || r.reason)) || '解读失败') + '</div>';
+      return;
+    }
+    renderFactorAi(r, box);
+    box.dataset.done = '1';
+    btn.textContent = '收起解读';
+  }).catch(function(e){
+    if(!box.isConnected) return;
+    btn.disabled = false;
+    box.innerHTML = '<div class="empty">⚠️ 解读失败：' +
+      esc(e && e.message ? e.message : e) + '</div>';
+  });
+}
+// 登录守卫包装：必须声明在 IIFE 外——控制条的 onclick 是跨作用域引用它的
+// （同 runNewbieGuarded，踩过一次「塞进 IIFE 里 is not defined」的坑）
+var runFactorAiGuarded = guardScreen(runFactorAi, 'AI 解读', 'factoriai');
+
+function renderFactorAi(r, out){
+  var L = r.llm;
+  var h = '<div class="flai"><div class="flai-h">✨ AI 解读';
+  if(r.from_cache) h += '<span class="flai-st">缓存复用 · 未扣次数</span>';
+  h += '</div>';
+  if(L){
+    h += '<div class="flai-ex">' + esc(L.summary || '') + '</div>';
+    (L.factors || []).forEach(function(f){
+      h += '<div class="flai-f"><div class="flai-fn">' + esc(f.name || '') + '</div>' +
+        '<div class="flai-fw">' + esc(f.what || '') + '</div>' +
+        '<div class="flai-fu">👉 ' + esc(f.use || '') + '</div></div>';
+    });
+    // LLM 偶尔会漏讲一两个因子：不因此整体降级，但要让用户知道少了谁
+    if(L.covered != null && L.total != null && L.covered < L.total)
+      h += '<div class="flai-cov">本次解读了 ' + L.covered + ' / ' + L.total +
+           ' 个因子，其余见上方表格</div>';
+    if(L.caveats && L.caveats.length)
+      h += '<ul class="flai-wt">' +
+           L.caveats.map(function(x){ return '<li>' + esc(x) + '</li>'; }).join('') +
+           '</ul>';
+    h += '<div class="flai-q">✨ AI 生成 · 立论仅来自上方检验数据 · ' +
+         '统计方法解读，仅供参考，不构成投资建议</div>';
+  } else {
+    // LLM 未启用/未配置/输出不过校验：页面照常可用，脚注口径常驻
+    h += '<div class="empty" style="padding:6px 0">' +
+      esc(r.llm_error || 'AI 模型暂不可用，上方检验结论与脚注口径仅供参考。') +
+      '</div>';
+  }
+  if(r.ai_quota)
+    h += '<div class="flai-q">今日配额：已用 <b>' + r.ai_quota.used + '</b> / ' +
+      r.ai_quota.quota + ' 次' +
+      (r.ai_quota.remaining > 0 ? '（剩余 ' + r.ai_quota.remaining + ' 次）'
+                                : '（已用完，明日 0 点恢复）') + '</div>';
+  h += '</div>';
+  out.innerHTML = h;
 }
 
 function loadLimitup(){
@@ -8188,6 +8303,8 @@ if($('flRun')) $('flRun').onclick = function(){ runFactorLab(); };
 if($('flPool')) $('flPool').onchange = function(){ runFactorLab(); };
 if($('flForward')) $('flForward').onchange = function(){ runFactorLab(); };
 if($('flDays')) $('flDays').onchange = function(){ runFactorLab(); };
+// AI 解读走登录守卫（factoriai 模块），命中 401 弹登录框、成功后续跑
+if($('flAi')) $('flAi').onclick = function(){ runFactorAiGuarded(); };
 
 /* =========================================================================
    模拟净值（方案3）·「跟着买」回放
