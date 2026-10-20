@@ -3085,6 +3085,31 @@ def api_intent_examples():
     return {"examples": itt.EXAMPLES}
 
 
+@app.get("/api/stock/factors")
+def api_stock_factors(code: str = Query(..., description="股票代码，如 sh600519")):
+    """个股因子画像：12 个因子的当前值 + 在本股近 750 日中的历史分位。
+
+    与 /api/factor_lab（池级 IC/ICIR 检验）**不是同一件事**，别互相替代：
+    因子实验室算横截面统计（同日池内排名 vs 未来收益的相关性），单票没有
+    横截面、IC 无定义；这里算「这只票现在的因子值，相对它自己的历史处于
+    什么水平」——单票可算、可解释。
+
+    纯本地库计算（不联网、不调 LLM、不扣配额），单票约 0.1~0.3s，
+    所以同步返回即可，不需要「提交+轮询」那套。
+    日线不足/代码不存在 → 400，带明确原因（前端直接显示，不吞成「加载失败」）。
+    """
+    import factor_single as fsn
+    code = (code or "").strip().lower()
+    if not code:
+        raise HTTPException(400, "请提供股票代码")
+    try:
+        return fsn.profile_cached(code)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"因子画像计算失败：{type(e).__name__}: {e}")
+
+
 @app.get("/api/stock/analyze")
 def api_stock_analyze(request: Request, code: str = Query(..., description="股票代码，如 sh600519"),
                       hours: int = Query(24, ge=6, le=72),

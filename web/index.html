@@ -630,6 +630,26 @@ tbody tr:hover{background:#f7f9fc}
 .flai-wt li::before{content:'⚠';position:absolute;left:0;color:#e08e1a}
 .flai-q{margin-top:7px;font-size:12px;color:var(--tx3)}
 
+/* 个股因子画像：一行一因子，左名字/中分位条/右值。
+   分位条只表达「位置」，不表达好坏——同一个 80% 分位，对低波因子是
+   「比历史更波动」，对动量因子是「比历史更强」，颜色若带褒贬会误导。 */
+.fsp-row{display:flex;align-items:center;gap:9px;font-size:12.5px;padding:4px 0;
+  border-bottom:1px solid var(--line2)}
+.fsp-row:last-child{border-bottom:none}
+.fsp-nm{width:120px;flex-shrink:0;color:var(--tx);white-space:nowrap;overflow:hidden;
+  text-overflow:ellipsis}
+.fsp-cat{width:58px;flex-shrink:0;font-size:11px;color:var(--tx3)}
+.fsp-bar{flex:1;height:6px;background:var(--bg2);border-radius:2px;position:relative;
+  min-width:60px}
+.fsp-bar i{position:absolute;top:0;bottom:0;left:0;border-radius:2px;
+  background:var(--accent);opacity:.75}
+.fsp-pct{width:48px;flex-shrink:0;text-align:right;font-size:11.5px;
+  font-variant-numeric:tabular-nums;color:var(--tx2)}
+.fsp-val{width:74px;flex-shrink:0;text-align:right;font-variant-numeric:tabular-nums;
+  font-weight:600;color:var(--tx)}
+.fsp-lv{width:72px;flex-shrink:0;text-align:right;font-size:11px;color:var(--tx3);
+  white-space:nowrap}
+
 /* 关于页·数据时效对照表 */
 .about-tbl{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:6px;background:var(--card)}
 .about-tbl th,.about-tbl td{border:1px solid var(--line2);padding:6px 10px;text-align:left;vertical-align:middle}
@@ -3883,7 +3903,8 @@ function renderStock(d){
       '</div></div>';
   }
 
-  el.innerHTML = h + '<div id="stockExtra"></div>';
+  el.innerHTML = h + '<div id="stockFactorBox" style="margin-top:12px"></div>' +
+    '<div id="stockExtra"></div>';
 
   var bl = $('backRank');
   if(bl) bl.onclick = function(){
@@ -3936,6 +3957,8 @@ function renderStock(d){
   } else if(d.indicators){
     drawCharts(d);
   }
+  // 因子画像：本地库计算，与行情无关，不看停牌/交易时段，进页就算
+  loadStockFactors(d.code || state.stockCode);
 }
 
 /* ---------------------------------------------------------------------------
@@ -10370,6 +10393,76 @@ function noticeTone(t){
   if(/质押|冻结|解禁|减持|退市|停牌|破产|立案|处罚|违规|诉讼|亏损/.test(t)) return 'var(--down)';
   if(/回购|重组|收购|中标|分红|盈利|增长|合作/.test(t)) return 'var(--warn)';
   return '';
+}
+
+/* 个股因子画像（#factor-single）：12 个因子的当前值 + 在本股近 750 日的历史分位。
+   ------------------------------------------------------------------
+   与「因子实验室」不是同一件事，别拿它俩互相替代：
+     · 因子实验室 = 池内横截面 IC/ICIR（几百只票排序能不能选出更好的）
+     · 这里     = 单票画像（这只票现在的因子值，相对它自己的历史什么水平）
+   单票没有横截面，IC 在统计上无定义，所以这里只做分位、不做 IC。
+   纯本地库计算（不联网、不调 LLM、不扣配额），几秒内返回。 */
+function fmtFactorVal(key, v){
+  if(v === null || v === undefined || !isFinite(v)) return '—';
+  // 成交额因子是「对数」，直接显示 22.5 没意义 → 还原成亿元
+  if(key === 'amt_60') return (Math.exp(v) / 1e8).toFixed(1) + '亿';
+  // RSI 是 0~100 的绝对刻度，别的因子多是比率
+  if(key === 'rsi_14') return v.toFixed(1);
+  // 比率类：动量/波动/回撤/乖离 用百分比；布林%B、量比、反转不带单位
+  if(key === 'boll_pct' || key === 'vol_surge') return v.toFixed(2);
+  return (v * 100).toFixed(2) + '%';
+}
+
+function renderStockFactors(d, out){
+  if(!d || !d.ok){
+    out.innerHTML = '<div class="card"><div class="card-h"><h2>因子画像</h2></div>' +
+      '<div class="card-b"><div class="empty">⚠️ ' + esc((d && d.error) || '加载失败') + '</div></div></div>';
+    return;
+  }
+  var items = d.items || [];
+  var h = '<div class="card"><div class="card-h"><h2>因子画像</h2>' +
+    '<div class="meta">近 ' + d.days + ' 个交易日（' + esc(d.span[0]) + ' ~ ' + esc(d.span[1]) +
+    '）· 12 个因子</div></div><div class="card-b">';
+  // 表头
+  h += '<div class="fsp-row" style="font-size:11px;color:var(--tx3);border-bottom:1px solid var(--line)">' +
+    '<span class="fsp-nm">因子</span><span class="fsp-cat">类别</span>' +
+    '<span class="fsp-bar" style="background:none;height:auto">历史分位</span>' +
+    '<span class="fsp-pct">分位</span><span class="fsp-val">当前值</span>' +
+    '<span class="fsp-lv">档位</span></div>';
+  items.forEach(function(it){
+    var pct = it.pct;
+    h += '<div class="fsp-row"><span class="fsp-nm" title="' + esc(it.name) + '">' +
+      esc(it.name) + '</span><span class="fsp-cat">' + esc(it.cat) + '</span>';
+    if(pct === null || pct === undefined){
+      h += '<span class="fsp-bar"><i style="width:0"></i></span>' +
+        '<span class="fsp-pct">—</span>';
+    } else {
+      h += '<span class="fsp-bar"><i style="width:' + (pct * 100).toFixed(1) + '%"></i></span>' +
+        '<span class="fsp-pct">' + (pct * 100).toFixed(0) + '%</span>';
+    }
+    h += '<span class="fsp-val">' + fmtFactorVal(it.key, it.value) + '</span>' +
+      '<span class="fsp-lv">' + esc(it.level) + '</span></div>';
+  });
+  h += '<div class="flai-q" style="margin-top:9px">分位 = 该因子当前值在<b>本股自身</b>近 ' +
+    d.days + ' 个交易日中的位置。它说明「比过去大多数时候高还是低」，' +
+    '不说明好坏——好坏取决于因子方向。与「因子实验室」的池内 IC 检验不同' +
+    '（单只股票没有横截面，算不出 IC），两者请分开看。</div>';
+  h += '</div></div>';
+  out.innerHTML = h;
+}
+
+function loadStockFactors(code){
+  var box = $('stockFactorBox');
+  if(!box) return;
+  box.innerHTML = '<div class="card"><div class="card-b"><div class="load">' +
+    '<span class="spin"></span>正在计算因子画像…</div></div></div>';
+  api('/api/stock/factors?code=' + encodeURIComponent(code)).then(function(d){
+    if(!$('stockFactorBox')) return;     // 已切走，丢弃
+    renderStockFactors(d, $('stockFactorBox'));
+  }).catch(function(e){
+    if(!$('stockFactorBox')) return;
+    renderStockFactors({ok:false, error:e.message}, $('stockFactorBox'));
+  });
 }
 
 function loadStockExtra(code){
