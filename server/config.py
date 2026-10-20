@@ -81,6 +81,11 @@ _REGISTRY: List[Tuple[str, str, str, Any, str]] = [
     ("LLM_MODEL", "模型名", "str", "agnes-2.5-flash",
      "Agnes 免费档可用 agnes-2.5-flash / agnes-3.0-flash / agnes-2.5-pro-beta（支持图片输入、1M 上下文）。"
      "换提供方同步改模型名，如 deepseek-v4-flash。"),
+    ("LLM_DISABLE_THINKING", "关闭推理模型的「思考」步骤", "bool", True,
+     "部分推理模型（如 Agents-A1）会把推理过程塞进 reasoning_content，"
+     "真正答案在 content，且思考会吃掉 max_tokens 预算、导致接口超时/返回空。"
+     "打开后请求体附带 chat_template_kwargs.enable_thinking=false，让模型直接出答案。"
+     "若切换到非推理模型且希望保留思考，可关掉此项。"),
 ]
 
 # ------------------------------------------------- 模块登录权限
@@ -156,6 +161,7 @@ _GROUP.update({
     "LLM_BASE_URL": "llm",
     "LLM_API_KEY": "llm",
     "LLM_MODEL": "llm",
+    "LLM_DISABLE_THINKING": "llm",
 })
 
 _META_PREFIX = "cfg."

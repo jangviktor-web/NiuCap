@@ -559,6 +559,7 @@ curl "http://localhost:8899/api/theme?limit=40"
 - **舆情对账时间**：`TICK_SECTOR_VERIFY_AT=15:30` —— 板块舆情收盘对账的触发时刻（默认交易日 15:30；非交易日不跑，脏值回落默认）。
 - **全球信号**：`TICK_GLOBAL_SIGNAL_AT=09:15` + `TICK_GLOBAL_SIGNAL_AT_PM=12:45` + `TICK_GLOBAL_SIGNAL_AI=1` —— 海外源**交易日抓两次**：早盘 09:15（集合竞价开始，抓完约 85s，赶在 09:30 开盘前备好隔夜摘要）+ 午间 12:45（下午开盘前 15 分钟，补覆盖上午才出的消息）。周末与法定节假日不抓。AI 开关：关掉则只抓取展示原文，零 Token 成本；AI 开时额外产出每条要点的利好/利空方向，约 +27% Token。
 - **AI 模型（可选）**：`LLM_ENABLED=true` + `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` —— 配好后启用策略解析 AI 增强与个股 AI 深度分析（后台「AI 模型」面板可测连通性）；**不配置则全部自动降级**为规则版解析 / 纯数据摘要。
+  - `LLM_DISABLE_THINKING=true`（默认开）—— 关闭推理模型的「思考」步骤。`Agents-A1` 这类思考型模型会把推理过程塞进 `reasoning_content`、真正答案在 `content`，思考还会吃掉 `max_tokens` 预算导致接口超时或返回空（表现为所有 AI 功能降级成纯数据摘要）。打开后请求体附带 `chat_template_kwargs.enable_thinking=false`，让模型直接出答案，调用从分钟级降到秒级。切换到非推理模型且希望保留思考时设 `false`。
 - **管理员**：`TICK_ADMIN_USERS=用户名1,用户名2` —— 显式配置后仅名单内用户为管理员；**不设则内置默认管理员账号 `admin`**（见下）。
 
 > `.env` 含数据库密码，**已被 `.gitignore` 排除，切勿提交**。
