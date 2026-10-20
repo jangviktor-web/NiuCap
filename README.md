@@ -6,7 +6,7 @@
 
 **本地自托管的 A 股量化「选股 + 择时 + 复盘」一体化面板**
 
-*29 个选股策略 · 实时行情 · 连板梯队 · 题材雷达 · 龙虎榜后验 · 双源快讯 · 策略回测 · 虚拟盘 · 选股复盘闭环 · 命令面板*
+*29 个选股策略 · 实时行情 · 连板梯队 · 题材雷达 · 龙虎榜后验 · 双源快讯 · 策略回测 · 虚拟盘 · 选股复盘闭环 · 因子实验室 · 牛熊温度计 · 昼夜双主题 · 命令面板*
 
 <br>
 
@@ -17,6 +17,7 @@
 <br>
 
 [![Gitee 仓库](https://img.shields.io/badge/Gitee-jangviktor%2Fniucap-C71D23.svg)](https://gitee.com/jangviktor/niucap)
+[![Version](https://img.shields.io/badge/version-v1.1.0-blue.svg)](CHANGELOG.md)
 ![GitHub Stars](https://img.shields.io/github/stars/jangviktor-web/niucap?style=social)
 ![GitHub last commit](https://img.shields.io/github/last-commit/jangviktor-web/niucap)
 ![Repo size](https://img.shields.io/github/repo-size/jangviktor-web/niucap)
@@ -108,8 +109,8 @@
 - [🎯 为什么用它](#-为什么用它)
 - [✨ 功能总览](#-功能总览)
 - [🖼 页面预览](#-页面预览)
-- [🐂 牛熊速查 + 🌗 昼夜主题（近期新增）](#-牛熊速查--昼夜主题近期新增)
-- [🧪 因子实验室：IC/ICIR 因子检验（近期新增）](#-因子实验室icicir-因子检验近期新增)
+- [🐂 牛熊速查 + 🌗 昼夜主题（v1.1.0 新增）](#-牛熊速查--昼夜主题v110-新增)
+- [🧪 因子实验室：IC/ICIR 因子检验（v1.1.0 新增）](#-因子实验室icicir-因子检验v110-新增)
 - [🧪 选股复盘闭环（#103~#105 新增）](#-选股复盘闭环103105-新增)
 - [🚀 5 分钟跑起来](#-5-分钟跑起来)
 - [💡 快速上手示例](#-快速上手示例)
@@ -122,6 +123,7 @@
 - [📁 目录结构](#-目录结构)
 - [🤝 贡献方式](#-贡献方式)
 - [🗺️ 路线图](#-路线图)
+- [📝 更新日志](CHANGELOG.md)
 - [❓ 常见问题](#-常见问题)
 - [📜 许可证](#-许可证)
 
@@ -211,7 +213,7 @@
 </table>
 
 ---
-## 🐂 牛熊速查 + 🌗 昼夜主题（近期新增）
+## 🐂 牛熊速查 + 🌗 昼夜主题（v1.1.0 新增）
 
 ### 🐂 牛熊速查：把「市场温度」压成一个能看位置的分数
 
@@ -275,7 +277,7 @@
 
 ---
 
-## 🧪 因子实验室：IC/ICIR 因子检验（近期新增）
+## 🧪 因子实验室：IC/ICIR 因子检验（v1.1.0 新增）
 
 这一页回答一个很具体的问题：**哪些指标对 A 股未来收益真有预测力？**
 
