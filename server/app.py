@@ -60,6 +60,7 @@ import indicator as ind
 import indicators_extra as ix
 import screener as scr
 import backtest as bt
+import factor_lab as flm
 import keylevels as kls
 import moves as mvs
 import newsfeed as nf
@@ -4786,6 +4787,68 @@ def api_strategy_eval(
         # 数据未就绪是「预期内的暂时状态」，不该用 500 吓唬前端
         return JSONResponse({"ok": False, "error": r.get("error", "未知错误")},
                             status_code=409)
+    return r
+
+
+# ===========================================================================
+# 因子实验室：横截面 IC / ICIR 检验（engine 在 server/factor_lab.py）
+#
+# 与 /api/strategy_eval 的分工：
+# - strategy_eval 评估**选股信号**（0/1 命中，短线），回答「这个策略灵不灵」；
+# - factor_lab 评估**连续因子**（动量/低波/反转/流动性…），回答「这个因子
+#   本身有没有 alpha」。因子是轮动与组合的原料，没有预测力的因子，
+#   轮动就只是随机换仓。
+#
+# 两个刻意设计，别在后续迭代里改掉：
+# 1. **availability 门禁**：池内有效截面不足 MIN_SERIES(250) 个交易日时直接
+#    拒绝（409）。ICIR 在样本不足时会给出一个看起来很正常的数字，用户无法
+#    从结果本身判断它是不是噪声；宁可在入口处明说「不够」。
+# 2. **q 值多重检验校正**：一次跑 12 个因子，按纯 ICIR 挑等于默许假阳性，
+#    所以判定是「|ICIR|>=0.3 且 q<=0.1」（Benjamini-Hochberg）。
+# ===========================================================================
+
+@app.get("/api/factor_lab/availability")
+def api_factor_lab_availability(
+    pool: str = Query("000300", description="股票池 key，见 /api/pools"),
+):
+    """这个池子现在够不够资格跑因子检验。轻量查询（<1s），不动矩阵。"""
+    try:
+        return flm.availability(pool)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/factor_lab")
+def api_factor_lab(
+    pool: str = Query("000300", description="股票池 key，见 /api/pools"),
+    forward: int = Query(5, ge=1, le=20, description="未来收益窗口（交易日）"),
+    days: int = Query(750, ge=200, le=4000,
+                      description="只取最近 N 个交易日（全历史 3106 天要几十秒）"),
+    regime: int = Query(1, ge=0, le=1, description="是否按市况分段统计"),
+    refresh: bool = Query(False, description="忽略缓存重算"),
+):
+    """全因子 IC/ICIR 检验。默认近 750 个交易日（约 3 年）。"""
+    if refresh:
+        flm.cache_clear()
+    try:
+        flm.pool_codes(pool)     # 只读 json 的池 key 校验，不查库
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # 先过门禁再开跑：availability 是 <1s 的轻量查询，而 evaluate 要几十秒。
+    # 少了这道，用户会等半天才拿到一个「样本其实不够」的噪声结果。
+    av = flm.availability(pool)
+    if not av.get("ok"):
+        return JSONResponse({"ok": False, "error": av.get("reason", "数据不足"),
+                             "availability": av}, status_code=409)
+    try:
+        r = flm.evaluate_cached(pool=pool, forward=forward,
+                                with_regime=bool(regime), days=days)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": f"因子检验失败：{e}"},
+                            status_code=500)
+    r["availability"] = av
     return r
 
 

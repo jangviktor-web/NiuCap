@@ -602,6 +602,16 @@ tbody tr:hover{background:#f7f9fc}
 .bbh2 .sub{font-size:11px;font-weight:400;color:var(--tx3)}
 .bbchart{height:240px}
 
+/* ---------- 因子实验室 ---------- */
+.fl-ctl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.fl-ctl label{font-size:12px;color:var(--muted);display:flex;gap:5px;align-items:center}
+/* 分层收益条：正负同色系反向，靠正负号与左右方向区分，不引入第二套配色 */
+.fllayer{display:flex;align-items:center;gap:6px;font-size:12px;padding:2px 0}
+.fllayer .lb{width:34px;color:var(--tx2);flex-shrink:0;text-align:right}
+.fllayer .bar{flex:1;height:14px;position:relative;background:var(--bg2);border-radius:2px;overflow:hidden}
+.fllayer .bar i{position:absolute;top:0;bottom:0;border-radius:2px}
+.fllayer .vv{width:64px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;flex-shrink:0}
+
 /* 关于页·数据时效对照表 */
 .about-tbl{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:6px;background:var(--card)}
 .about-tbl th,.about-tbl td{border:1px solid var(--line2);padding:6px 10px;text-align:left;vertical-align:middle}
@@ -1180,6 +1190,7 @@ td .starbtn{font-size:16px}
     <button data-tab="limitup" data-group="watch">🔥 连板梯队</button>
     <button data-tab="theme" data-group="watch">🎯 题材雷达</button>
     <button data-tab="compare" data-group="analysis">⚖️ 多股对比</button>
+    <button data-tab="factorlab" data-group="analysis">🧪 因子实验室</button>
     <button data-tab="news" data-group="watch">📰 快讯</button>
     <button data-tab="alerts" data-group="mine">🔔 监控中心<span class="adot" id="alertDot" style="display:none"></span></button>
     <button data-tab="about" data-group="mine">ℹ️ 关于</button>
@@ -2222,6 +2233,43 @@ td .starbtn{font-size:16px}
     </div>
   </div>
 
+  <!-- ================= 因子实验室：横截面 IC / ICIR 检验 ================= -->
+  <div class="tab" id="tab-factorlab">
+    <div class="card">
+      <div class="card-h">
+        <h2>🧪 因子实验室</h2>
+        <div class="meta" id="flMeta">—</div>
+      </div>
+      <div class="card-b">
+        <div class="fl-ctl">
+          <label>股票池
+            <select class="sel" id="flPool" title="只列库内日线足够跑检验的池；灰项是有效截面不足"></select>
+          </label>
+          <label>收益窗口
+            <select class="sel" id="flForward" title="信号日收盘后才看到信号、次日收盘才成交（无前视），然后看未来 N 日收益">
+              <option value="1">1 日</option>
+              <option value="3">3 日</option>
+              <option value="5" selected>5 日</option>
+              <option value="10">10 日</option>
+              <option value="20">20 日</option>
+            </select>
+          </label>
+          <label>回看区间
+            <select class="sel" id="flDays" title="只取最近 N 个交易日。全历史 3106 天要几十秒，且几年前的 IC 对当下参考价值有限">
+              <option value="250">近 250 日（快）</option>
+              <option value="750" selected>近 750 日（推荐）</option>
+              <option value="1500">近 1500 日</option>
+              <option value="4000">全部历史（慢）</option>
+            </select>
+          </label>
+          <button class="btn" id="flRun">开始检验</button>
+          <span class="meta">首次约 5~10 秒，结果缓存 30 分钟</span>
+        </div>
+        <div id="flBody"><div class="load"><span class="spin"></span>选好参数后点「开始检验」…</div></div>
+      </div>
+    </div>
+  </div>
+
   <!-- ================= 连板梯队 + 情绪周期（#100） ================= -->
   <div class="tab" id="tab-limitup">
     <div class="card">
@@ -2474,7 +2522,12 @@ function api(path, opts){
   // 后端在 4xx 里放了非常有用的说明，例如「北交所股票暂不支持分钟线：
   // eltdx 与腾讯的分钟线接口均不覆盖北交所」。旧写法直接 throw
   // 'HTTP 404'，把这些信息全丢了，用户只看到「加载失败」而不知道原因。
-  // 这里读出 JSON 体的 detail/message 一并抛出。
+  // 这里读出 JSON 体的 detail/message/reason/error 一并抛出。
+  //
+  // error 也要读：/api/strategy_eval、/api/factor_lab 的 409（数据未就绪 /
+  // 样本不足）返回的是 {"ok":false,"error":...} 而非 HTTPException 的 detail。
+  // 不读 error，用户只会看到「HTTP 409」，而不是「池内有效截面仅 517 个
+  // 交易日，需 ≥250」这种能指导下一步的文案。
   return fetch(API + path, opts).then(function(r){
     if(!r.ok){
       return r.text().then(function(txt){
@@ -2482,7 +2535,7 @@ function api(path, opts){
         try{
           var j = JSON.parse(txt);
           if(j && (j.detail || j.message || j.reason)){
-            msg = j.detail || j.message || j.reason;
+            msg = j.detail || j.message || j.reason || j.error;
           }
         }catch(e){ /* 非 JSON 响应，保留状态码 */ }
         throw new Error(msg);
@@ -2643,6 +2696,8 @@ function switchTab(want){
   if(want === 'screen' && !idState.presetLoaded) loadIntradayPresets();
   // 懒加载：首次进入「牛熊速查」时拉取（#bullbear）
   if(want === 'bullbear' && !bbState.loaded) loadBullbear();
+  // 懒加载：首次进入「因子实验室」时读股票池覆盖情况
+  if(want === 'factorlab' && !flState.loaded) loadFactorLab();
   // 懒加载：首次进入「连板梯队」时拉取（#100）
   if(want === 'limitup' && !luState.loaded) loadLimitup();
   // 懒加载：首次进入「题材雷达」时拉取（#100）
@@ -2667,7 +2722,7 @@ function setupNavDrawer(){
   var NAV_GROUPS = [
     {label:'📊 看盘', items:['rank','bullbear','theme','limitup','news']},
     {label:'🔍 选股', items:['newbie','strategy','screen','etf','history']},
-    {label:'📈 分析', items:['stock','compare','backtest']},
+    {label:'📈 分析', items:['stock','compare','factorlab','backtest']},
     {label:'⭐ 我的', items:['watch','paper','alerts','admin','about']},
   ];
   var html = '';
@@ -7402,6 +7457,187 @@ function scheduleBullbear(){
   }, 300000);
 }
 
+/* =========================================================================
+   因子实验室：横截面 IC / ICIR 检验
+   --------------------------------------------------------------------------
+   与「策略体检」的分工：那边评估 0/1 选股信号最近灵不灵，这边评估连续因子
+   （动量/低波/反转/流动性…）本身有没有 alpha。因子是轮动与组合的原料——
+   没有预测力的因子，轮动就只是随机换仓。
+
+   两个刻意设计，别在后续迭代里改掉：
+   1. availability 门禁：池内有效截面不足 MIN_SERIES(250) 个交易日时，后端
+      直接 409。ICIR 在样本不足时会给出一个看起来很正常的数字，用户无法从
+      结果本身判断它是不是噪声，所以要在入口处就明说「不够」。
+   2. q 值多重检验校正：一次跑 12 个因子，按纯 ICIR 挑等于默许假阳性
+      （全无效也可能凭 p<0.05 捞出 0.6 个），所以判定是
+      「|ICIR|>=0.3 且 q<=0.1」，两个条件同时满足才算 ✅。
+   ========================================================================= */
+var flState = {loaded:false};
+
+// q 值常是 3e-07 这种小数，直接显示可读性差，按量级收敛
+function flQ(q){
+  if(q == null) return '—';
+  if(q < 0.001) return '&lt;0.001';
+  return q.toFixed(3);
+}
+
+function loadFactorLab(){
+  var el = $('flBody'), meta = $('flMeta');
+  if(!el || flState.loaded) return;
+  flState.loaded = true;
+  meta.textContent = '读取股票池覆盖…';
+  // 池列表 + 每个池的覆盖情况。availability 是 <1s 的轻量查询，四池并行；
+  // 顺带把截面不足的池标灰——后端会 409，不如选的时候就说明白。
+  api('/api/pools').then(function(r){
+    var items = (r && r.items) || [];
+    return Promise.all(items.map(function(p){
+      return api('/api/factor_lab/availability?pool=' + encodeURIComponent(p.key))
+        .then(function(av){ return {p:p, av:av}; },
+              function(){ return {p:p, av:null}; });
+    }));
+  }).then(function(rows){
+    var sel = $('flPool'), ok = 0;
+    rows.forEach(function(row){
+      var p = row.p, av = row.av, o = document.createElement('option');
+      o.value = p.key;
+      if(!av){ o.textContent = p.name; }
+      else if(av.ok){
+        ok++;
+        o.textContent = p.name + '（有效截面 ' + av.cross_ok_days + ' 日）';
+      }else{
+        o.textContent = p.name + '（截面仅 ' + av.cross_ok_days +
+          ' 日，不足 ' + av.required_days + '）';
+        o.disabled = true;
+      }
+      if(p.key === '000300') o.selected = true;
+      sel.appendChild(o);
+    });
+    if(!ok){
+      die(el, '所有股票池的有效截面都不足 250 个交易日（约一年）。低于此 ICIR 的' +
+        '标准误 ≈1/√250≈0.06，而判定门槛是 0.3，结论基本由噪声主导，所以这里不跑。' +
+        '请在「数据管理」页补充更早的历史行情后重试。');
+      meta.textContent = '无可用池';
+      return;
+    }
+    meta.textContent = ok + ' 个池可跑';
+  }, function(e){
+    meta.textContent = '池列表读取失败';
+    die(el, '读取股票池失败：' + e.message);
+  });
+}
+
+function runFactorLab(){
+  var el = $('flBody'), meta = $('flMeta');
+  if(!el) return;
+  var pool = $('flPool').value;
+  // 池列表是进 tab 后异步填的；手快的人在填充完成前就点「开始检验」，
+  // 此时 value 是空串，打过去后端会报「股票池不存在: 」——不如就地说明。
+  if(!pool){
+    die(el, '股票池列表还在读取中，请稍等一秒再点。若持续如此，请刷新页面重试。');
+    return;
+  }
+  var q = '?pool=' + encodeURIComponent(pool) +
+          '&forward=' + $('flForward').value + '&days=' + $('flDays').value;
+  el.innerHTML = '<div class="load"><span class="spin"></span>正在构造因子矩阵并逐日算 IC…' +
+    '（首次约 5~10 秒，池子越大越久）</div>';
+  meta.textContent = '计算中…';
+  api('/api/factor_lab' + q).then(function(d){
+    renderFactorLab(d, meta);
+  }, function(e){
+    // 409 的说明文案由 api() 从响应体的 error 字段带出来（见 api() 注释）
+    die(el, '无法开始检验：' + e.message);
+    meta.textContent = '未跑';
+  });
+}
+
+function renderFactorLab(d, meta){
+  var el = $('flBody');
+  if(!d || !d.ok){ die(el, (d && d.error) || '返回异常'); return; }
+  var items = d.items || [];
+  meta.innerHTML = esc(d.pool) + ' · ' + d.universe + ' 只 · ' +
+    esc(d.span[0]) + '~' + esc(d.span[1]) + '（' + d.days + ' 日）· 收益窗口 ' +
+    d.forward + ' 日';
+
+  var h = '<div class="tblw"><table class="tbl" id="flTbl"><thead><tr>' +
+    '<th>因子</th><th>类别</th><th>IC均值</th><th>ICIR</th><th>IC&gt;0</th>' +
+    '<th>t值</th><th>q值</th><th>有效率</th><th>单调</th><th>判定</th>' +
+    '</tr></thead><tbody>';
+  items.forEach(function(it){
+    var ic = it.ic_mean, ir = it.icir, pr = it.pos_ratio,
+        t = it.t_stat, cv = it.cover;
+    var n = function(v, f){ return v == null ? '—' : f(v); };
+    // 注意：有效率是 0~1 的比例，显示必须 ×100（曾经在这里栽过：直接
+    // '%.0f%%' 会把 0.658 四舍五入成 "1%"）
+    h += '<tr><td>' + esc(it.name) + '</td><td>' + esc(it.cat) + '</td>' +
+      '<td class="' + (ic > 0 ? 'up' : 'down') + '">' +
+        n(ic, function(v){ return (v > 0 ? '+' : '') + v.toFixed(4); }) + '</td>' +
+      '<td>' + n(ir, function(v){ return (v > 0 ? '+' : '') + v.toFixed(3); }) + '</td>' +
+      '<td>' + n(pr, function(v){ return (v * 100).toFixed(0) + '%'; }) + '</td>' +
+      '<td>' + n(t, function(v){ return (v > 0 ? '+' : '') + v.toFixed(2); }) + '</td>' +
+      '<td title="Benjamini-Hochberg 多重检验校正后的 q 值，把「同时检验了 12 个因子」折进来">' +
+        flQ(it.q_stat) + '</td>' +
+      '<td title="因子值非缺失的格子占比，过低说明这个因子在样本里大面积算不出来，' +
+        '此时「没预测力」的结论不可信">' +
+        n(cv, function(v){ return (v * 100).toFixed(0) + '%'; }) + '</td>' +
+      '<td>' + (it.monotonic ? '是' : '否') + '</td>' +
+      '<td>' + (it.pass ? '✅ 通过' : '—') + '</td></tr>';
+  });
+  h += '</tbody></table></div>';
+
+  // 分层收益与市况分段用原生 <details>：默认收起，想看的人自己展开，
+  // 零 JS、零请求。
+  h += '<details style="margin-top:12px"><summary style="cursor:pointer;font-size:12.5px;' +
+    'color:var(--tx2)">五档分层收益（Q1=因子最小 → Q5=因子最大，窗口内平均收益）</summary>' +
+    '<div style="margin-top:8px">';
+  items.forEach(function(it){
+    var lay = it.layers || [];
+    if(!lay.length) return;
+    var mx = Math.max.apply(null, lay.map(function(x){ return Math.abs(x || 0); })) || 1e-9;
+    h += '<div style="font-size:12px;color:var(--tx2);margin-top:6px">' + esc(it.name) +
+      (it.monotonic ? ' <span style="color:var(--tx3)">· 单调</span>' : '') + '</div>';
+    lay.forEach(function(x, i){
+      if(x == null) return;
+      var w = Math.min(100, Math.abs(x) / mx * 50);
+      h += '<div class="fllayer"><span class="lb">Q' + (i + 1) + '</span>' +
+        '<span class="bar"><i style="' + (x >= 0
+          ? 'left:50%;width:' + w + '%;background:var(--up)'
+          : 'right:50%;width:' + w + '%;background:var(--down)') + '"></i></span>' +
+        '<span class="vv ' + (x >= 0 ? 'up' : 'down') + '">' +
+        (x > 0 ? '+' : '') + (x * 100).toFixed(2) + '%</span></div>';
+    });
+  });
+  h += '</div></details>';
+
+  h += '<details style="margin-top:10px"><summary style="cursor:pointer;font-size:12.5px;' +
+    'color:var(--tx2)">市况分段（用成分股等权指数的 20 日累计收益划分涨/跌/平）</summary>' +
+    '<div class="tblw" style="margin-top:8px"><table class="tbl"><thead><tr>' +
+    '<th>因子</th><th>上涨市 ICIR</th><th>下跌市 ICIR</th><th>震荡市 ICIR</th>' +
+    '</tr></thead><tbody>';
+  items.forEach(function(it){
+    var rg = it.regime || {};
+    var c = function(k){
+      var v = rg[k];
+      if(!v || v.icir == null) return '—';
+      return (v.icir > 0 ? '+' : '') + v.icir.toFixed(3) +
+        ' <span style="color:var(--tx3)">(' + v.obs + '日)</span>';
+    };
+    h += '<tr><td>' + esc(it.name) + '</td><td>' + c('up') + '</td><td>' +
+      c('down') + '</td><td>' + c('flat') + '</td></tr>';
+  });
+  h += '</tbody></table></div></details>';
+
+  h += '<div class="innote" style="margin-top:12px">' +
+    '判定门槛：|ICIR| ≥ ' + d.icir_pass + ' <b>且</b> q ≤ ' + d.q_pass +
+    '（BH 多重检验校正）。IC 是逐交易日横截面 Spearman 秩相关；' +
+    '方向由 IC 符号决定，不预设「越大越好」。' +
+    '信号日收盘出信号、次日收盘成交（lag=1），不用信号日收盘价买入，避免前视。' +
+    '每个因子只用 t 日及之前的数据。' +
+    'ICIR 达标的因子才有资格进轮动/组合，没达标的当它不存在，别按 IC 均值大小凑数。' +
+    '以上为统计口径的预测力参考，不构成投资建议。</div>';
+
+  el.innerHTML = h;
+}
+
 function loadLimitup(){
   var el = $('luBody'), meta = $('luMeta');
   if(!el) return;
@@ -7947,6 +8183,11 @@ if($('evalRefresh')) $('evalRefresh').onclick = function(){ runEval(true); };
 // 换了回看天数或收益窗口就得起新任务，不能接着用上一个 jid 的结果
 if($('evalDays')) $('evalDays').onchange = function(){ evalState.jid = null; runEval(false); };
 if($('evalForward')) $('evalForward').onchange = function(){ evalState.jid = null; runEval(false); };
+// 因子实验室：改任何参数都重新跑（缓存 key 含 pool/forward/days，不会拿到旧结果）
+if($('flRun')) $('flRun').onclick = function(){ runFactorLab(); };
+if($('flPool')) $('flPool').onchange = function(){ runFactorLab(); };
+if($('flForward')) $('flForward').onchange = function(){ runFactorLab(); };
+if($('flDays')) $('flDays').onchange = function(){ runFactorLab(); };
 
 /* =========================================================================
    模拟净值（方案3）·「跟着买」回放

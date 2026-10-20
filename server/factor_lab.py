@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -52,23 +53,29 @@ FACTOR_DEFS: List[Tuple[str, str, str, str]] = [
 FORWARDS = (5, 10, 20)     # 未来收益窗口（交易日）
 MIN_CROSS = 30             # 每日截面最少有效样本数，低于此不算 IC
 ICIR_PASS = 0.3            # 「有预测力」门槛
+Q_PASS = 0.1               # BH 多重检验校正后的 q 值门槛
+
+# 「够不够跑」的序列长度门槛：约一年的交易日数。低于这个数，
+# ICIR 的标准误 ≈ 1/√250 ≈ 0.06，而门槛本身是 0.3 —— 噪声比信号大一个量级，
+# 跑出来的「有预测力」基本是抽样运气。所以数据不够时**明确拒绝**，
+# 不硬跑出一堆看着很像结果的噪声（线上因子挖掘也是同款 availability 门禁）。
+MIN_SERIES = 250
+
+# evaluate 结果的内存缓存 TTL。日频因子没必要每次切页签都重算：
+# 000300 全历史（3106 天）跑一轮要几十秒，缓存后二次打开是秒开。
+CACHE_TTL = 1800.0
 
 
 # ---------------------------------------------------------------------------
 # 数据加载
 # ---------------------------------------------------------------------------
 
-def load_universe(pool: str = "000300", min_days: int = 200
-                  ) -> Dict[str, Any]:
-    """从本地库读某指数成分股日线，对齐成矩阵。
+def pool_codes(pool: str = "000300") -> Tuple[List[str], str]:
+    """解析股票池标识 → (归一化 code 列表, 池中文名)。不存在直接抛 ValueError。
 
-    返回 {dates, codes, close, high, low, open, volume, amount}，
-    形状均为 (交易日数, 股票数)，缺失填 NaN。
+    load_universe 与 pool_stats 都要用：一个要构矩阵、一个只做 SQL 统计，
+    但「哪个 key 对应哪个池」的解析只该有一份。
     """
-    import store
-    import datasource as ds
-
-    store.initialize()
     with open(POOL_FILE, "r", encoding="utf-8") as f:
         pools = json.load(f)
 
@@ -81,9 +88,24 @@ def load_universe(pool: str = "000300", min_days: int = 200
     if info is None:
         raise ValueError(f"股票池不存在: {pool}")
 
-    raw_codes = [ds.normalize(str(c)) for c in info.get("codes", [])]
-    if not raw_codes:
+    import datasource as ds
+    raw = [ds.normalize(str(c)) for c in info.get("codes", [])]
+    if not raw:
         raise ValueError(f"股票池 {pool} 无成分股")
+    return raw, str(info.get("name") or pool)
+
+
+def load_universe(pool: str = "000300", min_days: int = 200
+                  ) -> Dict[str, Any]:
+    """从本地库读某指数成分股日线，对齐成矩阵。
+
+    返回 {dates, codes, close, high, low, open, volume, amount}，
+    形状均为 (交易日数, 股票数)，缺失填 NaN。
+    """
+    import store
+
+    store.initialize()
+    raw_codes, pool_name = pool_codes(pool)
 
     c = store._conn()
     fields = ("open", "close", "high", "low", "volume", "amount")
@@ -127,8 +149,115 @@ def load_universe(pool: str = "000300", min_days: int = 200
     out: Dict[str, Any] = {"dates": dates, "codes": [codes[j] for j in range(N) if keep[j]]}
     for k in fields:
         out[k] = mats[k][:, keep]
-    out["_pool"] = str(info.get("name") or pool)
+    out["_pool"] = pool_name
     return out
+
+
+# ---------------------------------------------------------------------------
+# 可用性门禁（availability）——数据不够就不给跑
+# ---------------------------------------------------------------------------
+
+def pool_stats(pool: str = "000300") -> Dict[str, Any]:
+    """轻量统计池内股票的库内日线覆盖。只发 SQL，不构矩阵。
+
+    给 availability 用：evaluate 要构 (T, N) 矩阵，000300 光 load_universe
+    就 15 秒，不该在「能不能跑」这个判断上先付这个代价。实测这条查询
+    0.06~0.56 秒（1000/2000 只的大池也在半秒内）。
+    """
+    import store
+
+    store.initialize()
+    codes, name = pool_codes(pool)
+    c = store._conn()
+    ph = ",".join("?" * len(codes))
+    rows = c.execute(
+        f"SELECT date, COUNT(DISTINCT code) AS n FROM daily_bars"
+        f" WHERE code IN ({ph}) GROUP BY date ORDER BY date",
+        tuple(codes)).fetchall()
+
+    per_day = [int(r["n"]) for r in rows]
+    dates = [str(r["date"]) for r in rows]
+    return {
+        "pool": name,
+        "pool_key": pool,
+        "codes_in_file": len(codes),
+        # 库内真有数据的股票数上界（= 截面最全那天的成分数）
+        "codes_in_db": max(per_day) if per_day else 0,
+        "days": len(dates),
+        "span": [dates[0], dates[-1]] if dates else ["", ""],
+        # 每日截面只有效个股数：低于 MIN_CROSS 的日子 ic_series 直接跳过，
+        # 所以「日历天数」不等于「可用的 IC 观测数」，得按截面达标天数算。
+        "cross_ok_days": sum(1 for n in per_day if n >= MIN_CROSS),
+    }
+
+
+def availability(pool: str = "000300") -> Dict[str, Any]:
+    """这个池子现在够不够资格跑因子检验。
+
+    设计原则：**宁可直接拒绝，也不硬跑。** ICIR 这类指标在样本不足时会给出
+    一个看起来很正常的数字，用户无法从结果本身判断它是不是噪声；而在入口
+    处明说「不够」，用户至少知道该去补数据而不是信一个假信号。
+    """
+    try:
+        st = pool_stats(pool)
+    except ValueError as e:
+        return {"ok": False, "reason": str(e), "required_days": MIN_SERIES,
+                "cross_ok_days": 0, "days": 0, "span": ["", ""],
+                "codes_in_db": 0, "pool": pool}
+
+    have = st["cross_ok_days"]
+    ok = have >= MIN_SERIES
+    return {
+        "ok": ok,
+        "pool": st["pool"],
+        "pool_key": pool,
+        "days": st["days"],
+        "span": st["span"],
+        "codes_in_db": st["codes_in_db"],
+        "cross_ok_days": have,
+        "required_days": MIN_SERIES,
+        "reason": "" if ok else (
+            f"池内有效截面仅 {have} 个交易日，需 ≥{MIN_SERIES}"
+            f"（约一年）。低于此 ICIR 标准误 ≈1/√{MIN_SERIES}≈0.06，"
+            f"而判定门槛是 {ICIR_PASS}，结论基本由噪声主导，故不跑。"
+            f"可在数据管理页补充更早的历史行情后重试。"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# 多重检验校正（Benjamini-Hochberg）
+# ---------------------------------------------------------------------------
+
+def _p_from_t(t: Optional[float]) -> Optional[float]:
+    """双尾 p 值。math.erfc 就是正态生存函数的闭式解，不引 scipy。"""
+    if t is None:
+        return None
+    return math.erfc(abs(float(t)) / math.sqrt(2.0))
+
+
+def bh_q(pvals: Sequence[Optional[float]]) -> List[Optional[float]]:
+    """Benjamini-Hochberg FDR 校正，返回与输入同序的 q 值；None 原样透传。
+
+    为什么需要：一次跑 12 个因子，就算全部无效，按 p<0.05 平均也会捞出
+    0.6 个「显著」。ICIR 单看分不清「真有 alpha」和「运气好」——q 值把
+    「同时检验了 N 个」这件事折进去，是同一批因子里挑出来的相对排名。
+
+    注意 q 值只在**一整组假设**上有意义，所以必须等所有因子的 p 值都算完
+    再统一调本函数（见 evaluate），单个因子单独算 q 是无意义的。
+    """
+    n = len(pvals)
+    q: List[Optional[float]] = [None] * n
+    idx = [i for i in range(n) if pvals[i] is not None]
+    if not idx:
+        return q
+    order = sorted(idx, key=lambda i: pvals[i])  # type: ignore[index]
+    prev = 1.0
+    # 从最大 p 往最小走并取累积最小值，保证 q 值单调不减
+    for rank in range(len(order), 0, -1):
+        i = order[rank - 1]
+        prev = min(prev, float(pvals[i]) * len(order) / rank)  # type: ignore[arg-type]
+        q[i] = prev
+    return q
 
 
 # ---------------------------------------------------------------------------
@@ -453,9 +582,20 @@ def regime_labels(mats: Dict[str, Any], window: int = 20) -> List[str]:
 
 def evaluate(pool: str = "000300", forward: int = 5,
              keys: Optional[Sequence[str]] = None,
-             with_regime: bool = True) -> Dict[str, Any]:
-    """跑一轮完整因子检验。返回可直接渲染的 dict。"""
+             with_regime: bool = True,
+             days: Optional[int] = None) -> Dict[str, Any]:
+    """跑一轮完整因子检验。返回可直接渲染的 dict。
+
+    days: 只取最近 N 个交易日。None = 全历史（供离线研究）；Web 端点应显式
+    传值——全历史 3106 天跑 12 个因子的 ic_series 要几十秒，而几年前的 IC
+    对当下几乎没有参考价值。
+    """
     mats = load_universe(pool)
+    if days and days < len(mats["dates"]):
+        # codes / _pool 是列维度与元信息，不随时间切片，原样带过去
+        mats = {k: (v[-days:] if k == "dates"
+                    or (isinstance(v, np.ndarray) and v.ndim == 2) else v)
+                for k, v in mats.items()}
     dates: List[str] = mats["dates"]
     C = mats["close"]
     facs = build_factors(mats, keys)
@@ -498,6 +638,18 @@ def evaluate(pool: str = "000300", forward: int = 5,
         items.append(item)
 
     items.sort(key=lambda x: abs(x.get("icir") or 0), reverse=True)
+
+    # q 值必须等所有因子的 p 值都算完再统一算：BH 是对「一组同时检验的假设」
+    # 做 FDR 控制，单个因子的 q 没有意义。判定也从「只看 ICIR」升级为
+    # 「ICIR 达标 + q 值达标」——否则 12 个因子按纯 ICIR 挑，等于默许多重检验
+    # 的假阳性混进「有预测力」名单（一次全无效也可能凭 p<0.05 捞出 0.6 个）。
+    qs = bh_q([_p_from_t(it["t_stat"]) for it in items])
+    for it, q in zip(items, qs):
+        it["q_stat"] = q
+        it["pass"] = bool(it["icir"] is not None
+                          and abs(it["icir"]) >= ICIR_PASS
+                          and q is not None and q <= Q_PASS)
+
     span = [dates[0], dates[-1]] if dates else ["", ""]
     return {
         "ok": True,
@@ -507,8 +659,37 @@ def evaluate(pool: str = "000300", forward: int = 5,
         "days": len(dates),
         "forward": forward,
         "icir_pass": ICIR_PASS,
+        "q_pass": Q_PASS,
         "items": items,
     }
+
+
+# ---------------------------------------------------------------------------
+# 结果缓存（日频因子没必要每次切页签都重算）
+# ---------------------------------------------------------------------------
+
+_CACHE: Dict[Tuple[Any, ...], Tuple[float, Dict[str, Any]]] = {}
+# ponytail: 无锁。两个请求同时未命中只会多算一遍（CPU 浪费，结果一致），
+# 等真有人同时点两次不同的池子再加锁。
+
+
+def evaluate_cached(pool: str = "000300", forward: int = 5,
+                    with_regime: bool = True,
+                    days: Optional[int] = None) -> Dict[str, Any]:
+    """evaluate + 内存 TTL 缓存。000300 全历史首轮几十秒，缓存后秒开。"""
+    key = (pool, forward, bool(with_regime), days)
+    hit = _CACHE.get(key)
+    if hit and (time.time() - hit[0]) < CACHE_TTL:
+        return hit[1]
+    res = evaluate(pool=pool, forward=forward,
+                   with_regime=with_regime, days=days)
+    _CACHE[key] = (time.time(), res)
+    return res
+
+
+def cache_clear() -> None:
+    """手动清缓存（补数据后想让结果立即刷新时用）。"""
+    _CACHE.clear()
 
 
 def report_text(res: Dict[str, Any]) -> str:
@@ -517,16 +698,18 @@ def report_text(res: Dict[str, Any]) -> str:
     L.append("=" * 78)
     L.append(f"因子 IC 检验 | 池={res['pool']} | {res['universe']} 只 | "
              f"{res['span'][0]} ~ {res['span'][1]} ({res['days']} 交易日)")
-    L.append(f"未来收益窗口 = {res['forward']} 日 | 判定门槛 |ICIR| >= {res['icir_pass']}")
+    L.append(f"未来收益窗口 = {res['forward']} 日 | 判定门槛 "
+             f"|ICIR| >= {res['icir_pass']} 且 q <= {res.get('q_pass', Q_PASS)}")
     L.append("=" * 78)
     L.append(f"{'因子':<18}{'类别':<8}{'IC均值':>9}{'ICIR':>8}{'IC>0':>8}{'t值':>8}"
-             f"{'有效率':>8}{'单调':>6}  判定")
+             f"{'有效率':>8}{'单调':>6}{'q值':>7}  判定")
     for it in res["items"]:
         ic = it["ic_mean"]
         ir = it["icir"]
         pr = it["pos_ratio"]
         ts = it["t_stat"]
         cv = it.get("cover")
+        q = it.get("q_stat")
         mark = "✅通过" if it["pass"] else "—"
         warn = " ⚠无效" if (cv is not None and cv < 0.5) else ""
         L.append(f"{it['name']:<18}{it['cat']:<8}"
@@ -535,7 +718,8 @@ def report_text(res: Dict[str, Any]) -> str:
                  f"{(f'{pr*100:.0f}%' if pr is not None else 'n/a'):>8}"
                  f"{(f'{ts:+.2f}' if ts is not None else 'n/a'):>8}"
                  f"{(f'{cv*100:.0f}%' if cv is not None else 'n/a'):>8}"
-                 f"{('是' if it['monotonic'] else '否'):>6}  {mark}{warn}")
+                 f"{('是' if it['monotonic'] else '否'):>6}"
+                 f"{(f'{q:.3f}' if q is not None else 'n/a'):>7}  {mark}{warn}")
     L.append("")
     L.append("五档分层（Q1=因子最小 → Q5=因子最大），单位：窗口内平均收益")
     for it in res["items"]:
@@ -648,6 +832,47 @@ def selfcheck(verbose: bool = True) -> Dict[str, Any]:
     inc = q["layers"][-1] > q["layers"][0]
     rec("分层检验：强正相关因子 Q5 > Q1", bool(inc),
         f"Q1={q['layers'][0]:.4f} Q5={q['layers'][-1]:.4f}")
+
+    # --- 6. p 值与 BH 多重检验校正 ---
+    # 这三个 case 覆盖 BH 最容易写错的三处：闭式解精度、q>=p 的单调性、
+    # 以及「全部假设同样显著时 q 应等于 p 本身」（rank 分母抵消）。
+    rec("_p_from_t: t=0 → p=1（不显著）", abs(_p_from_t(0.0) - 1.0) < 1e-12,
+        f"{_p_from_t(0.0)}")
+    rec("_p_from_t: |t|=1.96 → p≈0.05（1.96σ 双尾）",
+        abs(_p_from_t(1.96) - 0.05) < 1e-4, f"{_p_from_t(1.96):.6f}")
+
+    ps = [0.001, 0.001, 0.001, 0.001, 0.001]
+    qs = bh_q(ps)
+    rec("BH：全部 p 相等 → q == p（n/rank 抵消）",
+        all(abs(a - b) < 1e-12 for a, b in zip(qs, ps)), f"{qs}")
+
+    ps2 = [0.001, 0.01, 0.2, 0.6]
+    qs2 = bh_q(ps2)
+    rec("BH：q >= p 恒成立", all(q >= p for p, q in zip(ps2, qs2) if q is not None),
+        f"p={ps2} q={[None if x is None else round(x, 4) for x in qs2]}")
+    rec("BH：q 随 p 单调不减",
+        all(qs2[i] <= qs2[i + 1] for i in range(len(qs2) - 1)),
+        f"{[round(x, 4) for x in qs2 if x is not None]}")
+    # 注意不是「压到 1」：BH 的最大 p 校正后恒等于自身（p·n/n），q 永远不会
+    # 比 p 更小。这里 p=0.6 的 q 仍是 0.6，依旧远大于 Q_PASS=0.1 过不了门槛
+    # ——这正是 FDR 的效果：让弱假设维持「不显著」，而不是被噪声拱过去。
+    rec("BH：最弱假设 q == p（不会被压得更小，也过不了 q<=0.1）",
+        abs(qs2[-1] - ps2[-1]) < 1e-12 and qs2[-1] > Q_PASS,
+        f"q={qs2[-1]:.4f}")
+
+    # None 表示「这个因子样本不足、根本没参与检验」，所以 BH 的分母只数
+    # 非 None 的假设——没跑的检验不构成多重检验问题。若分母偷用全量，
+    # 会系统性低估 q，等于给「没跑」也罚一份，那是过度保守。
+    rec("BH：None 不参与、分母只数非 None 假设",
+        bh_q([None, 0.01]) == [None, 0.01]
+        and bh_q([]) == [] and bh_q([None]) == [None],
+        f"{bh_q([None, 0.01])}")
+
+    # --- 7. availability 门禁（纯逻辑，不读库） ---
+    av = availability("__不存在的池__")
+    rec("availability：池不存在 → ok=False 且给出原因（不抛异常）",
+        av["ok"] is False and "不存在" in av["reason"],
+        av["reason"][:40])
 
     ok = all(s[1] for s in steps)
     out = {"ok": ok, "steps": [{"name": s[0], "ok": s[1], "extra": s[2]}
