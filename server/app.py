@@ -68,6 +68,7 @@ import sentiment as senti
 import strategies as strat
 import westock as wst
 import bullbear as bb
+import stock_bond_lab as sbl
 import hithink as htk
 import intent as itt
 import tdx as tdxc
@@ -2933,6 +2934,34 @@ def api_bullbear_history(days: int = Query(365, ge=1, le=1825)):
     return bb.history(days)
 
 
+# 股债温度：沪深300 相对国债ETF，贵还是便宜（engine 在 server/stock_bond_lab.py）
+# ---------------------------------------------------------------------------
+# 与 /api/bullbear 是**两套口径**，必须并排看而不是混算：
+#   - bullbear     ：13 维横截面温度（当前市场冷不冷），0-100 分；
+#   - stock_bond   ：单一比值的历史位置（股票相对债券贵不贵），z 值。
+# 一个是「现在多热」，一个是「相对债券多贵」，混进一个分数会让两者互相稀释。
+_SB_CACHE: Dict[str, Any] = {"key": None, "at": 0.0, "val": None}
+_SB_TTL = 600      # 10 分钟：eltdx 是实时行情，盘中也最多每 10 分钟打一次
+
+
+@app.get("/api/stock_bond")
+def api_stock_bond(window: int = Query(sbl.DEFAULT_WINDOW)):
+    """股债温度。window 只接受预设档位，别的值回落到默认（不静默用它算）。"""
+    if window not in sbl.WINDOWS:
+        return {"ok": False, "error": f"窗口只支持 {list(sbl.WINDOWS)}"}
+    key = f"w{window}"
+    now = time.time()
+    if _SB_CACHE["key"] == key and (now - _SB_CACHE["at"]) < _SB_TTL and _SB_CACHE["val"]:
+        return dict(_SB_CACHE["val"], cached=True)
+    try:
+        r = sbl.evaluate(window=window)
+    except sbl._NoData as e:
+        # 取不到数不是异常，是一个要如实告诉用户的状态：哪条腿没数、断在哪。
+        return {"ok": False, "error": str(e), "window": window}
+    _SB_CACHE.update({"key": key, "at": now, "val": r})
+    return dict(r, cached=False)
+
+
 @app.get("/api/lhb")
 def api_lhb(
     limit: int = Query(30, ge=5, le=60),
@@ -4951,6 +4980,14 @@ def api_factor_lab_explain(request: Request, body: Dict[str, Any] = Body(...)):
         res = flm.evaluate_cached(pool=pool, forward=forward,
                                   with_regime=regime, days=days)
         llm_res, _ = factor_ai.explain_cached(key, res)
+    except factor_ai.OutputRejected as e:
+        # 模型回了话，只是没守 JSON 格式。这跟「模型不可用」是两件事：
+        # 前者重试就可能好，后者要去改配置。而且要如实告诉用户这次配额
+        # 已经扣掉了（先扣后调），否则他再点一次会发现次数莫名少了一次。
+        return {"ok": True, "llm": None, "from_cache": False,
+                "llm_error": f"AI 这次没按格式回复（{e.why}），再点一次通常就好；"
+                             "本次已计入配额。",
+                "ai_quota": quota_info}
     except Exception as e:
         # LLM 网络错/超时/限流：异常上抛是 factor_ai 的设计（端点要拿原因），
         # 这里转成人话 + llm=None 降级。配额已扣（先扣后调，同 AI 深度分析）。

@@ -602,6 +602,33 @@ tbody tr:hover{background:#f7f9fc}
 .bbh2 .sub{font-size:11px;font-weight:400;color:var(--tx3)}
 .bbchart{height:240px}
 
+/* ---------- 股债温度（挂在牛熊速查页的第二张卡） ---------- */
+/* 分区色用 --bb-* 温度令牌而非 --up/--down：这里表达的是「股票贵不贵」，
+   不是涨跌。用涨跌色会让用户把红色读成「马上要大跌」。 */
+.sbbar{position:relative;display:flex;height:12px;border-radius:6px;overflow:hidden;
+  background:var(--bg2);margin-top:6px}
+.sbbar i{position:absolute;top:0;bottom:0}
+.sbbar i.cheap{left:0;background:rgba(14,203,129,.55)}
+.sbbar i.mid{background:rgba(252,213,53,.45)}
+.sbbar i.exp{background:rgba(246,70,93,.55)}
+.sbbar .sbpin{position:absolute;top:-3px;bottom:-3px;width:2px;background:var(--tx);
+  border-radius:1px;box-shadow:0 0 0 2px var(--bg1)}
+.sbscale{display:flex;justify-content:space-between;font-size:10.5px;color:var(--tx3);margin-top:4px}
+.sbctl{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.sbctl .sbsel.on{background:var(--accent-bg);color:var(--accent);border-color:var(--accent)}
+.sbtbl{overflow-x:auto}
+.sbtbl table{border-collapse:collapse;font-size:12px;width:100%}
+.sbtbl th,.sbtbl td{padding:5px 8px;border-bottom:1px solid var(--line2);text-align:right;white-space:nowrap}
+.sbtbl th:first-child,.sbtbl td:first-child{text-align:left;color:var(--tx2)}
+.sbtbl th{font-weight:600;color:var(--tx3);font-size:11px}
+.sbtbl td .n{display:block;font-size:10px;color:var(--tx3);font-weight:400}
+.sbtbl td.na{color:var(--tx3)}
+.sbn{font-size:11px;color:var(--tx3);margin-top:6px;line-height:1.6}
+.bbdet{margin-top:14px;font-size:12px;color:var(--tx2)}
+.bbdet summary{cursor:pointer;color:var(--accent);font-weight:600;font-size:12.5px}
+.bbdet .sbca{margin:8px 0 0;padding-left:20px;line-height:1.75;color:var(--tx2)}
+.bbdet .sbca li{margin-bottom:4px}
+
 /* ---------- 因子实验室 ---------- */
 .fl-ctl{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
 .fl-ctl label{font-size:12px;color:var(--muted);display:flex;gap:5px;align-items:center}
@@ -2287,6 +2314,17 @@ td .starbtn{font-size:16px}
         <div class="load"><span class="spin"></span>读取市场温度…</div>
       </div>
     </div>
+
+    <!-- 股债温度：与上面的 0-100 温度是两套口径，刻意并排而不是混算 -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-h">
+        <h2>⚖️ 股债温度</h2>
+        <div class="meta" id="sbMeta">—</div>
+      </div>
+      <div class="card-b" id="sbBody">
+        <div class="load"><span class="spin"></span>读取股债相对位置…</div>
+      </div>
+    </div>
   </div>
 
   <!-- ================= 因子实验室：横截面 IC / ICIR 检验 ================= -->
@@ -2754,6 +2792,8 @@ function switchTab(want){
   if(want === 'screen' && !idState.presetLoaded) loadIntradayPresets();
   // 懒加载：首次进入「牛熊速查」时拉取（#bullbear）
   if(want === 'bullbear' && !bbState.loaded) loadBullbear();
+  // 股债温度挂在牛熊速查页当第二张卡，同样懒加载（它要拉 5000+ 根 K 线，不预取）
+  if(want === 'bullbear' && !sbState.loaded) loadStockBond();
   // 懒加载：首次进入「因子实验室」时读股票池覆盖情况
   if(want === 'factorlab' && !flState.loaded) loadFactorLab();
   // 懒加载：首次进入「连板梯队」时拉取（#100）
@@ -3658,7 +3698,13 @@ function renderStockAi(r, out){
   // B 资金面 + 筹码（westock 可用时才有；主力净额涨红跌绿）
   var fl = ctx.flow || {};
   if(fl.main_net != null){
-    function yi(v){ return (v >= 0 ? '+' : '') + (Math.abs(v) >= 10000 ? (v / 10000).toFixed(2) + '亿' : v + '万'); }
+    /* westock 的 MainNetFlow 单位是【元】，不是万元——以前写成 >=10000 就 /1e4 当亿，
+       宁德时代 -15.57 亿被显示成 -155683.43 亿。统一按元换算到亿/万。 */
+    function yi(v){
+      var a = Math.abs(v);
+      return (v >= 0 ? '+' : '-') + (a >= 1e8 ? (a / 1e8).toFixed(2) + '亿'
+                                              : (a / 1e4).toFixed(0) + '万');
+    }
     h += '<div class="row"><span class="lbl">资金面</span><span>主力净额 <b class="' + cls(fl.main_net) + '">' +
          yi(fl.main_net) + '</b>' +
          (fl.main_circ_rate != null ? '（占流通 ' + fl.main_circ_rate + '%）' : '') +
@@ -3683,13 +3729,30 @@ function renderStockAi(r, out){
          ctx.missing.map(function(x){ return esc(x); }).join('、') + '</div>';
   out.innerHTML = '<div class="intentbox">' + h + '</div>';
 }
+/* 市盈率文案：ETF / 指数没有 PE 概念，上游统一给 0；真亏损股给负数。
+   两者都用「0 或负」表达，最早统一写成「亏损」，结果沪深300ETF 显示
+   「市盈率：亏损」——ETF 没有利润，谈不上亏损。按代码前缀区分基金。
+   代码形态：sh51xxxx / sz15xxxx / sh56xxxx / sh58xxxx 是 ETF。 */
+function isFundCode(code){
+  var c = String(code || '').toLowerCase();
+  return /^(sh(51|56|58)|sz(15|16))\d{4}$/.test(c);
+}
+function peText(pe, code){
+  if(pe === null || pe === undefined || isNaN(pe)) return '—';
+  if(pe > 0) return fmt(pe);
+  return isFundCode(code) ? '不适用' : '亏损';
+}
 function renderStock(d){
   var q = d.quote || {};
   var ind = d.indicators;
   var stg = d.strategies;
   var el = $('stockWrap');
   var name = q.name || d.code;
-  var chg = q.change_pct || 0;
+  /* 价格 <= 0 或跌幅 <= -100% 是上游盘前全零快照（last_price=0、pre_close 正常），
+     不是真实行情。直接显示会变成「0.00 / -100%」，看着像退市，必须当成「暂无」。 */
+  var pxBad = (typeof q.price === 'number' && q.price <= 0)
+    || (typeof q.change_pct === 'number' && q.change_pct <= -99.99);
+  var chg = pxBad ? null : (q.change_pct || 0);
 
   var h = '<div class="card"><div class="card-b">';
   h += '<div class="backlink" id="backRank">← 返回榜单</div>';
@@ -3697,8 +3760,10 @@ function renderStock(d){
     '<div><div class="nm">' + esc(name) + ' ' + marketTag(d.code) + '</div>' +
     '<div class="cd">' + esc(d.code.toUpperCase()) + '</div></div>' +
     '<div style="margin-left:auto;text-align:right">' +
-    '<div class="px ' + cls(chg) + '">' + fmt(q.price) + '</div>' +
-    '<div class="cg ' + cls(chg) + '">' + sign(q.change) + ' &nbsp; ' + sign(chg) + '%</div>' +
+    (pxBad
+      ? '<div class="px">—</div><div class="cg" style="font-size:12px;color:var(--tx3)">行情暂不可用</div>'
+      : '<div class="px ' + cls(chg) + '">' + fmt(q.price) + '</div>' +
+        '<div class="cg ' + cls(chg) + '">' + sign(q.change) + ' &nbsp; ' + sign(chg) + '%</div>') +
     '</div></div>';
   // 个股分析 → 策略回测 一键直达：预填代码 + 切到回测页，用户只需选策略点运行
   h += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0 0">' +
@@ -3733,7 +3798,7 @@ function renderStock(d){
     qg('最低', fmt(q.low), '') +
     qg('成交额', q.amount ? (q.amount/10000).toFixed(2) + '亿' : '—', '') +
     qg('换手率', q.turnover ? fmt(q.turnover) + '%' : '—', '') +
-    qg('市盈率', q.pe > 0 ? fmt(q.pe) : '亏损', '') +
+    qg('市盈率', peText(q.pe, d.code), '') +
     qg('市净率', q.pb > 0 ? fmt(q.pb) : '—', '') +
     qg('总市值', cap(q.total_cap), '') +
     qg('流通市值', cap(q.float_cap), '') +
@@ -3888,7 +3953,8 @@ function renderStock(d){
     });
 
     h += '<div style="margin-top:14px;font-size:12px;color:var(--tx3)">' +
-      '数值颜色表示与前一交易日相比的升降（绿升红降），并非买卖方向；' +
+      '数值颜色表示与前一交易日相比的升降（<b class="up">红升</b> / <b class="down">绿降</b>，'
+      + '与A股涨跌同色），并非买卖方向；' +
       '指标右侧的「买 / 卖」徽标为基于阈值的多空评级（<span class="rate-buy">买入=红</span> / <span class="rate-sell">卖出=绿</span>），' +
       '与上方「技术面结论（信号事件）」相互独立，仅供参考、不预测未来。' +
       '指标涵盖均线 / 趋势 / 震荡 / 通道 / 量能 / 情绪 / 波动率七大类，全部由 MyTT 指标库实时计算。' +
@@ -7519,6 +7585,263 @@ function scheduleBullbear(){
 }
 
 /* =========================================================================
+   股债温度：沪深300 相对国债ETF，贵还是便宜
+   --------------------------------------------------------------------------
+   与上面「牛熊温度」是两套口径，刻意并排而不是混进一个分数：
+     - 牛熊温度 0-100：13 维横截面，回答「现在市场多热」；
+     - 股债 z 值    ：单一比值的滚动位置，回答「股票相对债券多贵」。
+   混算会让两者互相稀释——一个过热、一个便宜，加起来正好「震荡」，信息全丢。
+
+   三条不能在界面上省掉的说明：
+   1. 债券腿是 ETF 价格不是收益率，与万得「股债利差」方向相反、刻度不同；
+   2. ±2σ 实测命中率约 10%（不是正态的 2.3%），「触轨」不稀有；
+   3. 只做诊断，不给买卖信号。
+   ========================================================================= */
+var sbState = {loaded:false, window:500, busy:false};
+
+function loadStockBond(w){
+  var el = $('sbBody'), meta = $('sbMeta');
+  if(!el) return;
+  if(w) sbState.window = w;
+  if(sbState.busy) return;
+  sbState.busy = true;
+  el.innerHTML = '<div class="load"><span class="spin"></span>计算中…（首次约 1 秒）</div>';
+  api('/api/stock_bond?window=' + sbState.window).then(function(d){
+    sbState.busy = false;
+    if(!d || !d.ok){
+      die(el, '股债温度暂不可用：' + ((d && d.error) || '上游未就绪'));
+      meta.textContent = '数据暂缺';
+      return;
+    }
+    sbState.loaded = true;
+    renderStockBond(el, meta, d);
+  }).catch(function(e){
+    sbState.busy = false;
+    die(el, '股债温度加载失败：' + e.message);
+    meta.textContent = '加载失败';
+  });
+}
+
+function sbZoneLight(z){
+  // 语义是「股票贵不贵」，复用温度令牌：热=贵=暖色。**不跟涨跌色走**——
+  // 这里不是涨跌，用红绿表达涨跌会让用户以为红色=要大跌。
+  if(z == null) return 'var(--tx3)';
+  if(z > 1.5) return 'var(--bb-over)';
+  if(z < -1.5) return 'var(--bb-cold)';
+  return 'var(--bb-warm)';
+}
+
+function renderStockBond(el, meta, d) {
+  var now = d.now || {}, st = d.stats || {};
+  var zt = now.zone_text || '—';
+  var zl = sbZoneLight(now.z);
+  meta.innerHTML = esc(d.source === 'eltdx' ? '通达信' : '新浪') + ' · ' +
+    esc(d.start) + ' 起 · 窗口 ' + d.window + ' 日' +
+    '<span class="ktag" id="sbIntraday" style="margin-left:6px" title="最后一根K线可能是盘中实时价，收盘后才定稿">' +
+    esc(now.as_of) + '</span>';
+
+  var h = '<div class="bbhero">' +
+    '<span class="n">' + (now.z > 0 ? '+' : '') + Number(now.z).toFixed(2) + '</span>' +
+    '<span class="band"><span class="bblight" style="background:' + zl + '"></span>' + esc(zt) + '</span>' +
+    '<span class="bbpos">z 分位 <b>' + sbRank(now.pct_rank) + '</b>' +
+    ' · 近20日 股 ' + sbPct(now.stock_ret_20d) + ' / 债 ' + sbPct(now.bond_ret_20d) + '</span>' +
+    '</div>';
+
+  // 温度条：−3σ ~ +3σ 映射到 0~100%，中间标出 ±1.5 的分区边界
+  var pos = function(v){ return Math.max(0, Math.min(100, (v + 3) / 6 * 100)); };
+  h += '<div class="sbbar">' +
+    '<i class="cheap" style="width:' + pos(-1.5) + '%"></i>' +
+    '<i class="mid" style="width:' + (pos(1.5) - pos(-1.5)) + '%"></i>' +
+    '<i class="exp" style="left:' + pos(1.5) + '%;width:' + (100 - pos(1.5)) + '%"></i>' +
+    '<span class="sbpin" style="left:calc(' + pos(now.z) + '% - 1px)"></span>' +
+    '</div>';
+  h += '<div class="sbscale"><span>← 便宜（−3σ）</span><span>0</span><span>贵（+3σ）→</span></div>';
+
+  h += '<div class="bbsec"><div class="bbh2">z 值走势与 ±2σ 通道' +
+    '<span class="sub" id="sbChartMeta"></span></div>' +
+    '<div id="sbChart" class="bbchart" style="height:260px"></div></div>';
+
+  h += '<div class="bbsec"><div class="bbh2">触轨之后股票相对债券怎么走' +
+    '<span class="sub">对数超额收益，正=股票跑赢</span></div>' +
+    sbFwdTable(d.fwd || []) + '</div>';
+
+  h += '<details class="bbdet"><summary>口径与局限（必读，尤其第 1 条）</summary>' +
+    '<ol class="sbca">' + (d.caveats || []).map(function(c){
+      return '<li>' + esc(c) + '</li>';
+    }).join('') +
+    '<li>IC 名义 t 值虚高：250 日前瞻的相邻样本重叠 249 天，去重叠后有效样本只剩 ' +
+      esc(st.n_eff == null ? '—' : st.n_eff) + ' 个（名义 ' + esc(st.n == null ? '—' : st.n) +
+      '）。表里两个都给了，只看大的那个会高估。</li>' +
+    '</ol></details>';
+
+  h += '<div class="sbctl">窗口 ' +
+    [250, 500, 750, 1200].map(function(w){
+      return '<button class="btn sbsel' + (w === d.window ? ' on' : '') +
+        '" onclick="loadStockBond(' + w + ')">' + (w === 500 ? '2年' : w === 250 ? '1年' :
+        w === 750 ? '3年' : '5年') + '（' + w + '）</button>';
+    }).join('') + '</div>';
+
+  h += '<div class="bbnote">读法：z 为正说明沪深300 相对国债<b>偏贵</b>，为负说明<b>偏便宜</b>；' +
+    '|z| 超过 1.5 才算进入便宜/贵区间，±2σ 只是画出来的参考线。<br>' +
+    '本面板<b>只做诊断，不给买卖信号</b>。历史统计里便宜区之后一年股票平均跑赢债券，' +
+    '但那是 370 个交易日的平均，没有任何一次保证能复制，且样本内、未做样本外验证。<br>' +
+    '数据源与口径：见上方「口径与局限」；数值与万得「股债利差」<b>不可对读</b>。</div>';
+
+  el.innerHTML = h;
+  drawSBChart(d);
+}
+
+function sbPct(v){
+  if(v == null || isNaN(v)) return '—';
+  return (v > 0 ? '+' : '') + (v * 100).toFixed(1) + '%';
+}
+
+/* 分位显示：0.03% 直接 toFixed(0) 会印成「0%」，读起来像数据坏了。
+   极端分位保留一位小数并加「低于 0.1%」的说明，让用户知道这是真的极值。 */
+function sbRank(p){
+  if(p == null || isNaN(p)) return '—';
+  var v = p * 100;
+  if(v > 0 && v < 1) return '低于 1%';
+  if(v < 100 && v > 99) return '高于 99%';
+  return v.toFixed(0) + '%';
+}
+
+function sbFwdTable(fwd){
+  var rows = fwd.filter(function(f){ return f && f.ok; });
+  if(!rows.length) return '<div class="innote">前瞻样本不足，暂不统计。</div>';
+  var h = '<div class="sbtbl"><table><thead><tr><th>z 区间</th>' +
+    rows.map(function(f){ return '<th>' + f.horizon + '日</th>'; }).join('') +
+    '</tr></thead><tbody>';
+  [['cheap','便宜（z<−1.5）'],['channel','通道内'],['expensive','贵（z>1.5）']]
+    .forEach(function(zn){
+      h += '<tr><td>' + zn[1] + '</td>';
+      rows.forEach(function(f){
+        var c = (f.zones || {})[zn[0]] || {};
+        if(c.mean == null){ h += '<td class="na">样本不足</td>'; return; }
+        // 着色语义是「股票相对债券跑赢/跑输」，正=跑赢=红、负=跑输=绿，
+        // 与 A 股涨跌同色。负值不代表亏损，是跑输债券；读的时候别当成亏钱。
+        h += '<td class="' + (c.mean > 0 ? 'up' : 'down') + '">' +
+          (c.mean > 0 ? '+' : '') + (c.mean * 100).toFixed(1) + '%' +
+          '<span class="n">n=' + c.n + '</span></td>';
+      });
+      h += '</tr>';
+    });
+  h += '</tbody></table></div>';
+  var f2 = rows.filter(function(f){ return f.ic != null; });
+  if(f2.length){
+    h += '<div class="sbn">IC（z 与未来超额收益的相关系数）：' + f2.map(function(f){
+      return f.horizon + '日 <b>' + f.ic.toFixed(3) + '</b>　去重叠 <b>' +
+        (f.ic_eff == null ? '—' : f.ic_eff.toFixed(3)) + '</b>（t=' +
+        (f.ic_eff_t == null ? '—' : f.ic_eff_t.toFixed(1)) + '，n=' + f.n_eff + '）';
+    }).join('；') + '。IC 为负=z 越高之后越弱，与「贵了会回归」一致。</div>';
+  }
+  return h;
+}
+
+/* 参照线的颜色。**必须与 z 线不同色系**——第一版把沪深300 也画成半透明黄，
+   两条黄线在图上完全分不开，等于没加。z 是暖黄（结论），参照走中性蓝灰（背景信息），
+   主次一眼可分。蓝灰不占 --up/--down，不引入新的涨跌语义。 */
+var SB_REF_COLOR = 'rgba(120,160,210,.85)';
+
+function drawSBChart(d){
+  var dom = $('sbChart');
+  if(!dom) return;
+  var items = (d.series || []).filter(function(x){ return x.z != null; });
+  if(items.length < 2){ dom.innerHTML = '<div class="innote">序列点数不足。</div>'; return; }
+  var mt = $('sbChartMeta');
+  if(mt) mt.textContent = items.length + ' 个点 · ±' + d.band_sigma + 'σ';
+
+  // 降采样：2798 个点直接进 echarts 在手机上会卡。按桶取 min/max 保留极值——
+  // 直接每 N 个取 1 会把触轨的尖峰削掉，而那几根针正是最该看的。
+  var MAXP = 900;
+  var pts = items;
+  if(items.length > MAXP){
+    var bucket = Math.ceil(items.length / (MAXP / 2));
+    pts = [];
+    for(var i = 0; i < items.length; i += bucket){
+      var seg = items.slice(i, i + bucket);
+      var lo = seg[0], hi = seg[0];
+      seg.forEach(function(x){ if(x.z < lo.z) lo = x; if(x.z > hi.z) hi = x; });
+      pts.push(seg[0]);
+      if(lo !== seg[0]) pts.push(lo);
+      if(hi !== seg[0] && hi !== lo) pts.push(hi);
+    }
+  }
+
+  var c = ec('sbChart');
+  if(!c) return;
+  var zs = items.map(function(x){ return x.z; });
+  var lo = Math.min(-3, Math.floor(Math.min.apply(null, zs)));
+  var hi = Math.max(3, Math.ceil(Math.max.apply(null, zs)));
+  c.setOption({
+    tooltip: { trigger: 'axis', backgroundColor: ecv('--ec-tip-bg'),
+      borderColor: ecv('--ec-line'),
+      textStyle: { color: ecv('--ec-text'), fontSize: 12 },
+      formatter: function(ps){
+        var p = ps && ps[0]; if(!p) return '';
+        var o = items[p.dataIndex] || {};
+        return p.axisValue + '<br/>z = <b>' + (o.z == null ? '—' : o.z) + '</b>' +
+          (o.stock != null ? '<br/>沪深300 <b>' + o.stock + '</b>　国债ETF ' + o.bond : '') +
+          '<br/>ln(股/债) = ' + o.lr;
+      } },
+    // 左轴给 z（主线），右轴给沪深300 点位（参照）。和视频那张双轴图同一个读法：
+    // 一根线是「贵不贵」，一根线是「大盘在哪」，两条一起看才知道每次触轨时
+    // 市场正在发生什么。**右轴只是参照，不参与任何计算**，别拿它的刻度去比左右。
+    grid: { left: 44, right: 72, top: 34, bottom: 26 },
+    legend: { top: 0, left: 0, itemWidth: 14, itemHeight: 2, itemGap: 14,
+      textStyle: { fontSize: 11, color: ecv('--ec-text') },
+      data: ['z（左轴）', '沪深300（右轴）'] },
+    xAxis: { type: 'category', boundaryGap: false,
+      data: pts.map(function(x){ return x.date; }),
+      axisLine: { lineStyle: { color: ecv('--ec-line') } },
+      axisLabel: { fontSize: 10.5, color: ecv('--ec-text'),
+        formatter: function(v){ return String(v).slice(0, 7); } } },
+    yAxis: [
+      { type: 'value', name: '', min: lo, max: hi,
+        splitLine: { lineStyle: { color: ecv('--ec-split') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+      { type: 'value', name: '', scale: true, position: 'right',
+        splitLine: { show: false },   // 两套网格叠在一起会糊成一片，右轴只留刻度
+        axisLabel: { fontSize: 10.5, color: SB_REF_COLOR,
+          formatter: function(v){ return v >= 10000 ? (v / 10000).toFixed(1) + '万' : v; } } }
+    ],
+    series: [{
+      name: '沪深300（右轴）', type: 'line', yAxisIndex: 1, symbol: 'none',
+      z: 1, data: pts.map(function(x){ return x.stock; }),
+      lineStyle: { width: 1.2, color: SB_REF_COLOR, type: 'solid' },
+      itemStyle: { color: SB_REF_COLOR }
+    }, {
+      name: 'z（左轴）', yAxisIndex: 0, z: 2,
+      type: 'line', symbol: 'none', sampling: 'lttb',
+      data: pts.map(function(x){ return x.z; }),
+      lineStyle: { width: 1.4, color: 'rgba(252,213,53,.95)' },
+      areaStyle: { color: 'rgba(252,213,53,.08)' },
+      // 触轨区间底色与视频同一视觉语言：上轨上方浅红、下轨下方浅绿。
+      // 注意这里红绿表达的是「股票贵/便宜」，不是涨跌——所以用暖/冷令牌而非 --up/--down。
+      markArea: { silent: true, data: [
+        [{ yAxis: d.band_sigma, itemStyle: { color: 'rgba(246,70,93,.10)' } },
+         { yAxis: hi }],
+        [{ yAxis: lo, itemStyle: { color: 'rgba(14,203,129,.10)' } },
+         { yAxis: -d.band_sigma }]
+      ] },
+      // 标签收在右端、贴着第二条 y 轴内侧。放左端（insideStartTop）时三条标签
+      // 正好压在 2014-2017 那段的 K 线上，灰底白字看不清；右端外侧才是空的。
+      markLine: { silent: true, symbol: 'none',
+        label: { fontSize: 10, color: ecv('--ec-text'), position: 'insideEndTop',
+          distance: 3 },
+        data: [
+          { yAxis: d.band_sigma, lineStyle: { color: 'rgba(246,70,93,.75)',
+            type: 'dashed', width: 1 }, label: { formatter: '+2σ' } },
+          { yAxis: 0, lineStyle: { color: ecv('--ec-line'), type: 'solid', width: 1 },
+            label: { formatter: '均值' } },
+          { yAxis: -d.band_sigma, lineStyle: { color: 'rgba(14,203,129,.75)',
+            type: 'dashed', width: 1 }, label: { formatter: '−2σ' } }
+        ] }
+    }]
+  }, true);
+}
+
+/* =========================================================================
    因子实验室：横截面 IC / ICIR 检验
    --------------------------------------------------------------------------
    与「策略体检」的分工：那边评估 0/1 选股信号最近灵不灵，这边评估连续因子
@@ -10387,8 +10710,13 @@ function renderEtf(d, el){
 /* =========================================================================
    个股分析：资金面 / 筹码 / 基本面 / 研报 / 公告
    ========================================================================= */
-function fmtMoney(v){
-  if(v === null || v === undefined || v === 0) return '—';
+/* 资金流向专用：元 → 「亿 / 万」。**不能叫 fmtMoney**——模拟盘那边另有一个
+   同名函数（千分位元，如 1,234.56），JS 后者覆盖前者，导致资金卡显示
+   「84,048,704.00」而不是「8405万」，同一页面里 AI 卡写「+8405万」两处对不上。
+   两个语义完全不同，必须分开命名。 */
+function fmtFlow(v){
+  if(v === null || v === undefined) return '—';
+  if(v === 0) return '0';
   var a = Math.abs(v);
   var neg = v < 0 ? '-' : '';
   if(a >= 1e8) return neg + (a/1e8).toFixed(2) + '亿';
@@ -10507,7 +10835,7 @@ function loadStockExtra(code){
                            Math.abs(item.small_net), 1);
       h += '<div class="card"><div class="card-h"><h2>资金流向</h2><div class="meta">' +
            esc(item.date || '') + ' · 主力净额 ' +
-           '<b class="' + cls(item.main_net) + '">' + fmtMoney(item.main_net) + '</b></div></div><div class="card-b">';
+           '<b class="' + cls(item.main_net) + '">' + fmtFlow(item.main_net) + '</b></div></div><div class="card-b">';
       var rows = [
         ['主力净额', item.main_net], ['超大单', item.jumbo_net], ['大单', item.block_net],
         ['中单', item.mid_net], ['小单', item.small_net]
@@ -10515,13 +10843,13 @@ function loadStockExtra(code){
       rows.forEach(function(x){
         h += '<div class="flowrow"><span class="lb">' + x[0] + '</span>' +
              flowBar(x[1], maxAbs) +
-             '<span class="vv ' + cls(x[1]) + '">' + fmtMoney(x[1]) + '</span></div>';
+             '<span class="vv ' + cls(x[1]) + '">' + fmtFlow(x[1]) + '</span></div>';
       });
       h += '<div style="margin-top:12px;padding-top:10px;border-top:1px solid var(--line2)">';
       h += '<div class="mgrid">';
-      h += '<div class="mcell"><div class="k">主力净额 · 5日</div><div class="v ' + cls(item.main_net_5d) + '">' + fmtMoney(item.main_net_5d) + '</div></div>';
-      h += '<div class="mcell"><div class="k">主力净额 · 10日</div><div class="v ' + cls(item.main_net_10d) + '">' + fmtMoney(item.main_net_10d) + '</div></div>';
-      h += '<div class="mcell"><div class="k">主力净额 · 20日</div><div class="v ' + cls(item.main_net_20d) + '">' + fmtMoney(item.main_net_20d) + '</div></div>';
+      h += '<div class="mcell"><div class="k">主力净额 · 5日</div><div class="v ' + cls(item.main_net_5d) + '">' + fmtFlow(item.main_net_5d) + '</div></div>';
+      h += '<div class="mcell"><div class="k">主力净额 · 10日</div><div class="v ' + cls(item.main_net_10d) + '">' + fmtFlow(item.main_net_10d) + '</div></div>';
+      h += '<div class="mcell"><div class="k">主力净额 · 20日</div><div class="v ' + cls(item.main_net_20d) + '">' + fmtFlow(item.main_net_20d) + '</div></div>';
       if(item.main_rank) h += '<div class="mcell"><div class="k">主力流入排名</div><div class="v">第 ' + item.main_rank + '</div></div>';
       h += '</div></div></div></div>';
     } else if(ff && !ff.available){
