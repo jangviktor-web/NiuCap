@@ -2571,7 +2571,17 @@ var state = {
   stockMinute: null,        // 非空 = K线卡片正显示该分钟周期（如 '5m'）
   stockMinuteData: null,    // 分钟模式下最近一次响应，供通道切换重绘
   chanMode: 'none',
-  charts: {}
+  charts: {},
+  // 主题切换重绘用的数据缓存。存的是**最近一次接口响应的原始对象**，
+  // 而不是图表 option——option 里已经烘焙了颜色（ecv() 读的是当前主题），
+  // 换个主题必须重新生成 option，只存 option 的话颜色换不过来。
+  chartCache: {
+    stock: null,            // loadStock 的 d（K线+指标+估值）
+    bbRadar: null,          // /api/bullbear 的 radar
+    bbTrend: null,          // /api/bullbear/history
+    sb: null,               // /api/stock_bond
+    nav: null               // 导航栏瀑布图
+  }
 };
 
 function $(id){ return document.getElementById(id); }
@@ -3743,6 +3753,8 @@ function peText(pe, code){
   return isFundCode(code) ? '不适用' : '亏损';
 }
 function renderStock(d){
+  // 主题切换重绘的数据源：存最近一次完整响应，换主题时重画而不重新取数
+  state.chartCache.stock = d;
   var q = d.quote || {};
   var ind = d.indicators;
   var stg = d.strategies;
@@ -4203,7 +4215,9 @@ function drawStockMinute(d){
     xAxis: { type: 'category', data: dates, boundaryGap: true,
       axisLine: { lineStyle: { color: ecv('--ec-line') } },
       axisLabel: { fontSize: 10.5, color: ecv('--ec-text'),
-        formatter: function(v){ return String(v).slice(5); } } },
+        formatter: function(v){ return String(v).slice(5); } },
+        // x 轴网格线默认色 #E0E6F1 在深色主题下过亮，显式关掉
+        splitLine: { show: false } },
     yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
       axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
     dataZoom: [ { type: 'inside' }, { type: 'slider', height: 15, bottom: 4 } ],
@@ -4245,10 +4259,43 @@ function toggleTheme(){
   document.documentElement.dataset.theme = next;
   try{ localStorage.setItem('npTheme', next); }catch(e){}
   renderThemeBtn();
-  /* ponytail: 图表数据没有缓存在 state 里（只有 minute 模式有），按主题重画要重新
-     取数，干脆整体 reload——<head> 已同步 data-theme，不会闪错主题。
-     要改成"只重画不刷页面"的话，先把最近一次 d/分钟响应存进 state.chartData 再调用各 draw*。 */
-  location.reload();
+  /* 原来是 location.reload()，因为图表数据没缓存、重画要重新取数。代价是：
+     个股页切一次主题就丢股票、丢 5 张图、丢 AI 卡片、丢滚动位置，等于每次
+     切换都要重新走一遍加载。现在改为「换 CSS 变量 + 用缓存的数据重画」。
+     <head> 的 data-theme 已同步，且所有图表配色都走 ecv() 现读，所以颜色一定对。 */
+  redrawChartsForTheme();
+}
+/* 主题切换后的整页重绘。只动图表，DOM 与页面状态一律不碰——
+   这正是当初选择 reload 想避免的损失。 */
+function redrawChartsForTheme(){
+  var cc = state.chartCache;
+  try{
+    // 1) 个股 K 线五连图。注意分钟模式与日 K 走的是两套渲染函数。
+    if(cc.stock){
+      if(state.stockMinute && state.stockMinuteData) drawStockMinute(state.stockMinuteData);
+      else drawCharts(cc.stock);
+    }
+    // 2) 牛熊速查：雷达 + 温度趋势
+    if(cc.bbRadar) drawBBRadar(cc.bbRadar);
+    if(cc.bbTrend) drawBBTrend(cc.bbTrend);
+    // 3) 股债温度
+    if(cc.sb) drawSBChart(cc.sb);
+    // 4) 回测净值图（个股/牛熊/公式三个容器，各自的数据独立缓存）
+    Object.keys(cc).forEach(function(k){
+      if(k.indexOf('bt_') === 0 && cc[k]){
+        renderBacktest(cc[k], k.slice(3));
+      }
+    });
+    // 5) 其余 echarts（因子页等）：只 resize 触发重算，数据本身不依赖主题
+    Object.keys(state.charts).forEach(function(id){
+      var c = state.charts[id];
+      if(c && c.resize) c.resize();
+    });
+  }catch(e){
+    // 重绘失败不能留一个半黑半白的页面：退回 reload，至少保证可用。
+    console.error('主题重绘失败，回退整页刷新', e);
+    location.reload();
+  }
 }
 function ec(id){
   var dom = $(id);
@@ -4350,7 +4397,10 @@ function drawCharts(d){
       grid: { left: 52, right: 16, top: 34, bottom: 34 },
       xAxis: { type: 'category', data: dates, boundaryGap: true,
         axisLine: { lineStyle: { color: ecv('--ec-line') } },
-        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
+        // x 轴网格线默认色是 echarts 内置浅灰 #E0E6F1，深色主题下会亮得刺眼；
+        // 之前没显式关掉，切到夜间等于留了一道白网格
+        splitLine: { show: false } },
       yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
         axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       dataZoom: [ { type: 'inside' }, { type: 'slider', height: 16, bottom: 4 } ],
@@ -4373,7 +4423,10 @@ function drawCharts(d){
       grid: { left: 52, right: 16, top: 28, bottom: 28 },
       xAxis: { type: 'category', data: S.dates,
         axisLine: { lineStyle: { color: ecv('--ec-line') } },
-        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
+        // x 轴网格线默认色是 echarts 内置浅灰 #E0E6F1，深色主题下会亮得刺眼；
+        // 之前没显式关掉，切到夜间等于留了一道白网格
+        splitLine: { show: false } },
       yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
         axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       series: [ { name: '成交量', type: 'bar', data: S.volume.slice(-S.dates.length),
@@ -4394,7 +4447,10 @@ function drawCharts(d){
       grid: { left: 52, right: 16, top: 32, bottom: 28 },
       xAxis: { type: 'category', data: S.dates,
         axisLine: { lineStyle: { color: ecv('--ec-line') } },
-        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
+        // x 轴网格线默认色是 echarts 内置浅灰 #E0E6F1，深色主题下会亮得刺眼；
+        // 之前没显式关掉，切到夜间等于留了一道白网格
+        splitLine: { show: false } },
       yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
         axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       series: [
@@ -4420,7 +4476,10 @@ function drawCharts(d){
       grid: { left: 52, right: 16, top: 32, bottom: 28 },
       xAxis: { type: 'category', data: S.dates,
         axisLine: { lineStyle: { color: ecv('--ec-line') } },
-        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
+        // x 轴网格线默认色是 echarts 内置浅灰 #E0E6F1，深色主题下会亮得刺眼；
+        // 之前没显式关掉，切到夜间等于留了一道白网格
+        splitLine: { show: false } },
       yAxis: { min: 0, max: 100, splitLine: { lineStyle: { color: ecv('--ec-split') } },
         axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       series: [
@@ -4446,7 +4505,10 @@ function drawCharts(d){
       grid: { left: 52, right: 16, top: 32, bottom: 28 },
       xAxis: { type: 'category', data: S.dates,
         axisLine: { lineStyle: { color: ecv('--ec-line') } },
-        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
+        // x 轴网格线默认色是 echarts 内置浅灰 #E0E6F1，深色主题下会亮得刺眼；
+        // 之前没显式关掉，切到夜间等于留了一道白网格
+        splitLine: { show: false } },
       yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
         axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       series: [
@@ -7474,10 +7536,13 @@ function loadBullbear(){
         ? '上游总评 ' + d.upstream.raw + '，量纲未公开，仅供对照、不参与本页计算。' : '') +
       '以上为统计口径的位置参考，不构成投资建议。</div>';
     el.innerHTML = h;
+    // 主题切换重绘用：缓存原始响应（option 里的颜色已按当前主题烘焙，不能复用）
+    state.chartCache.bbRadar = (r && r.radar) || {};
     drawBBRadar((r && r.radar) || {});
     // 历史序列单独取：与实时快照不是一个缓存粒度，且趋势图可以先空着
     return api('/api/bullbear/history?days=365');
   }).then(function(hr){
+    state.chartCache.bbTrend = hr || {};
     drawBBTrend(hr || {});
     scheduleBullbear();
   }).catch(function(e){ die(el, '市场温度加载失败：' + e.message); scheduleBullbear(); });
@@ -7560,7 +7625,9 @@ function drawBBTrend(hr){
       data: items.map(function(x){ return x.date; }),
       axisLine: { lineStyle: { color: ecv('--ec-line') } },
       axisLabel: { fontSize: 10.5, color: ecv('--ec-text'),
-        formatter: function(v){ return String(v).slice(5); } } },
+        formatter: function(v){ return String(v).slice(5); } },
+        // x 轴网格线默认色 #E0E6F1 在深色主题下过亮，显式关掉
+        splitLine: { show: false } },
     yAxis: { min: 0, max: 100, splitLine: { lineStyle: { color: ecv('--ec-split') } },
       axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
     series: [{
@@ -7632,6 +7699,8 @@ function sbZoneLight(z){
 }
 
 function renderStockBond(el, meta, d) {
+  // 主题切换重绘用：缓存原始响应
+  state.chartCache.sb = d;
   var now = d.now || {}, st = d.stats || {};
   var zt = now.zone_text || '—';
   var zl = sbZoneLight(now.z);
@@ -7795,7 +7864,9 @@ function drawSBChart(d){
       data: pts.map(function(x){ return x.date; }),
       axisLine: { lineStyle: { color: ecv('--ec-line') } },
       axisLabel: { fontSize: 10.5, color: ecv('--ec-text'),
-        formatter: function(v){ return String(v).slice(0, 7); } } },
+        formatter: function(v){ return String(v).slice(0, 7); } },
+        // x 轴网格线默认色 #E0E6F1 在深色主题下过亮，显式关掉
+        splitLine: { show: false } },
     yAxis: [
       { type: 'value', name: '', min: lo, max: hi,
         splitLine: { lineStyle: { color: ecv('--ec-split') } },
@@ -10065,6 +10136,9 @@ function attr(s){ return String(s||'').replace(/"/g, '&quot;'); }
 function renderBacktest(d, target){
   var el = $(target || 'btOutput');
   if(!el) return;
+  // 主题切换重绘用。三个页（个股回测/牛熊回测/公式回测）共用本函数，
+  // target 不同，必须按 target 分开存，否则重画会画错容器。
+  state.chartCache['bt_' + (target || 'btOutput')] = d;
   var r = d.result || {};
   var h = '<div class="card">';
 
@@ -10594,7 +10668,10 @@ function renderGrid(d, el){
       grid: { left: 56, right: 20, top: 30, bottom: 44 },
       xAxis: { type: 'category', data: kd, boundaryGap: true,
         axisLine: { lineStyle: { color: ecv('--ec-line') } },
-        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
+        // x 轴网格线默认色是 echarts 内置浅灰 #E0E6F1，深色主题下会亮得刺眼；
+        // 之前没显式关掉，切到夜间等于留了一道白网格
+        splitLine: { show: false } },
       yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
         axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       dataZoom: [{ type: 'inside', start: zoomStart, end: 100 },
