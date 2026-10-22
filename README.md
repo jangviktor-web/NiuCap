@@ -10,11 +10,13 @@
 
 <br>
 
-<a href="https://ab1dde4ffb5e275c5.app.workbuddy.host/" target="_blank"><img src="https://img.shields.io/badge/%E2%9A%A1%20%E5%9C%A8%E7%BA%BF%E4%BD%93%E9%AA%8C-%E6%89%93%E5%BC%80%E6%BC%94%E7%A4%BA%E7%AB%99-FF6B35?style=for-the-badge&labelColor=2D2D2D" alt="在线体验 · 打开演示站"></a>
+<a href="https://ab1dde4ffb5e275c5.app.workbuddy.link/" target="_blank"><img src="https://img.shields.io/badge/%E2%9A%A1%20%E5%9C%A8%E7%BA%BF%E4%BD%93%E9%AA%8C-%E6%89%93%E5%BC%80%E6%BC%94%E7%A4%BA%E7%AB%99-FF6B35?style=for-the-badge&labelColor=2D2D2D" alt="在线体验 · 打开演示站"></a>
 
 <sub>免安装 · 打开即用 · 演示环境数据仅供预览</sub>
 
 <br>
+
+<sub>⚠️ 2026-10 域名变更：旧 <code>*.app.workbuddy.host</code> 已停用，现地址为 <code>*.app.workbuddy.link</code>（<a href="#-部署教程一键发布到-workbuddy-云平台">原因见下</a>）</sub>
 
 [![Gitee 仓库](https://img.shields.io/badge/Gitee-jangviktor%2Fniucap-C71D23.svg)](https://gitee.com/jangviktor/niucap)
 [![Version](https://img.shields.io/badge/version-v1.1.0-blue.svg)](CHANGELOG.md)
@@ -38,7 +40,7 @@
 <td align="center" width="25%">
 <b>⚡ 在线体验</b><br>
 <sub>免安装，打开就用</sub><br><br>
-<a href="https://ab1dde4ffb5e275c5.app.workbuddy.host/" target="_blank"><b>立即体验 →</b></a>
+<a href="https://ab1dde4ffb5e275c5.app.workbuddy.link/" target="_blank"><b>立即体验 →</b></a>
 </td>
 <td align="center" width="25%">
 <b>🚀 5 分钟跑起来</b><br>
@@ -468,7 +470,7 @@
 ---
 ## 🚀 5 分钟跑起来
 
-> 💡 不想动手装？先玩 [**在线体验版**](https://ab1dde4ffb5e275c5.app.workbuddy.host/)，效果满意再回来自建。
+> 💡 不想动手装？先玩 [**在线体验版**](https://ab1dde4ffb5e275c5.app.workbuddy.link/)，效果满意再回来自建。
 
 ### 方式 A：Python 本机（推荐给开发者）
 
@@ -550,7 +552,26 @@ curl "http://localhost:8899/api/theme?limit=40"
 
 ## 📘 部署教程：一键发布到 WorkBuddy 云平台
 
-本面板无需自己买服务器，直接在 WorkBuddy 里一键发布为在线应用，生成形如 `https://ab1dde4ffb5e275c5.app.workbuddy.host/` 的分享链接——把链接发给朋友，浏览器打开即用。当前线上示例（已验证可达，HTTP 200）即这一流程的产物。
+本面板无需自己买服务器，直接在 WorkBuddy 里一键发布为在线应用，生成形如 `https://<appName>.app.workbuddy.link/` 的分享链接——把链接发给朋友，浏览器打开即用。
+
+### ⚠️ 域名变更说明（2026-10）
+
+**WorkBuddy 平台调整了分享链接的域名机制，本站地址已随之变更。**
+
+| | 域名 | 状态 |
+|---|---|---|
+| 旧 | `ab1dde4ffb5e275c5.app.workbuddy.host` | ❌ **已停用** |
+| 新 | `ab1dde4ffb5e275c5.app.workbuddy.link` | ✅ 当前地址 |
+
+如果你收藏的是旧链接，或用旧地址访问时只看到「无法访问此网站」，不是本站下线，而是域名机制变了——请改用上面的新地址。账号与数据不受影响，用原账号密码登录即可。
+
+具体发生了什么：
+
+- `workbuddy.host` 及其所有子域在权威 DNS（`ns01.trs-dns.com`）上返回 **NXDOMAIN**，即该域名在注册局层面已不存在。2026-09-27 与 10-20 旧地址还是 HTTP 200，之后开始不可达。
+- 发布接口 `artifact-releases` 的返回值仍然只给出 `*.app.workbuddy.host`（`friendlyDomains` 与 `uuidDomains` 都是），说明**脚本拿到的链接和实际可访问的域名已经不一致**：平台后端仍按旧域拼串，而真正生效的是 `.link` 网关。
+- `app.workbuddy.link` 是通配解析的，网关按 `appName` 或 `runtimeId` 路由：已注册的应用返回 200，未注册的返回「链接已失效」。
+
+> **注意**：发布脚本返回的 `verified: true` 只代表应用在沙箱内启动就绪，**不代表分享域名可解析**。每次发布后请自己打开链接确认一次；如果只拿到 `.host` 地址，把它换成 `.link` 再试。
 
 ### 为什么能直接发布
 
@@ -578,7 +599,7 @@ curl "http://localhost:8899/api/theme?limit=40"
    > 脚本会注入 `PORT` 环境变量，`server/run.py` 自动监听该端口；`--start-cmd` 不写死端口，交给 `$PORT`。
 3. **拿到链接**：脚本输出 JSON，形如
    ```json
-   { "shareLink": "https://ab1dde4ffb5e275c5.app.workbuddy.host/", "verified": true }
+   { "shareLink": "https://ab1dde4ffb5e275c5.app.workbuddy.link/", "verified": true }
    ```
    把 `shareLink` **整条**（若带 `?sharecode=...` 也要一并保留）发给对方。**不要删掉 `?sharecode=`**——它是访问凭据，缺了对方打开会看到「链接不完整」。
 4. **访问**：浏览器打开链接，页面即「牛来选股面板」。首次打开是空库，数据初始化见下方说明。

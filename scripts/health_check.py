@@ -30,7 +30,7 @@
     python3 scripts/health_check.py
 
     # 指定地址
-    python3 scripts/health_check.py --url https://xxx.app.workbuddy.host
+    python3 scripts/health_check.py --url https://xxx.app.workbuddy.link
 
     # 机器可读（供计划任务/监控消费）
     python3 scripts/health_check.py --json
