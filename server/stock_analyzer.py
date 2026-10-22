@@ -36,9 +36,15 @@ _SYS = """你是A股个股分析助手。给你一只股票的真实数据（行
 - watch 列 1~3 条「后续盯什么」：条件式提示（如「若跌破 20 日线且缩量，短线转弱」），
   同样只能基于给定数据，≤50 字每条；
 - 数据里标注"暂无"的维度不要强行解读，可略过或在 risks 里提"数据不全"；
-- score 反映"多空信号一致性 + 数据完备度"（不是预测涨跌）：信号一致且数据全→偏高，
-  信号矛盾或数据缺失→偏低，中性给 50 左右；
+- score 反映"多空信号一致性"（不是预测涨跌）：信号一致→偏高，信号矛盾→偏低，
+  中性给 50 左右。**换手率/PE/PB 缺失不影响 score**，那是估值字段，不是信号；
+  只有价格、技术面、资金面这些核心维度真的取不到才降分；
 - 严禁给出"建议买入/卖出/目标价"等投资建议，只做客观数据解读；
+- 资金面的 5/10/20 日主力净额是**互相重叠**的区间累计，绝不能相加求和
+  （5 日已经包含在 10 日、20 日里，相加等于把同一笔钱数了三遍）；
+- 「反转类信号」指超卖/超买/乖离过大——它只说「跌急了/涨急了」，**不代表方向**。
+  不要因为超卖多就写「技术面偏多」，也不要因为超买多就写「技术面偏空」；
+  方向由「趋势类信号」决定；
 - 只输出 json 块，不要额外文字。"""
 
 
@@ -78,8 +84,15 @@ def build_context(code: str, hours: int = 24) -> Dict[str, Any]:
         if ind:
             ctx["tech"] = {
                 "verdict": ind.get("verdict"), "verdict_dir": ind.get("verdict_dir"),
+                "verdict_note": ind.get("verdict_note"),
                 "bull": ind.get("bull_count"), "bear": ind.get("bear_count"),
                 "neutral": ind.get("neutral_count"),
+                # 趋势票与反转票分开给：超卖是「跌急了」，不是「看多」。
+                # 之前只给合并计数，模型看到「多8/空6」就写「技术面偏多」，
+                # 而实际是 5 个趋势信号全空、8 个超卖信号在喊反弹。
+                "trend_bull": ind.get("trend_bull"), "trend_bear": ind.get("trend_bear"),
+                "oversold": ind.get("oversold_count"),
+                "overbought": ind.get("overbought_count"),
                 "signals": [{"name": s.get("name"), "dir": s.get("dir"),
                              "desc": s.get("desc", "")}
                             for s in (ind.get("signals") or [])][:8],
@@ -147,15 +160,45 @@ def build_context(code: str, hours: int = 24) -> Dict[str, Any]:
         import sector_verify as sv
         items = sv._load_news(hours) or []
         name, secs = ctx["name"], set(ctx["sectors"])
+        # 板块名当关键词太宽：「金融」会命中「政策性金融」「金融街」，
+        # 「消费」会命中「消费机器人」「日用消费品」——这些跟该股毫无关系，
+        # 却会被模型当成利好利空写进解读。改用**板块成分股名称**匹配，
+        # 命中即「同板块有人被点名」，相关性高得多。
+        peer_names: List[str] = []
+        try:
+            import stock_sector_map as _ssm
+            for sec in secs:
+                for st in _ssm.sector_stocks(sec):
+                    nm = (st.get("name") or "").strip()
+                    if nm and nm != name and nm not in peer_names:
+                        peer_names.append(nm)
+        except Exception:
+            pass
         by_stock, by_sector = [], []
+        seen_text = set()
         for it in items:
             c = it.get("content") or ""
+            if not c or c[:60] in seen_text:      # 同一条快讯常带【】重复推送
+                continue
             tone = (it.get("sentiment") or {}).get("tone", "neutral")
             rec = {"text": c[:100], "tone": tone}
             if name and name in c:
-                by_stock.append(dict(rec, by="stock"))
-            elif secs and any(s in c for s in secs):
-                by_sector.append(dict(rec, by="sector"))
+                # 「宁德时代」可能只是在一串列举里被顺带提到（如「联想、胜宏、
+                # 宁德时代等集体高开」），那条新闻的主角不是它。要求股名出现在
+                # 前半段，才算「这条讲的是它」。
+                if c.find(name) <= 40:
+                    seen_text.add(c[:60])
+                    by_stock.append(dict(rec, by="stock"))
+            elif peer_names and any(p in c for p in peer_names):
+                peers = [p for p in peer_names if p in c]
+                # 「消费」这个粗板块把白酒、家电、乳业、免税捆在一起：只因为新闻里
+                # 提了一句「五粮液」，就把白酒行情当成格力电器的风险——这是行业错配。
+                # 收紧条件：命中 <2 只成分股时不算同板块（单只票的新闻往往只与它自己
+                # 行业相关）。宁可少给一条，也不要给错一条，错的那条会被模型写进 risks。
+                if len(peers) < 2:
+                    continue
+                seen_text.add(c[:60])
+                by_sector.append(dict(rec, by="sector", peers=peers[:2]))
         ctx["news"] = by_stock[:4] + by_sector[:3]
     except Exception:
         ctx["missing"].append("近期快讯")
@@ -177,12 +220,28 @@ def _ctx_prompt(ctx: Dict[str, Any]) -> str:
         L.append(f"【行情】价格 {f('price')} 元，涨跌幅 {f('change_pct', '%')}，"
                  f"换手率 {f('turnover', '%')}，PE {f('pe')}，PB {f('pb')}，"
                  f"总市值 {f('total_cap')} 亿")
+        # 把「真正的核心维度是否齐」挑明：换手率/PE/PB 缺不是致命问题，
+        # 但模型会把它们一律写成「数据不全」并压 score，把一个完整分析说成残缺的。
+        core = [k for k in ("price", "change_pct") if q.get(k) in (None, "")]
+        _cn = {"turnover": "换手率", "pe": "PE", "pb": "PB", "total_cap": "总市值"}
+        extra = [_cn[k] for k in ("turnover", "pe", "pb", "total_cap") if q.get(k) in (None, "")]
+        if extra and not core:
+            L.append(f"  说明：价格与涨跌幅已取得，仅「{'、'.join(extra)}」上游不提供；"
+                     f"这属于估值/流动性字段缺失，**不构成分析数据不全**，"
+                     f"不要据此在 score_note 里写「数据缺失/不全」，最多在 risks 点一句")
     else:
         L.append("【行情】暂无")
     t = ctx.get("tech") or {}
     if t:
-        L.append(f"【技术面】综合裁决：{t.get('verdict')}（{t.get('verdict_dir')}），"
-                 f"多空计数 多{t.get('bull')}/空{t.get('bear')}/中{t.get('neutral')}")
+        L.append(f"【技术面】综合裁决：{t.get('verdict')}（{t.get('verdict_dir')}）")
+        tb, tr = t.get("trend_bull"), t.get("trend_bear")
+        os_, ob = t.get("oversold"), t.get("overbought")
+        if tb is not None:
+            L.append(f"  趋势类信号 多{tb}/空{tr}（决定方向）；"
+                     f"反转类信号 超卖{os_ or 0}/超买{ob or 0}（只说明急跌急涨，不代表方向）")
+        if t.get("verdict_note"):
+            L.append(f"  注意：{t['verdict_note']}")
+        L.append(f"  合计 多{t.get('bull')}/空{t.get('bear')}/中{t.get('neutral')}")
         sigs = t.get("signals") or []
         if sigs:
             L.append("  信号：" + "；".join(f"{s.get('name')}({s.get('dir')})" for s in sigs))
@@ -194,9 +253,28 @@ def _ctx_prompt(ctx: Dict[str, Any]) -> str:
         def w(k):
             v = fl.get(k)
             return "暂无" if v in (None, "") else v
-        L.append(f"【资金面】主力净额 {w('main_net')} 万元（占流通 {w('main_circ_rate')}%），"
-                 f"超大单 {w('jumbo_net')} 万，大单 {w('block_net')} 万；"
-                 f"5/10/20 日主力净额 {w('main_net_5d')}/{w('main_net_10d')}/{w('main_net_20d')} 万元")
+
+        def yi(k):
+            """元 → 「X.XX 亿」；空值给「暂无」。
+
+            上游 westock 的 MainNetFlow 系列**单位是元**（sector_verify.py 直接
+            /1e8 当亿元用），这里以前写成「万元」且不做换算，模型读到
+            -1556834322 会照抄成「-155.68 亿」——比真值大了 10000 倍，
+            看起来像「主力砸盘 155 亿出逃」，实际是 -15.57 亿。
+            换算成亿元再喂，模型就不必自己猜量级。
+            """
+            v = fl.get(k)
+            if v in (None, ""):
+                return "暂无"
+            try:
+                return f"{float(v) / 1e8:.2f} 亿"
+            except (TypeError, ValueError):
+                return "暂无"
+
+        L.append(f"【资金面】主力净额 {yi('main_net')}（占流通 {w('main_circ_rate')}%），"
+                 f"超大单 {yi('jumbo_net')}，大单 {yi('block_net')}；"
+                 f"5/10/20 日主力净额 {yi('main_net_5d')}/{yi('main_net_10d')}/{yi('main_net_20d')}"
+                 f"（三个区间互相重叠，**不可相加**）")
         if fl.get("avg_cost") is not None:
             L.append(f"【筹码】平均成本 {w('avg_cost')} 元，70% 集中度 {w('concentration70')}，"
                      f"获利盘比例 {w('profit_rate')}%")
@@ -207,7 +285,11 @@ def _ctx_prompt(ctx: Dict[str, Any]) -> str:
         L.append("【近期快讯】")
         for n in news:
             tag = {"pos": "偏多", "neg": "偏空"}.get(n.get("tone"), "中性")
-            L.append(f"  - [{tag}] {n.get('text')}")
+            if n.get("by") == "sector" and n.get("peers"):
+                # 标明「同板块」：这条不是该公司的事，别让模型写成「公司公告」
+                L.append(f"  - [{tag}][同板块 {('、'.join(n['peers']))}] {n.get('text')}")
+            else:
+                L.append(f"  - [{tag}] {n.get('text')}")
     else:
         L.append("【近期快讯】暂无")
     return "\n".join(L)
@@ -348,6 +430,45 @@ def _cache_key(code: str, hours: int) -> str:
     return f"{str(code).strip().lower()}|{int(hours)}"
 
 
+def _quote_broken(q: Dict[str, Any]) -> bool:
+    """行情维度是否「有键无值」：价格 <= 0 或涨幅 <= -100（即 0 元成交的假数据）。
+
+    A 股最小报价 0.01 元，跌停最多 -20%（ST 亦然），所以「价格 <= 0」与
+    「跌幅 <= -100%」在真实行情里不可能同时成立——出现即说明上游返回了
+    盘前全零快照（last_price=0、pre_close 正常，相减就是 -100%）。
+    这种行必须当缺失处理：它会让 LLM 写出「股价 0 元、跌幅 -100%、可能已退市」
+    这类自相矛盾的结论，而真实原因只是「还没开盘 / 那一格的 last_price 是 0」。
+    """
+    def num(v):
+        try:
+            return float(v)
+        except (TypeError, ValueError):
+            return None
+    price, chg = num(q.get("price")), num(q.get("change_pct"))
+    if price is not None and price <= 0:
+        return True
+    if chg is not None and chg <= -99.99:
+        return True
+    return False
+
+
+def _sanitize_quote(ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """把不合格的行情行降级为「缺失」，并记进 missing，让 prompt 标「暂无」。
+
+    只在价格/涨幅明显不成立时触发；正常行原样返回（不做任何修正，
+    绝不拿预收盘价冒充现价——那是另一种谎言）。
+    """
+    q = ctx.get("quote") or {}
+    if q and _quote_broken(q):
+        # 保留名称（板块反查得来的名字仍然有用），其余数值一律丢弃
+        name = q.get("name") or ctx.get("name") or ""
+        ctx["quote"] = {"name": name} if name else {}
+        ctx["quote_broken"] = True
+        if "实时快照" not in ctx["missing"]:
+            ctx["missing"].append("实时快照（价格异常，已忽略）")
+    return ctx
+
+
 def cached(code: str, hours: int = 24) -> Optional[Dict[str, Any]]:
     """命中且未过期返回缓存结果（附 cache_age 秒），否则 None。不触 LLM、不查配额。"""
     hit = _CACHE.get(_cache_key(code, hours))
@@ -379,6 +500,10 @@ def analyze_stock(code: str, hours: int = 24, refresh: bool = False,
     if not ctx.get("ok"):
         return {"ok": False, "reason": ctx.get("reason", "无可用数据"),
                 "data_only": True, "ctx": ctx, "llm": None, "plain": None}
+    # 行情脏数据闸门：价格 <=0 / 跌幅 <=-100% 一律降级为「暂无」再喂给模型。
+    # 放在 build_context 之后、LLM 之前——脏数据一旦进了 prompt，模型就会
+    # 顺着写出「0 元、-100%、疑似退市」这种既吓人又不成立的结论。
+    ctx = _sanitize_quote(ctx)
     base = {"ok": True, "data_only": True, "ctx": ctx, "llm": None, "plain": None}
     try:
         import llm_client                          # 放 try 内：import 失败也降级
@@ -425,6 +550,21 @@ def selfcheck() -> int:
        "贵州茅台" in p and "1500" in p and "均线多头排列" in p and "白酒" in p and "白酒板块走高" in p)
     miss = {"name": "", "code": "sh000001", "quote": {}, "tech": {}, "sectors": [], "news": [], "missing": []}
     ok("_ctx_prompt：缺维度标注暂无(≥3)", _ctx_prompt(miss).count("暂无") >= 3)
+
+    # 全零快照闸门：盘前 upstream 返回 last_price=0、pre_close 正常 → 价 0 / 跌 -100%。
+    # 这种行必须当缺失，绝不能让 LLM 顺着写成「0 元、疑似退市」。
+    zero = {"ok": True, "name": "贵州茅台", "code": "sh600519",
+            "quote": {"name": "贵州茅台", "price": 0.0, "change_pct": -100.0}, "tech": {},
+            "sectors": [], "news": [], "missing": []}
+    ok("_quote_broken：价 0 / 跌 -100% 判为脏数据", _quote_broken(zero["quote"]))
+    ok("_quote_broken：正常行情不误伤", not _quote_broken({"price": 1331.88, "change_pct": 0.52}))
+    ok("_quote_broken：跌停 -20% 不误伤", not _quote_broken({"price": 8.5, "change_pct": -20.0}))
+    zs = _sanitize_quote(dict(zero, quote=dict(zero["quote"]), missing=[]))
+    ok("_sanitize_quote：脏行情降级为缺失并保留股名",
+       zs["quote"].get("price") is None and zs["quote"].get("name") == "贵州茅台"
+       and any("实时快照" in m for m in zs["missing"]))
+    ok("_sanitize_quote：脏行情进 prompt 后价格标暂无",
+       "价格 暂无" in _ctx_prompt(zs) and "-100" not in _ctx_prompt(zs))
 
     good = {"summary": "茅台技术面信号多空交织，短线偏中性。", "logic": "多空各4个信号："
              "DMI/TRIX/站上BBI偏多，但KDJ与CCI双双超买，短线有回踩风险，整体中性。",

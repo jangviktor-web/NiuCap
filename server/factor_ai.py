@@ -33,12 +33,20 @@ _SYS = """你是A股量化小白助手。给你一份「因子实验室」的 IC
 {"summary":"≤240字总览","factors":[{"name":"因子名","what":"≤90字","use":"≤90字"}],"caveats":["≤70字"]}
 
 规则（违反会被代码拒绝、白费 Token）：
-- summary：先说这批检验整体说明了什么（有没有因子真有预测力），
-  再说最值得关注的一两个因子，引用给定数字；≤240 字；
+- **显著性一律以「统计显著性」字段为准**（它按 q 值判定，q 已做多重检验校正）。
+  字段写「不显著」时，任何地方都不许出现「显著」二字——哪怕 t 值看着很大：
+  t 值只是单次检验的数字，多个因子一起检验时靠它会把假阳性当成真发现；
+- summary 第一句必须与【整体结论】的通过数一致：通过数为 0 时，第一句就要说清
+  「本批没有一个因子通过判定」，不许先说「某因子显著/有效」再补「但也未通过」；
+- summary 其余部分说最值得关注的一两个因子，引用给定数字；≤240 字；
 - factors：对给定的每一个因子逐个输出，name 必须与给定完全一致（不许自己增删改），
   what 用一句大白话说明这个因子在算什么、算出来的数说明什么（引用 ICIR/方向），
   use 说它能怎么用、用在哪里（如「可作轮动池的排序依据」），
   注意：判定未通过的因子，use 要说明「只适合观察、暂不宜当决策依据」；
+- 分层收益是各档的**算术平均**。A股 5 日收益被涨跌停截断，右尾远长于左尾
+  （实测中证500 近 750 日：中位数 0.00%、均值 +0.62%、最大 +136%），所以
+  **五档可能全为正，而因子其实无效甚至反向**。判断方向一律以 IC/ICIR 符号为准，
+  分层只用来观察单调性，不要拿「五档收益递增/全为正」当因子有效的证据；
 - caveats 列 1~3 条使用前的注意点，必须基于给定数据
   （如「本结论是中证500 近 750 日的历史统计，市况变了可能失效」
     「分层不单调说明预测力不稳定」）；
@@ -65,28 +73,51 @@ def _f(v: Any, fmt: str = "{}", dash: str = "暂无") -> str:
 
 def _prompt(res: Dict[str, Any], top: Sequence[Dict[str, Any]]) -> str:
     span = res.get("span") or ["", ""]
+    allit = res.get("items") or []
+    npass = sum(1 for it in allit if it.get("pass"))
     L: List[str] = [
         f"股票池: {res.get('pool') or '暂无'}（{res.get('universe') or 0} 只）",
         f"区间: {span[0]}~{span[1]}（{res.get('days') or 0} 个交易日）",
         f"收益窗口: {res.get('forward') or 0} 日（信号次日收盘买入，看之后若干天的收益）",
         f"判定门槛: |ICIR| ≥ {res.get('icir_pass')} 且 q ≤ {res.get('q_pass')}"
         "（q 是对同时检验多个因子做的多重检验校正）",
+        # 总数与通过数由后端数好直接给。原先只给逐个「判定: 未通过」，让模型自己
+        # 统计「本批到底有没有因子能用」——它数对了是运气，数错了就是整段结论错。
+        f"【整体结论】本批共检验 {len(allit)} 个因子，其中通过判定的有 {npass} 个"
+        + ("（即一个都没有，这批因子当前都不具备可用于排序的预测力）" if npass == 0
+           else f"（通过的是: {'、'.join(it.get('name') or '' for it in allit if it.get('pass'))}）"),
         "",
-        f"以下 {len(top)} 个因子按 |ICIR| 从高到低排列，请逐个解读：",
+        # 这句原先写反了：在「全都没通过」时说的是「都通过判定」，等于把错误结论
+        # 写进 prompt 让模型照抄。四个状态分开写，不留一句靠布尔取反撑着的句子。
+        f"以下 {len(top)} 个因子按 |ICIR| 从高到低排列（|ICIR| 绝对值最大的几个），"
+        + ({"none": "它们都没通过判定", "all": "它们都通过了判定",
+            "some": "其中部分通过、部分未通过"}[
+               "all" if all(it.get("pass") for it in top)
+               else "none" if not any(it.get("pass") for it in top)
+               else "some"] + "，请逐个解读："),
     ]
     for i, it in enumerate(top, 1):
         ir = it.get("icir")
         lay = it.get("layers") or []
         lay_s = " ".join(_f(x, "{:+.2f}%", "n/a") if x is not None else "n/a"
                          for x in (x * 100 if x is not None else None for x in lay))
+        # 显著性只给一个词，且依据 q 值（已做 BH 校正）。同时点明「t 值过了但
+        # q 没过」这种情况，否则模型看到 |t|>1.96 自己会补一句「统计显著」，
+        # 和紧跟着的「未通过」直接打架。
+        sig = "显著" if it.get("significant") else "不显著"
+        ts = it.get("t_stat")
+        sig_note = ""
+        if ts is not None and abs(ts) >= 1.96 and not it.get("significant"):
+            sig_note = "（单次检验的 t 值虽超 1.96，但多重检验校正后 q 未达标）"
         L += [
             "",
             f"[{i}] {it.get('name')}（类别: {it.get('cat')}）",
             f"  - IC均值 {_f(it.get('ic_mean'), '{:+.4f}')}，"
             f"ICIR {_f(ir, '{:+.3f}')}，"
             f"IC>0 占比 {_f(it.get('pos_ratio'), '{:.0%}')}，"
-            f"t 值 {_f(it.get('t_stat'), '{:+.2f}')}，"
+            f"t 值 {_f(ts, '{:+.2f}')}，"
             f"q 值 {_f(it.get('q_stat'), '{:.4f}')}",
+            f"  - 统计显著性: {sig}{sig_note}",
             f"  - 方向: {it.get('direction') or '暂无'}",
             f"  - 五档分层收益 Q1→Q5: {lay_s}（Q1=因子最小，Q5=因子最大）",
             f"  - 分层单调: {'是' if it.get('monotonic') else '否'}",
@@ -164,9 +195,22 @@ def _validate(obj: Dict[str, Any], names: Sequence[str]) -> Dict[str, Any]:
     return out
 
 
+class OutputRejected(Exception):
+    """LLM 回复了，但格式不合规（坏 JSON / 字段超长 / 编了不存在的因子）。
+
+    与「模型不可用」必须分开报：前者重试一次可能就好，后者要用户去改配置。
+    端点靠这个异常给出准确提示，否则前端只会笼统显示「AI 模型暂不可用」，
+    用户会去检查明明正常的配置，而实际上只是这次输出没守格式。
+    """
+
+    def __init__(self, why: str) -> None:
+        super().__init__(why)
+        self.why = why
+
+
 def explain(res: Dict[str, Any], top_n: int = TOP_N,
             override: Optional[Dict[str, Any]] = None) -> Optional[dict]:
-    """调 LLM 产解读 JSON。异常上抛（由端点转降级）；schema 不过返回 None。"""
+    """调 LLM 产解读 JSON。网络/限流异常上抛；输出不合规抛 OutputRejected。"""
     if not res or not res.get("items"):
         return None
     top = pick_top(res, top_n)
@@ -178,9 +222,11 @@ def explain(res: Dict[str, Any], top_n: int = TOP_N,
                           max_tokens=1200, temperature=0.4, override=override)
     obj = _parse_json(raw)
     if not obj:
-        return None
+        raise OutputRejected(f"回复不是合法 JSON（{len(raw or '')} 字）")
     v = _validate(obj, [t.get("name") or "" for t in top])
-    return v or None      # schema 不过（{}）也要走降级，不能当成功
+    if not v:
+        raise OutputRejected("字段不合规（超长 / 因子名对不上 / 缺 caveats）")
+    return v
 
 
 # ---------------------------------------------------------------------------
@@ -237,17 +283,22 @@ def selfcheck() -> int:
         "items": [
             {"name": "20日动量", "cat": "动量", "ic_mean": -0.049, "icir": -0.251,
              "pos_ratio": 0.42, "t_stat": -5.56, "q_stat": 0.00003,
+             "significant": True,
              "direction": "反向(因子越小收益越高)",
              "layers": [0.0045, 0.0037, 0.0037, 0.0033, 0.0044],
              "monotonic": False, "cover": 0.658, "pass": False},
-            {"name": "5日反转", "cat": "反转", "ic_mean": 0.0305, "icir": 0.163,
-             "pos_ratio": 0.55, "t_stat": 3.66, "q_stat": 0.0005,
-             "direction": "正向(因子越大收益越高)",
+            # 真实案例：沪深300 的 60日波动率，|t|=2.58 过了 1.96，但 q=0.12 不过门槛。
+            # 模型曾据此写出「统计显著」，与紧跟的「未通过」自相矛盾。
+            {"name": "60日波动率", "cat": "波动", "ic_mean": -0.0002, "icir": -0.098,
+             "pos_ratio": 0.51, "t_stat": -2.58, "q_stat": 0.1201,
+             "significant": False,
+             "direction": "反向(因子越小收益越高)",
              "layers": [-0.001, 0.0, 0.001, 0.002, 0.003],
-             "monotonic": True, "cover": 0.683, "pass": False},
+             "monotonic": True, "cover": 0.9, "pass": False},
             # 没有 icir 的因子（样本不足）不该被选中去讲
             {"name": "60日最大回撤", "cat": "低波", "ic_mean": None, "icir": None,
              "pos_ratio": None, "t_stat": None, "q_stat": None,
+             "significant": False,
              "direction": "样本不足", "layers": [], "monotonic": False,
              "cover": 0.5, "pass": False},
         ],
@@ -255,7 +306,8 @@ def selfcheck() -> int:
 
     top = pick_top(res)
     ok("pick_top：只选有 ICIR 的因子，按 |ICIR| 降序",
-       [t["name"] for t in top] == ["20日动量", "5日反转"], [t["name"] for t in top])
+       [t["name"] for t in top] == ["20日动量", "60日波动率"],
+       [t["name"] for t in top])
     ok("pick_top：top_n 上限生效", len(pick_top(res, 1)) == 1)
     ok("pick_top：空结果不炸", pick_top({"items": []}) == [])
 
@@ -265,6 +317,19 @@ def selfcheck() -> int:
        and "-0.251" in p and "反向" in p and "未通过" in p)
     ok("_prompt：分层收益转成百分数", "+0.45%" in p)
     ok("_prompt：空输入不抛异常", "暂无" in _prompt({"items": []}, []))
+    # 整体通过数由后端数好写进 prompt，模型不必自己统计（数错了整段结论就错）
+    ok("_prompt：给出整体结论与通过数", "【整体结论】" in p and "通过判定的有 0 个" in p)
+    ok("_prompt：全部未通过时点明「一个都没有」", "一个都没有" in p)
+    res_pass = dict(res)
+    it1 = dict(res["items"][1])
+    it1["pass"] = True
+    res_pass["items"] = [it1] + res["items"][:1] + res["items"][2:]
+    ok("_prompt：通过数非 0 时点名通过的因子", "（通过的是: 60日波动率）" in _prompt(res_pass, ()))
+    # 「显著」只读后端算好的布尔值，不靠模型自己看 t 值
+    ok("_prompt：q 未达标时标「不显著」并解释 t 值为何会骗人",
+       "统计显著性: 不显著" in p and "q 未达标" in p)
+    ok("_prompt：q 达标时标「显著」", "统计显著性: 显著" in p)
+    ok("_SYS：禁止在 q 未达标时写「显著」", "不许出现「显著」二字" in _SYS)
 
     names = [t["name"] for t in top]
     good = {"summary": "这批因子整体预测力一般：ICIR 最高 -0.251，未达 0.3 门槛。",
@@ -310,7 +375,16 @@ def selfcheck() -> int:
         ok("explain：LLM 正常 → 通过校验", bool(r) and r["factors"][0]["name"] == "20日动量")
         ok("explain：带回覆盖数 covered/total", r.get("covered") == 1 and r.get("total") == 2)
         llm_client.chat = lambda *a, **k: '```json\n{"foo":"bar"}\n```'
-        ok("explain：schema 不过 → None", explain(res) is None)
+        # 输出不合规抛 OutputRejected，而不是静默返回 None：端点要据此把
+        # 「格式没守住」和「模型不可用」分开提示，否则用户会去查正常的配置。
+        ok("explain：schema 不过 → OutputRejected（可辨识，供端点分类提示）",
+           _raises(lambda: explain(res), OutputRejected))
+        ok("explain：坏 JSON → OutputRejected", _raises(
+            lambda: (_set_chat(llm_client, "不是JSON"), explain(res))[1],
+            OutputRejected))
+        _e = _exc(lambda: explain(res))       # 此刻 chat 仍返回 {"foo":"bar"}
+        ok("OutputRejected：带上具体原因（端点要拼进用户提示）",
+           isinstance(_e, OutputRejected) and bool(_e.why), getattr(_e, "why", None))
         llm_client.chat = lambda *a, **k: "ok"
         ok("explain：空结果 → None", explain({}) is None)
     finally:
@@ -341,12 +415,27 @@ def selfcheck() -> int:
     return fails
 
 
-def _raises(fn) -> bool:
+def _raises(fn, exc: Optional[type] = None) -> bool:
+    """fn 是否抛异常；给了 exc 就只认这一类（别的异常照旧算失败）。"""
     try:
         fn()
         return False
-    except Exception:
-        return True
+    except Exception as e:
+        return isinstance(e, exc) if exc else True
+
+
+def _exc(fn):
+    """跑 fn，返回它抛的异常对象（没抛返回 None）。自检要看异常里的原因用。"""
+    try:
+        fn()
+        return None
+    except Exception as e:
+        return e
+
+
+def _set_chat(mod, text: str) -> None:
+    """把 llm_client.chat 换成固定回复（自检用，不碰网络）。"""
+    mod.chat = lambda *a, **k: text
 
 
 if __name__ == "__main__":

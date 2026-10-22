@@ -829,16 +829,57 @@ def all_indicators(klines):
     bear = sum(1 for s in signals if s["dir"] == "bear")
     neutral = sum(1 for s in signals if s["dir"] == "neutral")
 
-    if bull - bear >= 3:
+    # ---------- 反转类信号与趋势类信号分开计票 ----------
+    # 「超卖 = 偏多」是拿均值回归的尺子去量趋势：宁德时代跌 10.32%、均线空头排列、
+    # 主力净流出 15.57 亿，仅因为 RSI6/RSI24/KDJ/CCI/WR 五个超卖指标同时触发，
+    # 就被裁决成「技术面略偏多」——与它实际在暴跌这件事完全相反。
+    # 超卖只说明「跌得急、有反弹需求」，不说明「该涨」。所以：
+    #   · 趋势类（均线/DMI/MACD/金叉死叉/破位）照常计多空，决定裁决方向；
+    #   · 反转类（超卖/超买/乖离过大/布林越界）单独计数，只作「反弹倾向」提示，
+    #     不进裁决投票。它们在 signals 里仍保留 bull/bear，K 线图上的涨跌配色
+    #     依赖这个字段，不动。
+    _REVERSAL_KEYWORDS = ("超卖", "超买", "乖离", "布林下轨", "布林上轨",
+                          "PSY ", "VR低迷", "MFI超卖")
+    trend_bull = trend_bear = rev_oversold = rev_overbought = 0
+    for s in signals:
+        nm = s.get("name") or ""
+        is_rev = any(k in nm for k in _REVERSAL_KEYWORDS)
+        if is_rev:
+            if s["dir"] == "bull":
+                rev_oversold += 1
+            elif s["dir"] == "bear":
+                rev_overbought += 1
+        else:
+            if s["dir"] == "bull":
+                trend_bull += 1
+            elif s["dir"] == "bear":
+                trend_bear += 1
+
+    # 裁决只看趋势票；反转票全落在一边且有 ≥3 张时，降级为「中性」并注明
+    if trend_bull - trend_bear >= 3:
         verdict, vdir = "技术面偏多", "bull"
-    elif bear - bull >= 3:
+    elif trend_bear - trend_bull >= 3:
         verdict, vdir = "技术面偏空", "bear"
-    elif bull - bear >= 1:
+    elif trend_bull - trend_bear >= 1:
         verdict, vdir = "技术面略偏多", "bull"
-    elif bear - bull >= 1:
+    elif trend_bear - trend_bull >= 1:
         verdict, vdir = "技术面略偏空", "bear"
     else:
         verdict, vdir = "技术面中性", "neutral"
+
+    if trend_bull == 0 and trend_bear == 0 and (rev_oversold or rev_overbought):
+        verdict, vdir = "技术面中性", "neutral"
+
+    # 极端单边时补一句提示：光看裁决会漏掉「超跌/超买」这件事
+    rev_note = None
+    if rev_oversold >= 3:
+        rev_note = f"{rev_oversold} 项指标同时超卖，短线急跌后有反弹需求（不代表趋势反转）"
+        if vdir == "bear":
+            verdict += "，但已深度超卖"
+    elif rev_overbought >= 3:
+        rev_note = f"{rev_overbought} 项指标同时超买，短线冲高后有过热风险"
+        if vdir == "bull":
+            verdict += "，但已显著超买"
 
     # ---------- Tier 4：指标多空评级（BUY/SELL/NEUTRAL）----------
     # 与上面的事件型 signals/verdict 并存独立：signals 看「金叉/死叉/突破」事件，
@@ -871,9 +912,14 @@ def all_indicators(klines):
         },
         "verdict": verdict,
         "verdict_dir": vdir,
+        "verdict_note": rev_note,
         "bull_count": bull,
         "bear_count": bear,
         "neutral_count": neutral,
+        "trend_bull": trend_bull,
+        "trend_bear": trend_bear,
+        "oversold_count": rev_oversold,
+        "overbought_count": rev_overbought,
         "indicator_count": sum(len(g["items"]) for g in groups),
         "rating_summary": rating_summary,
     }

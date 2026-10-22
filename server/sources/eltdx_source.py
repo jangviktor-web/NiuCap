@@ -518,6 +518,14 @@ def _row_from_snapshot(q: Any) -> Optional[Dict[str, Any]]:
         except (TypeError, ValueError):
             return None
 
+        # 全零快照（盘前 / 竞价前 / 停牌）直接判为「没取到」，交上层降级。
+        # 实测 09:03 查 sh600519：last_price=0、pre_close=1331.88 →
+        # change_pct 会算成 -100%，页面上就是「0 元、跌 -100%、疑似退市」。
+        # 价格 <= 0 在真实行情里不存在（A 股最小报价 0.01），所以这个判断
+        # 不会误杀正常票；而上游确实用 0 表示「还没成交」。
+        if price <= 0:
+            return None
+
         change = price - prev
         change_pct = (change / prev * 100.0) if prev > 0 else 0.0
 
@@ -564,6 +572,13 @@ def get_quotes(codes: Sequence[str]) -> Dict[str, Dict[str, Any]]:
     实测 4000 只分片后约 3.6 秒，覆盖 100%。
 
     取不到的代码不会出现在结果里（停牌 / 已退市 / 代码不存在）。
+
+    **全零快照也当取不到**（见 `_row_from_snapshot` 里 `price <= 0` 的判断）。
+    这不是洁癖：盘前 / 集合竞价前上游会返回 `last_price=0` 但 `pre_close` 正常
+    的行，若原样返回，`change_pct` 就是 -100%，页面上表现为「股价 0 元、跌
+    -100%，疑似退市」，而实际只是还没开盘。丢弃后由 `datasource.snapshot`
+    继续往腾讯降级（盘后腾讯给的是最近成交价），上层永远拿到可用价格。
+
     整体连接失败会抛 EltdxUnavailable，由调用方决定降级。
     """
     codes = [c for c in (codes or []) if c]

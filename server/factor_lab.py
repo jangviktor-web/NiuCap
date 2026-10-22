@@ -646,9 +646,14 @@ def evaluate(pool: str = "000300", forward: int = 5,
     qs = bh_q([_p_from_t(it["t_stat"]) for it in items])
     for it, q in zip(items, qs):
         it["q_stat"] = q
+        # 「显著」= 通过 BH 校正后 q 达标，**不是**单看 |t|≥1.96。两者经常打架：
+        # 沪深300 的 60日波动率 t=-2.58（过 1.96）但 q=0.1201（不过 0.1），
+        # 只喂 t 值给模型，它就会写出「统计显著」——和白纸黑字的「未通过」自相矛盾。
+        # 这里把判定算成布尔值下发，前端与 prompt 都只读它，不再各自解读。
+        it["significant"] = bool(q is not None and q <= Q_PASS)
         it["pass"] = bool(it["icir"] is not None
                           and abs(it["icir"]) >= ICIR_PASS
-                          and q is not None and q <= Q_PASS)
+                          and it["significant"])
 
     span = [dates[0], dates[-1]] if dates else ["", ""]
     return {
