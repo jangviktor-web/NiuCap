@@ -65,6 +65,10 @@ MIN_SERIES = 250
 # 000300 全历史（3106 天）跑一轮要几十秒，缓存后二次打开是秒开。
 CACHE_TTL = 1800.0
 
+# 因果性检查只切最近这么多天做截断重放。400 天 × 300 只实测 3.8s；
+# 再拉长收益递减（越界读在任何足够长的窗口上都会暴露），代价却是线性涨。
+CHECK_DAYS = 400
+
 
 # ---------------------------------------------------------------------------
 # 数据加载
@@ -407,11 +411,16 @@ def _f_surge(mats: Dict[str, Any], short: int = 5, long: int = 60) -> np.ndarray
     return out
 
 
-def build_factors(mats: Dict[str, Any],
-                  keys: Optional[Sequence[str]] = None
-                  ) -> Dict[str, np.ndarray]:
-    """构造因子矩阵。返回 {key: (T,N) ndarray}。"""
-    fn: Dict[str, Callable[[Dict[str, Any]], np.ndarray]] = {
+def factor_fns(keys: Optional[Sequence[str]] = None
+               ) -> Dict[str, Callable[[Dict[str, Any]], np.ndarray]]:
+    """把因子 key 解析成「单参数函数」，供因果性检查逐个调用。
+
+    单独抽出来是因为 `build_factors` 里的分派逻辑（mom_/vol_ 前缀决定窗口）
+    本身就是要被检查的对象之一：如果这里解析错窗口，检查就应该跟着错，
+    而不是在检查器里再复制一份规则（复制两份 = 迟早不一致）。
+    所以 causality 直接吃这里的输出。
+    """
+    fixed: Dict[str, Callable[[Dict[str, Any]], np.ndarray]] = {
         "_f_mom": lambda m: _f_mom(m, 20),
         "_f_rev": lambda m: _f_rev(m, 5),
         "_f_vol": lambda m: _f_vol(m, 60),
@@ -422,23 +431,34 @@ def build_factors(mats: Dict[str, Any],
         "_f_amt": lambda m: _f_amt(m, 60),
         "_f_surge": lambda m: _f_surge(m, 5, 60),
     }
-    # 多窗口动量/波动率：按 key 后缀决定窗口
-    out: Dict[str, np.ndarray] = {}
+    out: Dict[str, Callable[[Dict[str, Any]], np.ndarray]] = {}
     for key, _name, _cat, fname in FACTOR_DEFS:
         if keys and key not in keys:
             continue
         if key.startswith("mom_"):
             n = int(key.split("_")[1])
-            out[key] = _f_mom(mats, n)
+            out[key] = (lambda m, _n=n: _f_mom(m, _n))
         elif key.startswith("vol_") and key.split("_")[1].isdigit():
-            # 注意：vol_surge 也以 vol_ 开头，必须先排除，否则 int('surge') 崩
             n = int(key.split("_")[1])
-            out[key] = _f_vol(mats, n)
+            out[key] = (lambda m, _n=n: _f_vol(m, _n))
+        elif fname in fixed:
+            out[key] = fixed[fname]
         else:
-            f = fn.get(fname)
-            if f:
-                out[key] = f(mats)
+            # 不静默跳过：FACTOR_DEFS 里写错 fname 会让因子凭空消失，
+            # IC 表少一行谁也不会注意——宁可启动就崩，也不要少算一个因子
+            # 还当成"它没预测力"。
+            raise KeyError(
+                f"因子 {key} 的计算函数 {fname!r} 未注册；"
+                f"请在 factor_fns 的 fixed 表里补上，或检查 FACTOR_DEFS 的拼写")
     return out
+
+
+def build_factors(mats: Dict[str, Any],
+                  keys: Optional[Sequence[str]] = None
+                  ) -> Dict[str, np.ndarray]:
+    """构造因子矩阵。返回 {key: (T,N) ndarray}。"""
+    fn = factor_fns(keys)
+    return {k: f(mats) for k, f in fn.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -602,7 +622,39 @@ def evaluate(pool: str = "000300", forward: int = 5,
     rmat = forward_returns(C, forward=forward)
     labels = regime_labels(mats) if with_regime else ["flat"] * len(dates)
 
+    # 快照：把"这次算的是哪份数据"钉死。校验不过不阻断计算（用户仍要看 IC），
+    # 但会在返回值里明说数据有问题——不能一边报"数据不可信"一边照常给结论。
+    try:
+        import snapshot as _sn
+        _today = dates[-1] if dates else ""
+        _snap = _sn.freeze(mats, today=_today, strict=False)
+        _sha = _snap.get("sha256")
+    except Exception as e:
+        _snap = {"ok": False, "sha256": None, "problems": [{"kind": "snapshot_failed",
+                                                            "error": str(e)}]}
+        _sha = None
     items: List[Dict[str, Any]] = []
+    # 因果性检查：每个因子都做一次「截断重放 + 未来扰动」。
+    #
+    # 为什么放在这里而不是做成独立按钮：前视是**静默的正确性错误**——IC 会
+    # 因此变得漂亮，没人会怀疑。做成可选项等于默认不查。放在主流程里，
+    # 拿了 IC 就必然拿了"它是不是只看过去"的结论，两者无法分开引用。
+    #
+    # 只切最近 400 天做检查：检查是 O(points × 3) 次全量重算，3.8s；
+    # 全历史 3111 天要 30s 以上，而越界读在任何足够长的窗口上都会暴露，
+    # 没必要为检查付全局的代价。
+    # ponytail: 若将来因子依赖更长窗口（比如 250 日均线），把 CHECK_DAYS 调大即可。
+    try:
+        import causality as _ca
+        _chk_mats = {k: (v[-CHECK_DAYS:] if k == "dates"
+                         or (isinstance(v, np.ndarray) and v.ndim == 2) else v)
+                     for k, v in mats.items()}
+        _causal = {it["key"]: it for it in
+                   _ca.check_all(_chk_mats, factor_fns(keys))["items"]}
+    except Exception as e:                      # 检查本身崩了也不能拖垮主流程
+        _causal = {}
+        print(f"[factor-lab] 因果性检查失败（已跳过）：{e}")
+
     for key, name, cat, _fn in FACTOR_DEFS:
         if key not in facs:
             continue
@@ -619,6 +671,16 @@ def evaluate(pool: str = "000300", forward: int = 5,
             "cover": float(np.count_nonzero(np.isfinite(fmat))
                            / max(1, fmat.size)),
         }
+        c = _causal.get(key)
+        item["causal"] = ({"ok": c["ok"], "verdict": c["verdict"]}
+                          if c else {"ok": None, "verdict": "未检查"})
+        # 有前视的因子，IC 再漂亮也不能进「有预测力」名单。pass 是最终结论，
+        # 这条约束必须落在这里，而不是指望前端把两个字段一起读懂。
+        if c and not c["ok"]:
+            item["pass"] = False
+        # 定稿快照：每个因子记下"算它的时候用的是哪份数据"。
+        # 同一因子两次算出的 IC 不同时，比快照哈希就知道是数据变了还是代码变了。
+        item["snapshot_sha"] = _sha
         q = quantile_check(fmat, rmat)
         item["layers"] = q["layers"]
         item["monotonic"] = q["monotonic"]
@@ -655,7 +717,16 @@ def evaluate(pool: str = "000300", forward: int = 5,
                           and abs(it["icir"]) >= ICIR_PASS
                           and it["significant"])
 
+    # ── 最终结论必须同时满足三条：ICIR 达标 + BH 校正后显著 + 无前视。
+    # 顺序有讲究：前两条是"有没有预测力"，第三条是"这个预测力是不是偷来的"。
+    # 一个前视因子两条都能满足，所以第三条必须最后一道卡，且卡死后不再翻案。
+    for it in items:
+        c = it.get("causal") or {}
+        it["pass"] = bool(it["pass"] and c.get("ok") is not False)
+
     span = [dates[0], dates[-1]] if dates else ["", ""]
+    bad_causal = [it["key"] for it in items
+                  if (it.get("causal") or {}).get("ok") is False]
     return {
         "ok": True,
         "pool": mats.get("_pool", pool),
@@ -666,6 +737,29 @@ def evaluate(pool: str = "000300", forward: int = 5,
         "icir_pass": ICIR_PASS,
         "q_pass": Q_PASS,
         "items": items,
+        # 快照：report 与图必须配同一份数据。前端/导出应把 sha256 一起带上，
+        # 事后核对「这张图是哪份数据算的」只需重算哈希，不必重跑因子。
+        "snapshot": {
+            "sha256": _sha,
+            "version": _snap.get("version"),
+            "rows": _snap.get("rows"),
+            "days": _snap.get("days"),
+            "codes": _snap.get("codes"),
+            "dropped": _snap.get("dropped"),
+            "gaps": _snap.get("gaps") or [],
+            "problems": _snap.get("problems") or [],
+            "ok": bool(_snap.get("ok")),
+        },
+        # 因果性汇总：只要有一个因子偷看未来就整轮报红。
+        # 这不是"某项指标不达标"，而是"这批结论不能用"，所以要单独一个字段，
+        # 不能被埋在 items 里靠人去翻。
+        "causality": {
+            "ok": not bad_causal,
+            "failed": bad_causal,
+            "checked_days": min(CHECK_DAYS, len(dates)),
+            "summary": ("全部因子均只看过去" if not bad_causal else
+                        "以下因子存在前视/泄漏，其 IC 不可采信：" + "、".join(bad_causal)),
+        },
     }
 
 

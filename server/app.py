@@ -61,6 +61,7 @@ import indicators_extra as ix
 import screener as scr
 import backtest as bt
 import factor_lab as flm
+import snapshot as snp
 import keylevels as kls
 import moves as mvs
 import newsfeed as nf
@@ -5053,6 +5054,54 @@ def api_factor_lab(
                             status_code=500)
     r["availability"] = av
     return r
+
+
+@app.get("/api/factor_lab/snapshot")
+def api_factor_lab_snapshot(
+    pool: str = Query("000300", description="股票池 key，见 /api/pools"),
+    days: int = Query(750, ge=200, le=4000,
+                      description="与 /api/factor_lab 的 days 保持一致，否则哈希天然不同"),
+    sha: str = Query("", description="要核对的哈希；留空则只返回当前数据算出的哈希"),
+):
+    """快照可复现：核对"某个 IC 结果用的是不是这份数据"。
+
+    回答的是那句最常被含糊过去的话——「上次算的 IC 和这次不一样，是不是 bug？」
+    `freeze` 把喂给因子的数据规范化后哈希，所以：
+      · 哈希相同 → 同一份数据，结果差异只可能来自代码或参数；
+      · 哈希不同 → 数据变过（新数据入库/历史被修正），差异是预期的。
+    带上 `sha` 参数就直接给出判定，不必让用户自己比对两串十六进制。
+
+    注意：**这是只读的核对接口，不做任何修补**。校验发现的脏数据（high 低于
+    收盘价之类）原样列出来，由人去数据源那边处理——在这里悄悄修一行，
+    哈希就失去意义了。
+    """
+    try:
+        flm.pool_codes(pool)      # 池 key 校验，只读 json
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    try:
+        mats = flm.load_universe(pool)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    import numpy as np                    # 本文件其余地方都是就地导入，保持一致
+    if days and days < len(mats["dates"]):
+        mats = {k: (v[-days:] if k == "dates"
+                    or (isinstance(v, np.ndarray) and v.ndim == 2) else v)
+                for k, v in mats.items()}
+    # today 取矩阵最后一天：库里已入库的最后一根就被视为定稿。
+    # 用系统"今天"去判会把最后一天误剪掉（盘中/节假日增量未入库时必然发生）。
+    today = mats["dates"][-1] if mats["dates"] else ""
+    snap = snp.freeze(mats, today=today, strict=False)
+    out = {"ok": bool(snap.get("ok")), "pool": mats.get("_pool", pool),
+           "days": snap.get("days"), "rows": snap.get("rows"),
+           "codes": snap.get("codes"), "span": snap.get("span"),
+           "sha256": snap.get("sha256"), "version": snap.get("version"),
+           "dropped": snap.get("dropped"), "gaps": snap.get("gaps"),
+           "problems": snap.get("problems")}
+    if sha:
+        out["verify"] = snp.verify({"sha256": sha, "fingerprint": {}},
+                                   mats, today=today)
+    return out
 
 
 @app.post("/api/factor_lab/explain")

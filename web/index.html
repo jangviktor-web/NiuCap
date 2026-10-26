@@ -638,6 +638,24 @@ tbody tr:hover{background:#f7f9fc}
 .fllayer .bar{flex:1;height:14px;position:relative;background:var(--bg2);border-radius:2px;overflow:hidden}
 .fllayer .bar i{position:absolute;top:0;bottom:0;border-radius:2px}
 .fllayer .vv{width:64px;text-align:right;font-variant-numeric:tabular-nums;font-weight:600;flex-shrink:0}
+/* 因果性 / 快照说明带：表格上方，先答「能不能用」再看数字。
+   三态用左侧色条区分，不靠背景色块堆叠（表格本身已经有很多颜色）。 */
+.flbar{display:flex;flex-direction:column;gap:3px;border:1px solid var(--line);
+  border-left-width:3px;border-radius:6px;padding:9px 12px;margin-bottom:9px;
+  font-size:12px;line-height:1.6;color:var(--tx3);background:var(--card)}
+.flbar b{font-size:12.5px;color:var(--tx);font-weight:650}
+.flbar span{display:block}
+.flbar.ok{border-left-color:var(--down)}
+.flbar.warn{border-left-color:var(--warn);background:var(--warn-bg)}
+.flbar.warn b{color:var(--warn-on)}
+.flbar.bad{border-left-color:var(--up);background:rgba(246,70,93,.07)}
+.flbar.bad b{color:var(--up)}
+.flsha{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;
+  background:var(--line2);padding:1px 5px;border-radius:4px;cursor:pointer;
+  color:var(--tx2);user-select:all;
+  /* 32 位十六进制是不可断的单词：窄屏不加这两行会把整条说明带撑出屏幕 */
+  word-break:break-all;overflow-wrap:anywhere}
+.flcz{font-size:11px;color:var(--tx3);margin-left:2px}
 /* 因子实验室 AI 解读卡片：与 #224 小白讲解卡片同一视觉语言（accent 描边 + 虚线分隔） */
 .flai{border:1px solid var(--accent);border-radius:8px;background:var(--accent-bg);
   padding:11px 13px}
@@ -8057,6 +8075,54 @@ function runFactorLab(){
   });
 }
 
+/* ===== 因子实验室：因果性 + 快照两条说明带 =====
+   这两条回答的是「这批数字能不能信」，与 IC 大小无关，所以放在表格**上方**：
+   先看能不能用，再看数字多少。放在表格下面等于让人先被漂亮数字说服。 */
+
+function flCausalBar(d){
+  var c = d.causality || {};
+  if(c.ok === true){
+    return '<div class="flbar ok"><b>因果性检查通过</b>' +
+      '<span>每个因子都做过「截断重放 + 未来扰动」：只喂前 N 天的数据重算，' +
+      '或用改过的未来数据重算，结果在重叠区逐点不变。' +
+      '检查窗口 ' + (c.checked_days || '') + ' 个交易日。</span></div>';
+  }
+  var bad = (c.failed || []);
+  return '<div class="flbar bad"><b>⚠ 有因子用了未来数据</b>' +
+    '<span>' + esc(c.summary || '') + '</span>' +
+    '<span>这些因子的 IC 不可采信，判定已强制置为不通过。' +
+    '下面表格里标红的行为需要修因子函数，不是调门槛。</span></div>';
+}
+
+function flSnapshotBar(d){
+  var s = d.snapshot || {};
+  if(!s.sha256){
+    return '<div class="flbar warn"><b>快照未生成</b>' +
+      '<span>' + esc((s.problems && s.problems[0] && s.problems[0].kind) || '数据校验未通过') +
+      '，本次结果无法按哈希复现。</span></div>';
+  }
+  var bits = [];
+  bits.push('行数 ' + (s.rows || 0).toLocaleString());
+  bits.push('跨度 ' + (s.days || 0) + ' 日');
+  if(s.dropped && s.dropped.unsettled) bits.push('丢弃未定稿 ' + s.dropped.unsettled + ' 根');
+  if(s.gaps && s.gaps.length) bits.push('缺口 ' + s.gaps.length + ' 处');
+  var bad = (s.problems || []).length;
+  var cls = bad ? 'warn' : 'ok';
+  var h = '<div class="flbar ' + cls + '"><b>数据快照</b>' +
+    // data-sha 存完整 64 位：显示只露前 32 位，但复制/核对要的是全串，
+    // 光显示半截等于让人没法拿去比对。
+    '<span>SHA-256 <code class="flsha" data-sha="' + esc(s.sha256) +
+    '" title="点一下复制完整哈希">' + esc(s.sha256.slice(0, 32)) +
+    '…</code> · ' + esc(bits.join(' · ')) + '</span>' +
+    '<span>同一份数据重算必然得到同一串哈希。下次 IC 变了，先比哈希：' +
+    '一样 = 代码或参数变了；不一样 = 数据变了（新数据入库或历史被修正）。</span>';
+  if(bad){
+    h += '<span>⚠ 校验发现 ' + bad + ' 项数据问题（如 high 低于收盘价），' +
+      '已原样列出、未做修补——修数据要去源头修，不然哈希就没意义了。</span>';
+  }
+  return h + '</div>';
+}
+
 function renderFactorLab(d, meta){
   var el = $('flBody');
   if(!d || !d.ok){ die(el, (d && d.error) || '返回异常'); return; }
@@ -8065,7 +8131,8 @@ function renderFactorLab(d, meta){
     esc(d.span[0]) + '~' + esc(d.span[1]) + '（' + d.days + ' 日）· 收益窗口 ' +
     d.forward + ' 日';
 
-  var h = '<div class="tblw"><table class="tbl" id="flTbl"><thead><tr>' +
+  var h = flCausalBar(d) + flSnapshotBar(d) +
+    '<div class="tblw"><table class="tbl" id="flTbl"><thead><tr>' +
     '<th>因子</th><th>类别</th><th>IC均值</th><th>ICIR</th><th>IC&gt;0</th>' +
     '<th>t值</th><th>q值</th><th>有效率</th><th>单调</th><th>判定</th>' +
     '</tr></thead><tbody>';
@@ -8073,9 +8140,19 @@ function renderFactorLab(d, meta){
     var ic = it.ic_mean, ir = it.icir, pr = it.pos_ratio,
         t = it.t_stat, cv = it.cover;
     var n = function(v, f){ return v == null ? '—' : f(v); };
+    // 前视因子：IC 再漂亮也不能标“通过”。后端已经把 pass 置为 false，
+    // 这里额外加一个红标，让人一眼看出「不通过的原因不是数字不够好」。
+    var cz = it.causal || {};
+    var causalCell = cz.ok === true ? '<span style="color:var(--down)" title="截断重放与未来扰动均未改变历史值">只看过去</span>'
+      : cz.ok === false ? '<span style="color:var(--up)" title="' + attr(cz.verdict || '') +
+        '">⚠ 用了未来</span>'
+      : '<span style="color:var(--tx3)">未检查</span>';
+    var passCell = it.pass ? '✅ 通过'
+      : (cz.ok === false ? '<span style="color:var(--up)">✕ 前视</span>' : '—');
     // 注意：有效率是 0~1 的比例，显示必须 ×100（曾经在这里栽过：直接
     // '%.0f%%' 会把 0.658 四舍五入成 "1%"）
-    h += '<tr><td>' + esc(it.name) + '</td><td>' + esc(it.cat) + '</td>' +
+    h += '<tr' + (cz.ok === false ? ' style="background:rgba(246,70,93,.06)"' : '') +
+      '><td>' + esc(it.name) + '</td><td>' + esc(it.cat) + '</td>' +
       '<td class="' + (ic > 0 ? 'up' : 'down') + '">' +
         n(ic, function(v){ return (v > 0 ? '+' : '') + v.toFixed(4); }) + '</td>' +
       '<td>' + n(ir, function(v){ return (v > 0 ? '+' : '') + v.toFixed(3); }) + '</td>' +
@@ -8087,7 +8164,7 @@ function renderFactorLab(d, meta){
         '此时「没预测力」的结论不可信">' +
         n(cv, function(v){ return (v * 100).toFixed(0) + '%'; }) + '</td>' +
       '<td>' + (it.monotonic ? '是' : '否') + '</td>' +
-      '<td>' + (it.pass ? '✅ 通过' : '—') + '</td></tr>';
+      '<td>' + passCell + ' <span class="flcz">' + causalCell + '</span></td></tr>';
   });
   h += '</tbody></table></div>';
 
@@ -8785,6 +8862,36 @@ if($('flForward')) $('flForward').onchange = function(){ runFactorLab(); };
 if($('flDays')) $('flDays').onchange = function(){ runFactorLab(); };
 // AI 解读走登录守卫（factoriai 模块），命中 401 弹登录框、成功后续跑
 if($('flAi')) $('flAi').onclick = function(){ runFactorAiGuarded(); };
+
+// 快照哈希点击复制。用事件委托挂在 document 上：flBody 每次结果都整块重渲染，
+// 绑在元素上就得每次重挂（漏一次用户就点不动，还查不出来）。
+document.addEventListener('click', function(ev){
+  var el = ev.target && ev.target.closest ? ev.target.closest('.flsha') : null;
+  if(!el) return;
+  var full = el.getAttribute('data-sha') || '';
+  if(!full) return;
+  var done = function(){
+    var old = el.textContent;
+    el.textContent = '已复制 ✓';
+    setTimeout(function(){ el.textContent = old; }, 900);
+  };
+  // clipboard API 在非 https / 无权限时会 reject，必须给回落，
+  // 否则点了没反应 = 用户以为坏了。
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(full).then(done, function(){ legacyCopy(full, done); });
+  }else{
+    legacyCopy(full, done);
+  }
+});
+function legacyCopy(txt, cb){
+  var ta = document.createElement('textarea');
+  ta.value = txt;
+  ta.style.cssText = 'position:fixed;left:-9999px;top:0';
+  document.body.appendChild(ta);
+  ta.select();
+  try{ document.execCommand('copy'); cb(); }catch(e){}
+  document.body.removeChild(ta);
+}
 
 /* =========================================================================
    模拟净值（方案3）·「跟着买」回放

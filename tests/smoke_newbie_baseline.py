@@ -31,7 +31,11 @@ def check(name, cond, detail=""):
     print(("  [OK] " if cond else "  [FAIL] ") + name + ((" | " + str(detail)) if detail else ""))
 
 with sync_playwright() as p:
-    b = p.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+    # 沙箱里 playwright 版本与已下载的浏览器版本常对不上（要 1243、装的是 1208）。
+    # 系统 chromium 一定在，优先用它；没有才回落到 playwright 自带浏览器。
+    _exe = '/usr/bin/chromium' if os.path.exists('/usr/bin/chromium') else None
+    b = p.chromium.launch(headless=True, executable_path=_exe,
+                          args=['--no-sandbox', '--disable-dev-shm-usage'])
     ctx = b.new_context(viewport={'width': 1400, 'height': 1100})
     pg = ctx.new_page()
     pg.on("console", lambda m: errs.append(m.text) if m.type == "error" else None)
