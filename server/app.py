@@ -73,6 +73,7 @@ import hithink as htk
 import intent as itt
 import tdx as tdxc
 import newbie as nwb
+import newbie_baseline as nbb
 import grid as grd
 import screen_dsl as sdsl
 import market_phase as mp
@@ -460,6 +461,95 @@ class NewbieCache:
 
 
 NEWBIE = NewbieCache()
+
+
+class BacktestCache:
+    """随机基线回溯结果的缓存。
+
+    为什么不能复用 `NewbieCache`：
+      1. TTL 语义不同。选股结果 30 分钟就可能变（行情在动），而回溯的
+         **窗口和结论由历史日线决定**——只要回溯窗口不动，重新算一遍
+         得到的是一模一样的数字。按 6 小时缓存才合理，用 30 分钟纯属浪费。
+      2. 生效范围不同。回溯按 preset 建键，但只有 growth 真的能算；
+         其余预设应当直接返回"不可回溯 + 原因"，不该占用后台线程。
+      3. 算力不同。一次约 1.6 秒（60 天 × 200 次抽样），比选股快得多，
+         但仍不该让每个页面打开都触发一次。
+
+    失败不缓存成结果：算错或数据缺失时只记 `_err`，下次请求会重算，
+    避免把一次偶发失败固化成"这个方案永远算不出来"。
+    """
+
+    def __init__(self, ttl: int = 6 * 3600, cooldown: int = 60):
+        self.ttl = ttl
+        self.cooldown = cooldown          # 出错后多久才允许重试
+        self._data: dict = {}
+        self._ts: dict = {}
+        self._err: dict = {}
+        self._err_ts: dict = {}
+        self._busy: set = set()
+        self._lock = threading.Lock()
+
+    def get(self, preset: str):
+        """返回 (结果, 状态)。结果只在成功算完才有。"""
+        with self._lock:
+            hit = self._data.get(preset)
+            ts = self._ts.get(preset, 0.0)
+            busy = preset in self._busy
+            err = self._err.get(preset)
+            err_ts = self._err_ts.get(preset, 0.0)
+        fresh = bool(hit) and (time.time() - ts) < self.ttl
+        if hit and not fresh:
+            hit = None                    # 过期就不用，但不清（失败时还能兜一下）
+        return hit, {
+            "stale": (not fresh) and bool(self._data.get(preset)),
+            "computing": busy,
+            "error": err,
+            "updated": (datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+                        if ts else None),
+            "retry_in": (max(0.0, self.cooldown - (time.time() - err_ts))
+                         if err else 0),
+        }
+
+    def compute(self, preset: str):
+        with self._lock:
+            if preset in self._busy:
+                return
+            self._busy.add(preset)
+        try:
+            res = nbb.evaluate_growth()
+            if not res.get("ok"):
+                with self._lock:
+                    self._err[preset] = res.get("reason") or "回溯失败"
+                    self._err_ts[preset] = time.time()
+                return
+            with self._lock:
+                self._data[preset] = res
+                self._ts[preset] = time.time()
+                self._err[preset] = None
+        except Exception as e:
+            with self._lock:
+                self._err[preset] = str(e)
+                self._err_ts[preset] = time.time()
+        finally:
+            with self._lock:
+                self._busy.discard(preset)
+
+    def ensure_async(self, preset: str):
+        with self._lock:
+            hit = self._data.get(preset)
+            ts = self._ts.get(preset, 0.0)
+            busy = preset in self._busy
+            err_ts = self._err_ts.get(preset, 0.0)
+        if busy:
+            return
+        if hit and (time.time() - ts) < self.ttl:
+            return
+        if self._err.get(preset) and (time.time() - err_ts) < self.cooldown:
+            return                        # 刚失败过，冷却期内不重试
+        threading.Thread(target=self.compute, args=(preset,), daemon=True).start()
+
+
+BACKTEST = BacktestCache()
 
 
 def _newbie_warm():
@@ -2234,8 +2324,16 @@ def api_rating_batch(
 
 @app.get("/api/newbie_presets")
 def api_newbie_presets():
-    """返回四套预设方案的目录，供前端渲染大按钮。"""
-    return {"presets": nwb.list_presets()}
+    """返回四套预设方案的目录，供前端渲染大按钮。
+
+    附带 `retrospect`：每个方案**能不能**和历史随机选股对比。
+    放在目录接口里而不是等用户点开才知道 —— 这是方案的固有属性，
+    提前告诉用户比事后解释"这个方案给不了数字"体验好得多，
+    也避免前端自己再抄一份原因文案（抄了就会和后端口径漂移）。
+    """
+    retro = {k: {"ok": ok, "reason": why}
+             for k, (ok, why) in nbb.RETROSPECT.items()}
+    return {"presets": nwb.list_presets(), "retrospect": retro}
 
 
 @app.get("/api/newbie_pick")
@@ -2276,6 +2374,57 @@ def api_newbie_pick(
     _save_screen_history("newbie",
                          f"小白·{out.get('preset', {}).get('name', '')}",
                          {"preset": preset, "limit": limit}, out.get("items"))
+    return out
+
+
+@app.get("/api/newbie_backtest")
+def api_newbie_backtest(
+    request: Request,
+    preset: str = Query("growth", description="目前仅 growth 可回溯"),
+):
+    """一键选股的"随机基线"回溯：这个方案到底比随便买强不强。
+
+    这里回答的是最容易被含糊过去的那句话——「AI 帮你选股」。用户真正想知道的
+    不是"选出来了"，而是"选得准吗"。所以给的是可证伪的对照：同一天、同一个
+    合格池里随机抽同样只数，跑 200 遍，看策略收益排在随机分布的哪个百分位。
+
+    **两个口径都返回，缺一个就是选择性呈现**：
+      - `vs_all`    ：整池随机 —— 相对"随便买"，策略有没有更好
+      - `vs_matched`：同等强势子池 —— 同等强度里，精细打分有没有额外价值
+    实测两者能差 10 个百分点以上，只报一个会得到相反的结论。
+
+    其余预设（steady/hot/rebound）**如实回"无法回溯"+原因**，不编数字。
+    原因见 `newbie_baseline.RETROSPECT`：历史 daily_bars 只有价量，
+    没有 PE/PB/市值/板块涨停价，硬算出来的只会是一个与该策略无关的数字。
+
+    走后台预计算 + 6 小时缓存（窗口不动，结论就不会变），首次请求返回
+    computing，前端几秒后重试即可。
+    """
+    _require_module_login(request, "newbie")
+    if preset not in nwb.PRESET_BY_KEY:
+        raise HTTPException(400, f"未知方案: {preset}")
+
+    ok, reason = nbb.RETROSPECT.get(preset, (False, "该方案没有回溯适配"))
+    if not ok:
+        return {"ok": False, "preset": preset, "reason": reason,
+                "worth_retro": False,
+                "label": "该方案无法回溯"}
+
+    BACKTEST.ensure_async(preset)
+    data, st = BACKTEST.get(preset)
+    if data is None:
+        # 还没算完：如实说在算，不要返回 0 或空结论让人误读
+        if st["error"] and not st["computing"]:
+            msg = f"回溯计算失败：{st['error']}，{int(st['retry_in'])} 秒后自动重试"
+        else:
+            msg = "首次使用需要回溯近 60 个交易日的日线，约 2 秒，请稍候。"
+        return {"ok": False, "preset": preset, "computing": True,
+                "reason": msg, "updated": st["updated"]}
+
+    out = dict(data)
+    out["ok"] = True
+    out["computing"] = st["computing"]
+    out["updated"] = st["updated"]
     return out
 
 

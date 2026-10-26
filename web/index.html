@@ -788,6 +788,50 @@ tbody tr:hover{background:#f7f9fc}
 .nbai-wt li::before{content:'⚠';position:absolute;left:0;color:#e08e1a}
 .nbai-st{padding:1px 8px;border-radius:9999px;font-size:11px;font-weight:700;
   background:var(--accent);color:var(--on-primary);margin-left:auto}
+/* 随机基线回溯条：回答"这个方案是不是真比随便买强"。
+   放在结果标题下方而不是塞进每只票里 —— 它评价的是方案，不是个股。
+   涨红跌绿按 A 股习惯；百分位刻度条把 50（与随机无差别）画成中线参考。 */
+.nbbl{margin-top:12px;border:1px solid var(--line);border-radius:10px;
+  background:var(--card);padding:13px 15px}
+.nbbl-h{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:650;color:var(--tx);
+  flex-wrap:wrap}
+.nbbl-h .q{font-size:12px;font-weight:400;color:var(--tx3)}
+.nbbl-h .age{margin-left:auto;font-size:11px;color:var(--tx3);font-weight:400}
+.nbbl-duo{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px;margin-top:11px}
+.nbbl-c{border:1px solid var(--line2);border-radius:8px;padding:11px 12px;background:var(--bg)}
+.nbbl-c .lb{font-size:12px;color:var(--tx2);line-height:1.5}
+.nbbl-c .lb b{color:var(--tx);font-weight:650}
+.nbbl-v{display:flex;align-items:baseline;gap:8px;margin-top:7px}
+.nbbl-v .n{font-size:26px;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+.nbbl-v .u{font-size:12px;color:var(--tx3)}
+.nbbl-v .vd{font-size:12px;font-weight:650;margin-left:auto}
+.nbbl-track{position:relative;height:6px;border-radius:6px;background:var(--line);
+  margin-top:9px;overflow:visible}
+.nbbl-track i{position:absolute;left:0;top:0;height:100%;border-radius:6px;display:block}
+.nbbl-track s{position:absolute;left:50%;top:-3px;width:1px;height:12px;
+  background:var(--tx3);text-decoration:none;opacity:.75}
+.nbbl-track u{position:absolute;top:-4px;width:2px;height:14px;background:var(--tx);
+  text-decoration:none;border-radius:2px}
+.nbbl-tk{display:flex;justify-content:space-between;font-size:10.5px;color:var(--tx3);margin-top:5px}
+.nbbl-foot{margin-top:10px;padding-top:9px;border-top:1px dashed var(--line);
+  font-size:11.5px;color:var(--tx3);line-height:1.65}
+.nbbl-foot .warn{color:var(--warn-on)}
+.nbbl-na{border:1px dashed var(--line);border-radius:10px;padding:12px 15px;
+  font-size:12.5px;color:var(--tx3);line-height:1.65;margin-top:12px;background:var(--bg)}
+.nbbl-na b{color:var(--tx2);font-weight:650}
+.nbbl-mini{display:flex;align-items:center;gap:2px;height:30px;margin-top:10px;
+  border-bottom:1px solid var(--line2);padding-bottom:1px}
+.nbbl-mini i{flex:1;min-width:1px;border-radius:1px;background:var(--line);display:block}
+/* 每日柱状图的 50 参照线：贯穿整排，和上面的单卡刻度条对齐同一语义 */
+.nbbl-mini-wrap{position:relative;margin-top:10px}
+.nbbl-mini-wrap .mid{position:absolute;left:0;right:0;bottom:14px;height:1px;
+  border-top:1px dashed var(--line);pointer-events:none}
+.nbbl-mk{font-size:10.5px;color:var(--tx3);margin-top:5px;line-height:1.5}
+/* 方案卡片上的追溯标记：让人在点之前就知道这个方案有没有"和随机比过" */
+.nbcard .nbbadge{position:absolute;top:10px;right:12px;font-size:10px;line-height:1;
+  padding:3px 6px;border-radius:999px;font-weight:650;letter-spacing:.2px}
+.nbcard .nbbadge.ok{background:var(--accent-bg);color:var(--accent)}
+.nbcard .nbbadge.no{background:var(--line2);color:var(--tx3)}
 .nbai-q{margin-top:7px;font-size:12px;color:var(--tx3)}
 
 /* ===== 我的自选 ===== */
@@ -1454,6 +1498,7 @@ td .starbtn{font-size:16px}
           <button class="btn sm" data-barwin="newbie">看胜率</button>
           <button class="btn sm ghost" data-barbatch="newbie">加自选</button>
         </div>
+        <div class="nbnote" id="nbBaseline"></div>
         <div id="nbBody"></div>
       </div>
     </div>
@@ -11767,7 +11812,9 @@ function resolveStocks(raw){
 /* =========================================================================
    小白选股
    ========================================================================= */
-var nbState = { loaded:false, presets:[], cur:'', data:null, limit:20, timer:null };
+var nbState = { loaded:false, presets:[], cur:'', data:null, limit:20, timer:null, baseTimer:null };
+// 方案能否和随机选股对比：由 /api/newbie_presets 的 retrospect 下发（不在此硬编码）
+var NB_RETROSPECT = {};
 
 function nbRiskColor(risk){
   if(risk === '低') return {bg:'rgba(14,203,129,.12)', fg:'#0ecb81'};
@@ -11787,6 +11834,12 @@ function loadNewbiePresets(){
   nbState.loaded = true;
   fetch('/api/newbie_presets').then(function(r){ return r.json(); }).then(function(d){
     nbState.presets = d.presets || [];
+    // retrospect: {key: {ok, reason}} —— 方案能不能和随机比，由后端说了算。
+    // 前端只用来画卡片角标；原因文案不复制一份，避免两边口径漂移。
+    NB_RETROSPECT = {};
+    Object.keys(d.retrospect || {}).forEach(function(k){
+      NB_RETROSPECT[k] = !!(d.retrospect[k] || {}).ok;
+    });
     renderNewbiePicks();
   }).catch(function(){
     $('nbPicks').innerHTML = '<div class="nbempty">方案加载失败，请刷新页面重试。</div>';
@@ -11821,7 +11874,15 @@ function renderNewbiePicks(){
   var h = '';
   nbState.presets.forEach(function(p){
     var rc = nbRiskColor(p.risk);
+    // 追溯标记：能不能"和随机比"是方案的固有属性，点进去才知道太晚了。
+    // 能比 → 亮标"可对比"；不能比 → 灰标，hover 说明原因（原因来自后端 RETROSPECT，
+    // 这里只放短标签，避免卡片被一段解释撑变形）。
+    var retro = (window.NB_RETROSPECT || {})[p.key];
+    var badge = '';
+    if(retro === true) badge = '<span class="nbbadge ok" title="可回溯：能算出这个方案 vs 随机选股的百分位">可对比</span>';
+    else if(retro === false) badge = '<span class="nbbadge no" title="该方案无法回溯（历史库缺必要字段），不提供与随机的对比">不可比</span>';
     h += '<div class="nbcard' + (nbState.cur === p.key ? ' on' : '') + '" data-nbpick="' + p.key + '">';
+    h += badge;
     h += '<div class="ic">' + (NB_ICON[p.key] || '') + '</div>';
     h += '<div class="nm">' + esc(p.name) + '</div>';
     h += '<div class="tl">' + esc(p.tagline) + '</div>';
@@ -11849,6 +11910,7 @@ function runNewbie(key, force){
   $('nbResTitle').insertAdjacentHTML('afterbegin', (p && NB_ICON[p.key]) || '');
   $('nbResCount').textContent = '';
   $('nbBody').innerHTML = '<div class="nbempty"><span class="spin"></span> 正在扫描全市场，请稍候…</div>';
+  nbBaseline(key, p);
 
   var url = '/api/newbie_pick?preset=' + encodeURIComponent(key) + '&limit=' + nbState.limit;
   if(force) url += '&refresh=1';
@@ -11874,6 +11936,151 @@ function runNewbie(key, force){
   }).catch(function(){
     $('nbBody').innerHTML = '<div class="nbempty">选股请求失败，请稍后重试。</div>';
   });
+}
+
+/* ===== 随机基线回溯 =====
+   回答的是用户真正在问的那句话："你说帮我选股，那到底比我自己闭眼买强多少？"
+   做法：同一天、同一个合格池里随机抽同样只数，跑 200 遍，看策略收益排在
+   随机分布的哪个百分位。50 = 和随机没区别。
+
+   两个口径必须一起显示（这是本功能最容易做错的地方）：
+     · 整池随机  → 相对"随便买"，这个方案有没有更好
+     · 同强势子池 → 同等强度里，方案自己的挑选有没有额外价值
+   实测两者能差 10 个百分点以上，只报一个会得出相反结论。
+   所以标题写"哪个口径"而不是笼统写"胜率"。
+
+   不能回溯的方案（steady/hot/rebound）**直接说明为什么不能**，
+   不做一个看起来专业其实在骗人的数字 —— 理由来自后端 RETROSPECT。 */
+function nbPctColor(v){
+  if(v == null) return ecv('--tx3');
+  if(v >= 90) return ecv('--up');        // 强：红（A 股"好"= 红）
+  if(v >= 70) return '#e8703a';
+  if(v >= 55) return '#d38b1f';
+  if(v > 45)  return ecv('--tx2');       // 中性：不上色，避免暗示
+  return ecv('--down');                  // 弱：绿
+}
+
+function nbBaseline(key, preset){
+  var box = $('nbBaseline');
+  if(!box) return;
+  // 切方案时先把上一个方案的结论擦掉：留着会让人以为这数字属于新方案
+  box.className = 'nbnote';
+  box.style.display = 'none';
+  box.innerHTML = '';
+  if(!preset) return;
+  if(nbState.baseTimer){ clearTimeout(nbState.baseTimer); nbState.baseTimer = null; }
+
+  box.style.display = 'block';
+  box.className = 'nbbl';
+  box.innerHTML = '<div class="nbbl-h">🆚 和随便买比一比'
+    + '<span class="q">同一天、同一批合格股里随机抽同样只数，跑 200 遍</span>'
+    + '<span class="age"><span class="spin"></span> 回测中…</span></div>';
+
+  fetch('/api/newbie_backtest?preset=' + encodeURIComponent(key))
+    .then(function(r){ return r.json(); })
+    .then(function(d){
+      // 用户已经切到别的方案：丢弃过期响应，别把上一条结论画到新方案下
+      if(nbState.cur !== key) return;
+      if(d && d.detail) { box.style.display = 'none'; return; }   // 未登录：静默
+      if(d && d.computing){
+        box.className = 'nbbl';
+        box.innerHTML = '<div class="nbbl-h">🆚 和随便买比一比'
+          + '<span class="q">正在回溯近 60 个交易日的日线</span>'
+          + '<span class="age"><span class="spin"></span> 约 2 秒</span></div>';
+        nbState.baseTimer = setTimeout(function(){
+          if(nbState.cur === key) nbBaseline(key, preset);
+        }, 2500);
+        return;
+      }
+      renderNbBaseline(box, d || {});
+    })
+    .catch(function(){ box.style.display = 'none'; });
+}
+
+function renderNbBaseline(box, d){
+  // ① 算不出来 / 该方案不可回溯 —— 说清楚原因，不编数字
+  if(!d.ok){
+    box.className = 'nbbl-na';
+    box.innerHTML = '<b>这个方案暂时给不出"和随便买比"的结论。</b><br>'
+      + esc(d.reason || '回溯计算失败，稍后会自动重试。');
+    return;
+  }
+  var a = d.vs_all || {}, m = d.vs_matched || {}, w = d.window || {};
+  box.className = 'nbbl';
+  var h = '<div class="nbbl-h">🆚 和随便买比一比'
+    + '<span class="q">' + esc(w.from || '') + ' ~ ' + esc(w.to || '')
+    + ' · 持有 ' + (w.horizon || 5) + ' 天 · ' + (w.runs || 200) + ' 次随机</span>'
+    + (d.updated ? '<span class="age">更新于 ' + esc(d.updated) + '</span>' : '')
+    + '</div>';
+
+  h += '<div class="nbbl-duo">';
+  h += nbBlCard('整池随机', '同一天全部合格股里随机抽 ' + (d.picks || 20) + ' 只',
+                '？随便买能赢吗', a, d.strategy_mean);
+  h += nbBlCard('同强势子池', '只在涨幅相近的那批里随机抽（同样是个股挑出来的强度）',
+                '？挑得更准吗', m, d.strategy_mean);
+  h += '</div>';
+
+  // 每日百分位的迷你柱：一眼看出结论是不是靠某几天撑起来的
+  var daily = d.daily || [];
+  if(daily.length){
+    h += '<div class="nbbl-mini-wrap"><div class="mid"></div><div class="nbbl-mini">';
+    daily.forEach(function(x){
+      var v = x.pct;
+      var col = (v == null) ? ecv('--line') : nbPctColor(v);
+      var hgt = (v == null) ? 3 : Math.max(3, Math.round(v / 100 * 28));
+      h += '<i title="' + esc(x.date) + ' 百分位 ' + (v == null ? '—' : v.toFixed(0)) + '"'
+        + ' style="height:' + hgt + 'px;background:' + col + ';align-self:flex-end"></i>';
+    });
+    h += '</div></div>';
+    h += '<div class="nbbl-mk">每天一根柱：当天方案排在随机分布的哪个百分位，'
+      + '越高越强（虚线 = 50）。左边 ' + esc(daily[0].date)
+      + '，右边 ' + esc(daily[daily.length - 1].date) + '</div>';
+  }
+
+  h += '<div class="nbbl-foot">';
+  if(d.caveat){
+    h += '<span class="warn">⚠ 口径说明：' + esc(d.caveat) + '。</span><br>';
+  }
+  h += '回溯用的是历史日线，不含手续费与滑点；'
+    + '「弱于随机」不代表这个方案一定亏，只表示在这段时间里，'
+    + '照它买不如在同样的池子里随便抓几只。';
+  if(d.days_skipped) h += '<br>另有 ' + d.days_skipped + ' 天因数据不足未参与统计。';
+  h += '</div>';
+  box.innerHTML = h;
+}
+
+function nbBlCard(title, note, label, v, stratMean){
+  var pct = v.percentile_mean;
+  var col = nbPctColor(pct);
+  var h = '<div class="nbbl-c">';
+  h += '<div class="lb">' + esc(label) + '　<b>' + esc(title) + '</b><br>'
+     + '<span style="font-size:11.5px;color:var(--tx3)">' + esc(note) + '</span></div>';
+  if(pct == null){
+    h += '<div class="nbbl-v"><span class="n" style="color:var(--tx3);font-size:18px">数据不足</span></div>';
+    h += '<div class="nbbl-tk"><span>' + esc(v && v.verdict ? v.verdict : '无法对比') + '</span></div>';
+    h += '</div>';
+    return h;
+  }
+  h += '<div class="nbbl-v"><span class="n" style="color:' + col + '">'
+     + pct.toFixed(0) + '</span><span class="u">/ 100 百分位</span>'
+     + '<span class="vd" style="color:' + col + '">' + esc(v.verdict || '') + '</span></div>';
+  // 刻度条：填充到百分位；中线 50 是"与随机无差别"的参照；白色游标是策略位置
+  h += '<div class="nbbl-track">'
+     + '<i style="width:' + Math.max(0, Math.min(100, pct)) + '%;background:' + col + '"></i>'
+     + '<s></s>'
+     + '<u style="left:calc(' + Math.max(0, Math.min(100, pct)) + '% - 1px)"></u>'
+     + '</div>';
+  h += '<div class="nbbl-tk"><span>0 最差</span><span>50 = 和随机一样</span><span>100 最好</span></div>';
+  var extra = [];
+  if(v.days) extra.push('样本 ' + v.days + ' 天');
+  if(v.win_rate != null) extra.push('跑赢随机的天数 ' + Math.round(v.win_rate * 100) + '%');
+  if(v.p50 != null) extra.push('随机中位收益 ' + (v.p50 * 100).toFixed(2) + '%');
+  if(stratMean != null) extra.push('方案平均 ' + (stratMean * 100).toFixed(2) + '%');
+  if(extra.length){
+    h += '<div class="nbbl-tk" style="margin-top:6px"><span>' + esc(extra.join(' · ')) + '</span></div>';
+  }
+  h += '</div>';
+  return h;
 }
 
 function renderNewbieResult(d){
