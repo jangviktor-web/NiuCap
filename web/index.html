@@ -52,9 +52,26 @@ if (typeof echarts === 'undefined') {
   --muted:var(--tx3); --tx1:var(--tx); --bg2:#161b21; --border:var(--line);
   /* 图表（ECharts）配色令牌：JS 侧 ecv() 读取，切主题时图表随之换色 */
   --ec-tip-bg:rgba(30,35,41,.97);  /* tooltip 背景 */
+  /* tooltip 文字：原先写死 #eaecef（近白）。暗底没问题，但白天模式 tooltip
+     背景是 .97 白，白字白底 = 悬停后什么都看不见。改成令牌，两套各自定义。 */
+  --ec-tip-fg:#eaecef;
   --ec-line:#2b3139;               /* tooltip 边框 + 坐标轴线 */
   --ec-split:#2b3139;              /* 网格线 */
   --ec-text:#929aa5;               /* 轴标签 / 图例文字 */
+  /* 图表内的涨跌：直接用全站语义色，避免"图里一个红、表里另一个红"。
+     改动前主图写死 #f6465d/#0ecb81，切到白天模式后与表格的 #d9342b/#12a15c
+     明显不是同一个红，同一页面出现两种涨色。 */
+  --ec-up:var(--up); --ec-down:var(--down);
+  /* 图表内的"跌"另存一档：--down 在白天是 #12a15c，对白底只有 3.34:1，
+     小字号价签读起来发虚。全局令牌不动（表格里的绿底块依赖它），
+     只在图表这一层压深到 5.2:1，保住"绿=跌"的语义又看得清。 */
+  --ec-down-line:#0ecb81;
+  --ec-up-line:#f6465d;
+  /* 均线/通道线系：明暗两套下都要能压在 K 线上而不糊成一片。
+     暗底偏亮、浅底偏深，同一条线在两套主题里亮度方向相反。 */
+  --ec-ma5:#e08c1a; --ec-ma10:#3b82f6; --ec-ma20:#a855f7; --ec-ma60:#0f9b8e;
+  --ec-chan-up:#ef4444; --ec-chan-mid:#94a3b8; --ec-chan-down:#22c55e;
+  --ec-stop:#f97316;
   --focus-wash:rgba(252,213,53,.18);  /* 聚焦/选中着色（暗底用主强调黄） */
   /* 温度仪表专用色（牛熊速查）：跨主题恒定——温度语义（绿=冷→红=热）不随
      涨跌/强调色主题漂移，否则浅色下「黄档」会变成蓝（accent 是信息蓝） */
@@ -78,6 +95,12 @@ if (typeof echarts === 'undefined') {
   --neutral-bg:#f2f3f5; --neutral-line:#e2e4e8;
   --shadow:0 1px 3px rgba(20,26,40,.06),0 1px 2px rgba(20,26,40,.04);
   --ec-tip-bg:rgba(255,255,255,.97); --ec-line:#e6e8ec; --ec-split:#f0f2f5; --ec-text:#707a8a;
+  --ec-tip-fg:#1a1d23;
+  /* 浅底上的线要比暗底更深才看得见：#e08c1a 在 #fff 上偏飘，压深一档 */
+  --ec-down-line:#0d7d45; --ec-up-line:#c62828;
+  --ec-ma5:#b76b00; --ec-ma10:#1d4ed8; --ec-ma20:#7c3aed; --ec-ma60:#0b7a6f;
+  --ec-chan-up:#dc2626; --ec-chan-mid:#64748b; --ec-chan-down:#15803d;
+  --ec-stop:#c2410c;
   --focus-wash:rgba(31,95,214,.09);
   --on-primary:#ffffff;         /* 浅：蓝底白字 */
 }
@@ -253,8 +276,11 @@ tbody tr:hover{background:#f7f9fc}
 .chart{width:100%;height:340px}
 .chart.sm{height:180px}
 .chart.lg{height:420px}
-.chartgrid{display:grid;gap:14px}
-@media(min-width:900px){.chartgrid.c2{grid-template-columns:1fr 1fr}}
+.chartgrid{display:grid;gap:14px;grid-template-columns:minmax(0,1fr)}
+/* minmax(0,1fr) 而不是 1fr：1fr 的最小宽度是 auto，会被图表 canvas 的
+   实际像素宽反撑，形成「列宽依赖内容、内容又依赖列宽」的循环——
+   窗口从 1500 缩到 390 时 grid 列宽卡在 598px 不再收缩，整页横向溢出。 */
+@media(min-width:900px){.chartgrid.c2{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
 
 /* 信号列表 */
 .siglist{display:flex;flex-direction:column;gap:8px}
@@ -318,6 +344,64 @@ tbody tr:hover{background:#f7f9fc}
 .qg .k{color:var(--tx3);margin-bottom:2px}
 .qg .v{font-weight:600;font-variant-numeric:tabular-nums;font-size:13px}
 
+/* 个股页头 v2：左价格 / 右空间距离。
+   左栏回答"多少钱"（大字价格 + 涨跌额幅），右栏回答"还有多少空间"
+   （日内区间位置 + 振幅 + 距涨跌停）。两栏都用 tabular-nums，
+   数字换行时不会左右跳动。 */
+.stockhd2{display:flex;align-items:flex-end;gap:24px;flex-wrap:wrap}
+.stockhd2 .hd-left{min-width:190px}
+.stockhd2 .hd-name{font-size:15px;font-weight:650;color:var(--tx);letter-spacing:-.2px}
+.stockhd2 .hd-code{font-size:12px;color:var(--tx3);font-weight:400;margin-left:8px;
+  font-variant-numeric:tabular-nums;letter-spacing:0}
+.stockhd2 .hd-price{font-size:34px;font-weight:700;line-height:1.15;margin-top:2px;
+  font-variant-numeric:tabular-nums;letter-spacing:-1px}
+.stockhd2 .hd-chg{display:flex;gap:10px;font-size:14px;font-weight:600;margin-top:1px;
+  font-variant-numeric:tabular-nums}
+/* min-width 要按内容定：区间标签一行是「低 1322.60  日内 25%  高 1354.98」，
+   240px 时中间那段会贴着右边的最高价，读起来像「25% 高」。280 起才排得开。 */
+.stockhd2 .hd-right{margin-left:auto;min-width:280px;flex:0 1 340px}
+/* 日内区间条：一根细轨 + 一个圆点。比"最高/最低"两个数字更快看出所处位置。
+   两端用 line 色（中性），中点放在现价那侧——暗色下 --down-bg/--up-bg 只有
+   .14 透明度，做出来的渐变在深底上完全看不见，所以底色改用中性轨道，
+   只用圆点 + 两端文字表达位置。 */
+.hd-range{margin-bottom:8px}
+.hd-range-bar{position:relative;height:4px;border-radius:2px;
+  background:var(--neutral-bg);border:1px solid var(--line)}
+.hd-range-bar i{position:absolute;top:50%;width:9px;height:9px;border-radius:50%;
+  background:var(--tx);border:2px solid var(--card);transform:translate(-50%,-50%);
+  box-sizing:content-box}
+.hd-range-lb{display:flex;justify-content:space-between;align-items:baseline;gap:10px;
+  font-size:11px;color:var(--tx3);margin-top:3px;font-variant-numeric:tabular-nums}
+.hd-range-lb span{white-space:nowrap}
+.hd-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.hd-stats .k{font-size:11px;color:var(--tx3);margin-bottom:1px}
+.hd-stats .v{font-size:13px;font-weight:650;font-variant-numeric:tabular-nums;
+  display:flex;align-items:baseline;gap:4px;flex-wrap:wrap}
+.hd-stats .v em{font-style:normal;font-size:11px;font-weight:500;opacity:.7;
+  color:var(--tx3)}
+.hd-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:12px 0 0}
+.hd-hint{font-size:12px;color:var(--tx2)}
+/* 估值五口径条：原来是一整块独立背景色块，占了将近一行高度却只放 5 个数字；
+   改成与报价网格同宽的轻量行，靠 <b> 做层次，不再抢结论卡的视觉重量 */
+.valrow{display:flex;gap:16px;flex-wrap:wrap;align-items:center;
+  margin-top:14px;padding:8px 12px;border-radius:6px;
+  background:var(--bg2);border:1px solid var(--line2);font-size:12px}
+.valrow .k{color:var(--tx3);font-variant-numeric:tabular-nums}
+.valrow .k b{color:var(--tx);font-weight:650;margin-left:5px}
+.valrow .src{margin-left:auto;font-size:11px;color:var(--tx3)}
+
+/* 分区锚点条：横向可滚动，粘在吸顶 header 下方。
+   用 --hdr-h 而不是硬编码像素：窄屏 header 会换行变高，写死 93 就会漏一截。 */
+.secnav{position:sticky;top:var(--hdr-h,0px);z-index:40;display:flex;gap:4px;
+  overflow-x:auto;scrollbar-width:none;margin:8px 0;padding:5px 6px;
+  background:var(--card);border:1px solid var(--line);border-radius:8px;
+  box-shadow:var(--shadow)}
+.secnav::-webkit-scrollbar{display:none}
+.secnav a{flex:none;font-size:12.5px;color:var(--tx2);text-decoration:none;
+  padding:4px 10px;border-radius:6px;white-space:nowrap;transition:background .12s,color .12s}
+.secnav a:hover{background:var(--bg2);color:var(--tx)}
+.secnav a.on{background:var(--accent-bg);color:var(--accent);font-weight:650}
+
 /* 视图切换 */
 .vtabs{display:flex;gap:6px}
 .periods{display:flex;gap:6px;flex-wrap:wrap}
@@ -340,6 +424,15 @@ tbody tr:hover{background:#f7f9fc}
   #navToggleM{display:inline-flex !important}
   #navToggle{display:none}
   .tabs{display:none}
+  /* 手机端个股页：报价 10 项若按 108px 最小宽就只有 2 列、占 5 行。
+     压到 3 列（≈110px/格）既放得下"18.72亿"，又能把高度砍掉一半。 */
+  .quotegrid{grid-template-columns:repeat(3,1fr);gap:8px 10px}
+  .stockhd2{gap:14px}
+  .stockhd2 .hd-left{min-width:0;flex:1 1 100%}
+  .stockhd2 .hd-right{min-width:0;flex:1 1 100%;margin-left:0}
+  .stockhd2 .hd-price{font-size:30px}
+  .hd-actions{gap:8px}
+  .hd-hint{flex:1 1 100%;order:3}
   .navright .reftip{display:none}
   .mktclock{max-width:148px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .tabs button{padding:11px 11px;font-size:13px}
@@ -714,7 +807,11 @@ tbody tr:hover{background:#f7f9fc}
 }
 
 /* 关于页·数据时效对照表 */
-.about-tbl{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:6px;background:var(--card)}
+/* 表格 3 列内容（含 nowrap 首列与整段说明）固有宽度约 1670px，比卡片宽。
+   不包滚动容器的话，卡片 overflow:hidden 会把右侧「说明」列直接裁掉，
+   表面看是 doc 无溢出，实际列被切且滚不到。 */
+.tblscroll{overflow-x:auto;margin-top:6px}
+.about-tbl{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:0;background:var(--card)}
 .about-tbl th,.about-tbl td{border:1px solid var(--line2);padding:6px 10px;text-align:left;vertical-align:middle}
 .about-tbl th{background:var(--bg2);color:var(--tx2);font-weight:600}
 .about-tbl td:first-child{color:var(--tx2);white-space:nowrap}
@@ -3607,7 +3704,13 @@ function openStock(code){
   document.querySelectorAll('.tab').forEach(function(x){ x.classList.remove('on'); });
   document.querySelector('[data-tab="stock"]').classList.add('on');
   $('tab-stock').classList.add('on');
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  /* 滚到内容顶部，但要减掉吸顶 header 的高度：header 是 position:sticky，
+     scrollTo(0) 会让页签条和股票名滑到 header 底下——用户看到的第一个东西
+     是一串被切掉一半的数字，连"这是哪只股票"都要往上滚才看得见。 */
+  var hdr = document.querySelector('header');
+  var offset = (hdr ? hdr.getBoundingClientRect().height : 0) + 4;
+  var y = Math.max(0, $('tab-stock').getBoundingClientRect().top + window.scrollY - offset);
+  window.scrollTo({ top: y, behavior: 'smooth' });
   loadStock(code);
 }
 
@@ -3815,6 +3918,67 @@ function peText(pe, code){
   if(pe > 0) return fmt(pe);
   return isFundCode(code) ? '不适用' : '亏损';
 }
+/* 分区锚点条的交互。两个细节容易踩：
+   1) 滚动目标要减去「吸顶 header + 锚点条自身」的高度，否则跳过去标题被盖住，
+      用户以为没反应。
+   2) 高亮要用 scroll 事件里算「当前视口顶端第一个经过的卡片」，不能只听点击——
+      用户手动滚轮滚动时高亮也得跟着走，否则高亮在撒谎。 */
+function secNavOffset(){
+  var hdr = document.querySelector('header');
+  var nav = $('secNav');
+  return (hdr ? hdr.getBoundingClientRect().height : 0)
+       + (nav ? nav.getBoundingClientRect().height : 0) + 10;
+}
+function bindSecNav(){
+  var nav = $('secNav');
+  if(!nav) return;
+  nav.querySelectorAll('a[data-sec]').forEach(function(a){
+    a.onclick = function(){
+      var sec = document.getElementById(a.dataset.sec);
+      if(!sec) return;
+      var y = sec.getBoundingClientRect().top + window.scrollY - secNavOffset();
+      window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+    };
+  });
+  // 滚动高亮：节流到一帧一次，长页面 scroll 事件很密集
+  if(window._secNavScroll) window.removeEventListener('scroll', window._secNavScroll);
+  var ticking = false;
+  window._secNavScroll = function(){
+    if(ticking) return;
+    ticking = true;
+    requestAnimationFrame(function(){
+      ticking = false;
+      var nav2 = $('secNav');
+      if(!nav2) return;
+      var cut = secNavOffset() + 6;
+      /* 不能按导航条的书写顺序去遍历：DOM 里「量化策略信号」实际渲染在
+         「关键价位」之前（renderStock 里两块的位置与导航条里的顺序不同），
+         按 DOM 顺序取"最后一个越过判定线"的，就会高亮错项。
+         正确做法：取所有已越过线的分区里，纵向位置最靠下的那一个。 */
+      var best = null, bestTop = -Infinity;
+      nav2.querySelectorAll('a[data-sec]').forEach(function(a){
+        var el = document.getElementById(a.dataset.sec);
+        if(!el) return;
+        var top = el.getBoundingClientRect().top;
+        if(top <= cut && top > bestTop){ bestTop = top; best = a.dataset.sec; }
+      });
+      nav2.querySelectorAll('a[data-sec]').forEach(function(a){
+        a.classList.toggle('on', a.dataset.sec === best);
+      });
+    });
+  };
+  window.addEventListener('scroll', window._secNavScroll, { passive: true });
+  window._secNavScroll();
+}
+/* 吸顶高度写进 CSS 变量：header 在窄屏会换行变高，硬编码 93px 迟早错位 */
+function syncHeaderVar(){
+  var hdr = document.querySelector('header');
+  if(hdr){
+    document.documentElement.style.setProperty('--hdr-h',
+      Math.round(hdr.getBoundingClientRect().height) + 'px');
+  }
+}
+
 function renderStock(d){
   // 主题切换重绘的数据源：存最近一次完整响应，换主题时重画而不重新取数
   state.chartCache.stock = d;
@@ -3831,19 +3995,68 @@ function renderStock(d){
 
   var h = '<div class="card"><div class="card-b">';
   h += '<div class="backlink" id="backRank">← 返回榜单</div>';
-  h += '<div class="stockhd">' +
-    '<div><div class="nm">' + esc(name) + ' ' + marketTag(d.code) + '</div>' +
-    '<div class="cd">' + esc(d.code.toUpperCase()) + '</div></div>' +
-    '<div style="margin-left:auto;text-align:right">' +
-    (pxBad
-      ? '<div class="px">—</div><div class="cg" style="font-size:12px;color:var(--tx3)">行情暂不可用</div>'
-      : '<div class="px ' + cls(chg) + '">' + fmt(q.price) + '</div>' +
-        '<div class="cg ' + cls(chg) + '">' + sign(q.change) + ' &nbsp; ' + sign(chg) + '%</div>') +
+
+  /* ── 页头：把"这只股票现在什么状况"压进一屏可见的首行 ────────────────
+     原来价格被塞在 stockhd 右侧，报价 10 项平铺成 2 行网格，交易状态单独
+     占一行。信息都在，但读者要扫三块才知道"今天涨还是跌、离涨跌停多远"。
+     改成左价格 + 右关键距离的对照结构：左边回答"多少钱"，右边回答"还有多少空间"。 */
+  var ampText = (q.amplitude != null) ? fmt(q.amplitude) + '%' : '—';
+  /* 距涨跌停：分母必须是**昨收**，不是现价。涨停/跌停价本身就是按昨收算出的
+     （主板 10%、创业板/科创板 20%、北交所 30%、ST 5%），用现价当分母会把
+     对称的 ±10% 算成 +11.48% / -8.83%，看着像涨跌停不对称。
+     涨停跌停价由后端按板块规则给出，前端不自己乘比例。 */
+  var limBase = q.prev_close || q.price;
+  var toLimit = function(target){
+    if(!target || !limBase) return null;
+    return (target / limBase - 1) * 100;
+  };
+  var lu = toLimit(q.limit_up), ld = toLimit(q.limit_down);
+
+  h += '<div class="stockhd2">' +
+    '<div class="hd-left">' +
+      '<div class="hd-name">' + esc(name) + ' ' + marketTag(d.code) +
+        '<span class="hd-code">' + esc(d.code.toUpperCase()) + '</span></div>' +
+      (pxBad
+        ? '<div class="hd-price tx3">—</div>' +
+          '<div class="hd-chg tx3">行情暂不可用</div>'
+        : '<div class="hd-price ' + cls(chg) + '">' + fmt(q.price) + '</div>' +
+          '<div class="hd-chg ' + cls(chg) + '">' +
+            '<span>' + sign(q.change) + '</span>' +
+            '<span>' + sign(chg) + '%</span>' +
+          '</div>') +
+    '</div>' +
+    '<div class="hd-right">' +
+      /* 当日区间条：现价在 [最低, 最高] 里的位置。TradingView 用一根细条表达
+         "现在靠近日内高位还是低位"，比单看最高/最低两个数字快得多。 */
+      (function(){
+        if(pxBad || !q.high || !q.low || q.high <= q.low) return '';
+        var pos = Math.max(0, Math.min(100, (q.price - q.low) / (q.high - q.low) * 100));
+        return '<div class="hd-range">' +
+          '<div class="hd-range-bar"><i style="left:' + pos.toFixed(1) + '%"></i></div>' +
+          '<div class="hd-range-lb">' +
+            '<span>低 ' + fmt(q.low) + '</span>' +
+            '<span class="tx3">日内 ' + pos.toFixed(0) + '%</span>' +
+            '<span>高 ' + fmt(q.high) + '</span>' +
+          '</div></div>';
+      })() +
+      '<div class="hd-stats">' +
+        '<div><div class="k">振幅</div><div class="v">' + ampText + '</div></div>' +
+        /* 涨跌停两格都写"价 + 距昨收幅度"：价是硬信息，幅度说明刚好卡在 ±10%（或
+           ±20%/±5%）上，读者能立刻确认规则。若写成"还有 N%"会与价格混读。 */
+        '<div><div class="k">涨停价</div><div class="v up">' +
+          (q.limit_up ? fmt(q.limit_up) : '—') +
+          (lu != null ? '<em>' + (lu > 0 ? '+' : '') + lu.toFixed(2) + '%</em>' : '') + '</div></div>' +
+        '<div><div class="k">跌停价</div><div class="v down">' +
+          (q.limit_down ? fmt(q.limit_down) : '—') +
+          (ld != null ? '<em>' + ld.toFixed(2) + '%</em>' : '') + '</div></div>' +
+      '</div>' +
     '</div></div>';
+
   // 个股分析 → 策略回测 一键直达：预填代码 + 切到回测页，用户只需选策略点运行
-  h += '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0 0">' +
+  h += '<div class="hd-actions">' +
     '<button class="btn pri" id="gotoBtBtn" onclick="gotoStockBacktest(state.stockCode)">🧪 用本股回测 →</button>' +
-    '<span style="font-size:12px;color:var(--tx2)">一键直达策略回测页，并自动跑一次默认策略</span>' +
+    '<span class="hd-hint">一键直达策略回测页，并自动跑一次默认策略</span>' +
+    '<span class="ktag ktag-live" style="margin-left:auto">实时快照</span>' +
     '</div>';
 
   // 估值五口径（同花顺）：PE_TTM / PE_MRQ / PB_MRQ / PS_TTM / PCF_TTM
@@ -3851,21 +4064,15 @@ function renderStock(d){
   // 混成一个"PE"会让估值判断失真。ETF/指数无估值 → val 为 null，不渲染。
   var val = d._valuation;
   if(val && (val.pe_ttm || val.pe_mrq)){
-    h += '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center;' +
-         'margin:10px 0 0;padding:9px 12px;border-radius:8px;background:var(--bg2,#161b21);' +
-         'font-size:13px">' +
-      '<span style="color:var(--tx2)">PE(TTM) <b style="color:var(--tx)">' + fmt(val.pe_ttm) + '</b></span>' +
-      '<span style="color:var(--tx2)">PE(MRQ) <b style="color:var(--tx)">' + fmt(val.pe_mrq) + '</b></span>' +
-      '<span style="color:var(--tx2)">PB(MRQ) <b style="color:var(--tx)">' + fmt(val.pb_mrq) + '</b></span>' +
-      '<span style="color:var(--tx2)">PS(TTM) <b style="color:var(--tx)">' + fmt(val.ps_ttm) + '</b></span>' +
-      '<span style="color:var(--tx2)">PCF(TTM) <b style="color:var(--tx)">' + fmt(val.pcf_ttm) + '</b></span>' +
-      '<span style="color:var(--tx3);font-size:11px">同花顺估值五口径</span>' +
+    h += '<div class="valrow">' +
+      '<span class="k">PE(TTM)<b>' + fmt(val.pe_ttm) + '</b></span>' +
+      '<span class="k">PE(MRQ)<b>' + fmt(val.pe_mrq) + '</b></span>' +
+      '<span class="k">PB(MRQ)<b>' + fmt(val.pb_mrq) + '</b></span>' +
+      '<span class="k">PS(TTM)<b>' + fmt(val.ps_ttm) + '</b></span>' +
+      '<span class="k">PCF(TTM)<b>' + fmt(val.pcf_ttm) + '</b></span>' +
+      '<span class="src">同花顺估值五口径</span>' +
       '</div>';
   }
-  // 分钟视角已并入下方 K 线卡片的周期按钮组，不再需要单独的跳转入口
-  h += '<div style="display:flex;align-items:center;gap:8px;margin:10px 0 4px">' +
-    '<span class="ktag ktag-live">实时</span>' +
-    '<span style="font-size:12px;color:var(--tx3)">实时行情快照（约每 3 分钟刷新）</span></div>';
   h += '<div class="quotegrid">' +
     qg('今开', fmt(q.open), cls(q.open - q.prev_close)) +
     qg('昨收', fmt(q.prev_close), '') +
@@ -3880,10 +4087,27 @@ function renderStock(d){
     '</div>';
   h += '</div></div>';
 
+  /* 分区导航：整页实测 7.1 屏、13 张卡片，从头滚到尾要很久，而且「关键价位」
+     和「因子画像」这种真正影响判断的内容被埋在中间。一条横向锚点条让人
+     直接跳，不用滚。sticky 粘在吸顶 header 下面，滚到哪都知道自己在哪一节。
+     注意 top 用 CSS 变量 --hdr-h（JS 在布局后写入实测高度），写死 93px
+     在窄屏 header 换行时会错位。 */
+  h += '<div class="secnav" id="secNav">' +
+    /* 顺序必须与页面真实纵向顺序一致（实测 y 坐标）：
+       结论 → K线 → 指标 → 信号 → 价位 → 因子 → 资金 → 基本面 → 研报。
+       曾经按"逻辑上更自然"排成 价位在信号之前，结果导航条与实际滚动顺序
+       对不上——用户按顺序点会来回跳。「全套技术指标」不入导航：它与「指标」
+       是同一条线的粗细两级，点在同一个位置即可。 */
+    [['secVerdict','结论'],['secChart','K线'],['secInd','指标'],['secSignal','信号'],
+     ['secLevels','价位'],['secFactor','因子'],['secMoney','资金'],['secFund','基本面'],
+     ['secReport','研报']].map(function(x){
+      return '<a href="javascript:void(0)" data-sec="' + x[0] + '">' + x[1] + '</a>';
+    }).join('') + '</div>';
+
   // 结论卡
   if(ind){
     var lv = ind.latest;
-    h += '<div class="card"><div class="card-h"><h2>技术面结论</h2>' +
+    h += '<div class="card" id="secVerdict"><div class="card-h"><h2>技术面结论</h2>' +
       '<div class="meta"><span class="ktag ktag-eod">盘后</span> 截至 ' + esc(lv.date) + ' 收盘</div></div><div class="card-b">';
     h += '<div class="verdict">' +
       '<div class="vbox"><div class="lb">综合评分</div>' +
@@ -3918,7 +4142,7 @@ function renderStock(d){
   }
 
   // K线图
-  h += '<div class="card"><div class="card-h"><h2>K线走势</h2>' +
+  h += '<div class="card" id="secChart"><div class="card-h"><h2>K线走势</h2>' +
     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">' +
     '<div class="vtabs" id="chanBtns">' +
     [['none','无通道'],['boll','布林带'],['taq','唐安奇'],['ktn','肯特纳'],
@@ -3949,7 +4173,7 @@ function renderStock(d){
     '<b>吊灯止损</b>＝近 22 日最高价 − 3×ATR(22)，是一条随波动率移动的多头止损线，' +
     '收盘跌破即为离场信号。</div>' +
     '</div></div>';
-  h += '<div class="card"><div class="card-h"><h2>技术指标</h2></div><div class="card-b">' +
+  h += '<div class="card" id="secInd"><div class="card-h"><h2>技术指标</h2></div><div class="card-b">' +
     '<div class="chartgrid c2">' +
     '<div><div class="chart" id="cmacd"></div></div>' +
     '<div><div class="chart" id="cvol"></div></div>' +
@@ -3959,7 +4183,7 @@ function renderStock(d){
 
   // 策略信号
   if(stg){
-    h += '<div class="card"><div class="card-h"><h2>量化策略信号</h2>' +
+    h += '<div class="card" id="secSignal"><div class="card-h"><h2>量化策略信号</h2>' +
       '<div class="meta">买 ' + stg.buy_votes + ' 票 / 卖 ' + stg.sell_votes + ' 票（共 ' + stg.total + ' 个策略）</div>' +
       '</div><div class="card-b"><div class="sgrid">';
     stg.items.forEach(function(s){
@@ -3990,7 +4214,7 @@ function renderStock(d){
       ratePill = ' · 指标评级：<b class="' + rcls + '">' + esc(RS.label) + '</b>' +
         ' <span style="font-size:11px;color:var(--tx3)">(强度' + RS.score + '·买' + RS.buy + '/卖' + RS.sell + ')</span>';
     }
-    h += '<div class="card"><div class="card-h"><h2>全套技术指标</h2>' +
+    h += '<div class="card" id="secFull"><div class="card-h"><h2>全套技术指标</h2>' +
       '<div class="meta">' + F.indicator_count + ' 项指标 · ' +
       '多 ' + F.bull_count + ' / 空 ' + F.bear_count + ' / 中 ' + F.neutral_count +
       ' · <b class="' + (F.verdict_dir === 'bull' ? 'up' : (F.verdict_dir === 'bear' ? 'down' : 'flat')) + '">' +
@@ -4039,7 +4263,7 @@ function renderStock(d){
   // 9 类关键价位
   if(d._keylevels && d._keylevels.levels && d._keylevels.levels.length){
     var KL = d._keylevels;
-    h += '<div class="card"><div class="card-h"><h2>关键价位</h2>' +
+    h += '<div class="card" id="secLevels"><div class="card-h"><h2>关键价位</h2>' +
       '<div class="meta">现价 ' + fmt(KL.price) + ' · 共 ' + KL.levels.length + ' 个价位</div></div>' +
       '<div class="card-b"><div style="display:grid;grid-template-columns:1fr 1fr;gap:18px">';
     h += '<div><div style="font-size:12px;color:var(--muted);font-weight:600;margin-bottom:8px">⬆ 上方压力（由近及远）</div>';
@@ -4069,6 +4293,7 @@ function renderStock(d){
   if(bl) bl.onclick = function(){
     document.querySelector('[data-tab="rank"]').click();
   };
+  bindSecNav();
   // 日/周/月周期
   document.querySelectorAll('#perBtns .btn').forEach(function(b){
     b.onclick = function(){
@@ -4271,7 +4496,7 @@ function drawStockMinute(d){
     animation: false,
     tooltip: { trigger: 'axis', axisPointer: { type: 'cross' },
       backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
-      textStyle: { color: '#eaecef', fontSize: 12 } },
+      textStyle: { color: ecv('--ec-tip-fg'), fontSize: 12 } },
     legend: { data: ['K线','MA5','MA10','MA20'].concat(m.day_open ? ['当日开盘'] : []),
       top: 0, textStyle: { fontSize: 11, color: ecv('--ec-text') } },
     grid: { left: 56, right: 16, top: 32, bottom: 30 },
@@ -4310,7 +4535,16 @@ function kdjText(j){
    ========================================================================= */
 /* 读一个 CSS 变量当前计算值：图表配色随主题走，JS 不自己存一份色表 */
 function ecv(k){
-  return getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+  var v = getComputedStyle(document.documentElement).getPropertyValue(k).trim();
+  /* 令牌可以指向另一个令牌（--ec-up:var(--up)）。getPropertyValue 返回的是
+     未解析的 "var(--up)" 字面量，直接喂给 ECharts 会画成透明——所以这里
+     手动递归解析一层层 var()，最终拿到真实色值。 */
+  var guard = 0;
+  while(/^var\(/i.test(v) && guard++ < 8){
+    var inner = v.slice(v.indexOf('(') + 1, v.lastIndexOf(')')).split(',')[0].trim();
+    v = getComputedStyle(document.documentElement).getPropertyValue(inner).trim();
+  }
+  return v;
 }
 function renderThemeBtn(){
   var b = $('themeBtn');
@@ -4374,10 +4608,6 @@ function drawCharts(d){
   var S = ind.series;
   var dates = K.map(function(k){ return k.date; });
   var ohlc = K.map(function(k){ return [k.open, k.close, k.low, k.high]; });
-  var vols = K.map(function(k, i){
-    return { value: k.volume,
-      itemStyle: { color: k.close >= k.open ? '#f6465d' : '#0ecb81' } };
-  });
 
   // 1) K线 + 均线 + 可选通道
   var c1 = ec('ckline');
@@ -4393,8 +4623,8 @@ function drawCharts(d){
     }
     var dlen = dates.length;
     var maSeries = [
-      ['MA5', S.ma5, '#e08c1a'], ['MA10', S.ma10, '#1f5fd6'],
-      ['MA20', S.ma20, '#8b5cf6'], ['MA60', S.ma60, '#0f9b8e']
+      ['MA5', S.ma5, ecv('--ec-ma5')], ['MA10', S.ma10, ecv('--ec-ma10')],
+      ['MA20', S.ma20, ecv('--ec-ma20')], ['MA60', S.ma60, ecv('--ec-ma60')]
     ].map(function(m){
       return { name: m[0], type: 'line', data: alignTo(m[1], dlen), smooth: true, symbol: 'none',
         lineStyle: { width: 1.2, color: m[2] }, itemStyle: { color: m[2] } };
@@ -4408,31 +4638,31 @@ function drawCharts(d){
     if(mode === 'taq' && ch.taq_up){
       chanSeries = [
         { name: '唐安奇上轨', type: 'line', data: ch.taq_up, symbol: 'none',
-          lineStyle: { width: 1.1, color: '#ef4444', type: 'dashed' }, itemStyle: { color: '#ef4444' } },
+          lineStyle: { width: 1.1, color: ecv('--ec-chan-up'), type: 'dashed' }, itemStyle: { color: '#ef4444' } },
         { name: '唐安奇中轨', type: 'line', data: ch.taq_mid, symbol: 'none',
-          lineStyle: { width: 1.1, color: '#94a3b8', type: 'dotted' }, itemStyle: { color: '#94a3b8' } },
+          lineStyle: { width: 1.1, color: ecv('--ec-chan-mid'), type: 'dotted' }, itemStyle: { color: '#94a3b8' } },
         { name: '唐安奇下轨', type: 'line', data: ch.taq_down, symbol: 'none',
-          lineStyle: { width: 1.1, color: '#22c55e', type: 'dashed' }, itemStyle: { color: '#22c55e' } }
+          lineStyle: { width: 1.1, color: ecv('--ec-chan-down'), type: 'dashed' }, itemStyle: { color: '#22c55e' } }
       ];
       chanNames = ['唐安奇上轨','唐安奇中轨','唐安奇下轨'];
     } else if(mode === 'ktn' && ch.ktn_up){
       chanSeries = [
         { name: '肯特纳上轨', type: 'line', data: ch.ktn_up, symbol: 'none',
-          lineStyle: { width: 1.1, color: '#ef4444', type: 'dashed' }, itemStyle: { color: '#ef4444' } },
+          lineStyle: { width: 1.1, color: ecv('--ec-chan-up'), type: 'dashed' }, itemStyle: { color: '#ef4444' } },
         { name: '肯特纳中轨', type: 'line', data: ch.ktn_mid, symbol: 'none',
-          lineStyle: { width: 1.1, color: '#94a3b8', type: 'dotted' }, itemStyle: { color: '#94a3b8' } },
+          lineStyle: { width: 1.1, color: ecv('--ec-chan-mid'), type: 'dotted' }, itemStyle: { color: '#94a3b8' } },
         { name: '肯特纳下轨', type: 'line', data: ch.ktn_down, symbol: 'none',
-          lineStyle: { width: 1.1, color: '#22c55e', type: 'dashed' }, itemStyle: { color: '#22c55e' } }
+          lineStyle: { width: 1.1, color: ecv('--ec-chan-down'), type: 'dashed' }, itemStyle: { color: '#22c55e' } }
       ];
       chanNames = ['肯特纳上轨','肯特纳中轨','肯特纳下轨'];
     } else if(mode === 'boll' && S.boll_up){
       chanSeries = [
         { name: 'BOLL上轨', type: 'line', data: S.boll_up, symbol: 'none',
-          lineStyle: { width: 1.1, color: '#ef4444', type: 'dashed' }, itemStyle: { color: '#ef4444' } },
+          lineStyle: { width: 1.1, color: ecv('--ec-chan-up'), type: 'dashed' }, itemStyle: { color: '#ef4444' } },
         { name: 'BOLL中轨', type: 'line', data: S.boll_mid, symbol: 'none',
-          lineStyle: { width: 1.1, color: '#94a3b8', type: 'dotted' }, itemStyle: { color: '#94a3b8' } },
+          lineStyle: { width: 1.1, color: ecv('--ec-chan-mid'), type: 'dotted' }, itemStyle: { color: '#94a3b8' } },
         { name: 'BOLL下轨', type: 'line', data: S.boll_low, symbol: 'none',
-          lineStyle: { width: 1.1, color: '#22c55e', type: 'dashed' }, itemStyle: { color: '#22c55e' } }
+          lineStyle: { width: 1.1, color: ecv('--ec-chan-down'), type: 'dashed' }, itemStyle: { color: '#22c55e' } }
       ];
       chanNames = ['BOLL上轨','BOLL中轨','BOLL下轨'];
     } else if(mode === 'stop' && (d.stop_lines || {}).chandelier){
@@ -4440,7 +4670,7 @@ function drawCharts(d){
       // 不是区间边界，视觉上要能一眼区分于通道。
       chanSeries = [
         { name: '吊灯止损', type: 'line', data: d.stop_lines.chandelier, symbol: 'none',
-          lineStyle: { width: 1.8, color: '#f97316' }, itemStyle: { color: '#f97316' } }
+          lineStyle: { width: 1.8, color: ecv('--ec-stop') }, itemStyle: { color: ecv('--ec-stop') } }
       ];
       chanNames = ['吊灯止损'];
     }
@@ -4450,17 +4680,142 @@ function drawCharts(d){
       if(s.data) s.data = alignTo(s.data, dlen);
     });
 
+    /* ── 关键价位线 ────────────────────────────────────────────────
+       后端早就返回了 29 条价位（枢轴/斐波那契/整数关/成交密集/ATR 沿…），
+       但此前只在下方的「关键价位」卡片里列成文字，图上一根都没画。
+       要么全画要么不画，全画 29 条会糊成一团——所以按离现价的距离筛，
+       支撑取最近 2 条、压力取最近 2 条，每条单独标标签。
+       标签放右侧、横线用 1px 虚线：实线会跟 MA 抢视觉，虚线像"参考线"。 */
+    var kl = d._keylevels || {};
+    var lastPx = (d.quote && d.quote.price) || (K.length ? K[K.length - 1].close : null);
+    var priceLines = [];
+    if(lastPx && kl.levels && kl.levels.length){
+      /* 选线的标准不是"离现价多近"，而是**画出来能不能分开**。
+         实测 11.31 / 11.32 / 11.34 / 11.35 / 11.36 几条挤在 0.5% 里，
+         在约 300px 高的绘图区里只差 4~6 像素，标签必然叠字。
+         所以：先按"值域高度 → 像素"换算，间距不足 14px（标签行高）的
+         一律丢弃，再每侧最多留 1 条。宁可图上少一根线，也不要一团糊。 */
+      var allHi = -Infinity, allLo = Infinity;
+      K.forEach(function(k){ if(k.high > allHi) allHi = k.high; if(k.low < allLo) allLo = k.low; });
+      var yRange = (allHi - allLo) || 1;
+      var PLOT_PX = 300;                       // 主图绘图区大致高度
+      var MIN_PX = 14;                         // 少于一行字高就必然叠
+      var pxOf = function(v){ return Math.abs(v - lastPx) / yRange * PLOT_PX; };
+      var keep = [];
+      var conflicts = function(v){
+        // 与现价、与已选线都要拉开
+        if(pxOf(v) < MIN_PX) return true;
+        return keep.some(function(k2){ return Math.abs(pxOf(k2) - pxOf(v)) < MIN_PX; });
+      };
+      ['resistance', 'support'].forEach(function(side){
+        var cand = kl.levels.filter(function(x){ return x.side === side; })
+          .sort(function(a, b){ return Math.abs(a.price - lastPx) - Math.abs(b.price - lastPx); });
+        var got = 0;
+        for(var i = 0; i < cand.length && got < 1; i++){
+          if(conflicts(cand[i].price)) continue;
+          keep.push(cand[i].price);
+          priceLines.push({
+            name: cand[i].label,
+            yAxis: cand[i].price,
+            lineStyle: { color: side === 'support' ? ecv('--ec-down-line') : ecv('--ec-up-line'),
+                         type: 'dashed', width: 1, opacity: .8 },
+            label: { formatter: cand[i].label + ' ' + fmt(cand[i].price),
+                     position: 'end', align: 'left', fontSize: 10,
+                     backgroundColor: ecv('--ec-tip-bg'), padding: [1, 3],
+                     color: side === 'support' ? ecv('--ec-down-line') : ecv('--ec-up-line') }
+          });
+          got++;
+        }
+      });
+      // 现价线：比价位线更重（2px 实线），一眼定位"我现在在哪一档"
+      priceLines.push({
+        name: '现价', yAxis: lastPx,
+        lineStyle: { color: ecv('--ec-text'), width: 2, type: 'solid', opacity: .9 },
+        label: { formatter: fmt(lastPx), position: 'end', align: 'left', fontSize: 10.5,
+                 backgroundColor: ecv('--ec-tip-bg'), padding: [1, 3],
+                 color: ecv('--ec-text'), fontWeight: 600 }
+      });
+    }
+
+    /* 右侧留白必须按**实测最长价签**算，不能估。
+       「成交密集 1292.34」实测 79px + padding 6px = 85px，
+       原来写死 78 就把它裁掉了右半截；股价上五位数时还要更宽。
+       Canvas measureText 拿真实宽度，再按 1.15 系数给中文字体差异留余量。 */
+    var padR = 16;
+    if(priceLines.length){
+      var _mc = document.createElement('canvas').getContext('2d');
+      var _maxW = 0;
+      priceLines.forEach(function(p){
+        var txt = (p.label && p.label.formatter) || '';
+        var fs = (p.label && p.label.fontSize) || 10;
+        _mc.font = fs + 'px sans-serif';
+        var w = _mc.measureText(txt).width * 1.15 + 6;   // 6 = padding [1,3] 左右
+        if(w > _maxW) _maxW = w;
+      });
+      padR = Math.min(160, Math.ceil(_maxW) + 10);       // +10：别贴着卡片右边
+    }
+
+    /* 区间统计：TradingView 图表左上角那块「区间涨跌」，回答"这段时间到底涨了多少"。
+       直接用 K 线首尾算，不依赖指标序列（指标可能被截断）。 */
+    var periodStat = null;
+    if(K.length >= 2){
+      var first = K[0].close, last = K[K.length - 1].close;
+      var hi = -Infinity, lo = Infinity;
+      K.forEach(function(k){ if(k.high > hi) hi = k.high; if(k.low < lo) lo = k.low; });
+      var chgP = first ? (last / first - 1) * 100 : 0;
+      periodStat = { chg: chgP, hi: hi, lo: lo,
+                     amp: first ? (hi - lo) / first * 100 : 0 };
+    }
+
     c1.setOption({
       animation: false,
       tooltip: { trigger: 'axis', axisPointer: { type: 'cross' },
         backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
-        textStyle: { color: '#eaecef', fontSize: 12 } },
+        textStyle: { color: ecv('--ec-tip-fg'), fontSize: 12 } },
       legend: { data: ['K线','MA5','MA10','MA20','MA60'].concat(chanNames), top: 0,
         textStyle: { fontSize: 11, color: ecv('--ec-text') } },
-      grid: { left: 52, right: 16, top: 34, bottom: 34 },
+      /* 左上角区间统计块。放 inside 而不是额外 DOM：图表宽度自适应时它会跟着走，
+         不必监听 resize 再定位一个绝对定位的 div。
+         left 必须比 grid.left 大出一截 Y 轴刻度字的宽度。
+         纵向不能靠调 top 躲刻度：Y 轴用 scale:true，最高刻度的位置随行情变，
+         写死 top 永远会被某一档数据压住。改成横向排一行 + grid.top 加高让带，
+         统计块就永远落在绘图区上方的空白带里，跟刻度无关。 */
+      graphic: periodStat ? [{
+        type: 'group', left: 56, top: 30, silent: true,
+        children: [
+          { type: 'text', style: { text: K.length + ' 根', fontSize: 10.5,
+              fill: ecv('--ec-text') } },
+          { type: 'text', left: 40, style: {
+              text: (periodStat.chg >= 0 ? '+' : '') + periodStat.chg.toFixed(2) + '%',
+              fontSize: 11.5, fontWeight: 600,
+              fill: periodStat.chg >= 0 ? ecv('--ec-up') : ecv('--ec-down') } },
+          { type: 'text', left: 104, style: { text: '高 ' + fmt(periodStat.hi),
+              fontSize: 10.5, fill: ecv('--ec-up') } },
+          { type: 'text', left: 168, style: { text: '低 ' + fmt(periodStat.lo),
+              fontSize: 10.5, fill: ecv('--ec-down') } },
+          { type: 'text', left: 232, style: { text: '振幅 ' + periodStat.amp.toFixed(1) + '%',
+              fontSize: 10.5, fill: ecv('--ec-text') } }
+        ]
+      }] : [],
+      // 右侧留白只在真的画了价签时才留（按实测最长标签算，见上方 padR）；
+      // 否则还给图表本身——ETF/指数没有 keylevels，白留一条空边等于白白变窄。
+      grid: { left: 52, right: padR, top: 56, bottom: 34 },
       xAxis: { type: 'category', data: dates, boundaryGap: true,
         axisLine: { lineStyle: { color: ecv('--ec-line') } },
-        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
+        /* 日期标签要按绘图区宽度抽稀。250+ 根 K 线、每根一个 "2025-10-16"，
+           全画出来就是一团重叠的黑条（右侧价签留白变宽、绘图区变窄后尤其明显）。
+           interval 用函数而不是数字：数字在缩放后不会重算，函数每帧按当前
+           可见根数判断，dataZoom 拖到哪里都稀疏一致。 */
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text'),
+          hideOverlap: true,
+          interval: function(idx, val){
+            var n = dates.length || 1;
+            var px = c1.getWidth() - 52 - padR;        // 绘图区可用像素
+            var per = px / n;                          // 每根 K 线分到多少 px
+            var need = 68;                             // "2025-10-16" 约 62px + 间隙
+            var every = Math.max(1, Math.ceil(need / Math.max(per, 1)));
+            return idx % every === 0;
+          } },
         // x 轴网格线默认色是 echarts 内置浅灰 #E0E6F1，深色主题下会亮得刺眼；
         // 之前没显式关掉，切到夜间等于留了一道白网格
         splitLine: { show: false } },
@@ -4468,8 +4823,12 @@ function drawCharts(d){
         axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
       dataZoom: [ { type: 'inside' }, { type: 'slider', height: 16, bottom: 4 } ],
       series: [ { name: 'K线', type: 'candlestick', data: ohlc,
-        itemStyle: { color: '#f6465d', color0: '#0ecb81',
-          borderColor: '#f6465d', borderColor0: '#0ecb81' } } ]
+        itemStyle: { color: ecv('--ec-up'), color0: ecv('--ec-down'),
+          borderColor: ecv('--ec-up'), borderColor0: ecv('--ec-down') },
+        // markLine 必须 silent：价位线横穿整个绘图区，不静音的话鼠标经过时
+        // tooltip 会被它抢走，读者以为是 bug（"点了没反应"）。
+        markLine: priceLines.length ? { silent: true, symbol: 'none',
+          data: priceLines, animation: false } : undefined } ]
         .concat(maSeries).concat(chanSeries)
     });
   }
@@ -4477,14 +4836,39 @@ function drawCharts(d){
   // 2) 成交量
   var c2 = ec('cvol');
   if(c2){
+    /* 基准统一用 dates + K 本身，不再用 S.volume/S.dates：这张图的着色要按
+       当日涨跌取 K 线，两个序列只要长度差一根就会整体错位，而且错得很安静。
+       序列自己带 OHLC，就没有对齐问题。 */
+    var vK = K.slice(-dates.length);
+    var vDates = dates.slice(-vK.length);
+    var volSeries = [ { name: '成交量', type: 'bar',
+      data: vK.map(function(k){
+        return { value: k.volume,
+                 itemStyle: { color: k.close >= k.open ? ecv('--ec-up') : ecv('--ec-down'),
+                              opacity: .55 } };
+      }) } ];
+    // 5 日均量：量能是否"异常"要跟近期均值比才有意义，光看柱子高低判断不了
+    if(vK.length > 5){
+      var mv = vK.map(function(k, i){
+        if(i < 4) return null;
+        var s2 = 0;
+        for(var j = i - 4; j <= i; j++) s2 += vK[j].volume || 0;
+        return +(s2 / 5).toFixed(0);
+      });
+      volSeries.push({ name: 'MA5量', type: 'line', data: mv, symbol: 'none',
+        lineStyle: { width: 1.2, color: ecv('--ec-ma5') },
+        itemStyle: { color: ecv('--ec-ma5') } });
+    }
     c2.setOption({
       animation: false,
       title: { text: '成交量（手）', left: 0, top: 0, textStyle: { fontSize: 12, color: ecv('--ec-text'), fontWeight: 600 } },
       tooltip: { trigger: 'axis',
         backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
-        textStyle: { color: '#eaecef', fontSize: 12 } },
+        textStyle: { color: ecv('--ec-tip-fg'), fontSize: 12 } },
+      legend: { data: ['成交量','MA5量'], top: 0, right: 0,
+        textStyle: { fontSize: 11, color: ecv('--ec-text') } },
       grid: { left: 52, right: 16, top: 28, bottom: 28 },
-      xAxis: { type: 'category', data: S.dates,
+      xAxis: { type: 'category', data: vDates,
         axisLine: { lineStyle: { color: ecv('--ec-line') } },
         axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
         // x 轴网格线默认色是 echarts 内置浅灰 #E0E6F1，深色主题下会亮得刺眼；
@@ -4492,8 +4876,7 @@ function drawCharts(d){
         splitLine: { show: false } },
       yAxis: { scale: true, splitLine: { lineStyle: { color: ecv('--ec-split') } },
         axisLabel: { fontSize: 10.5, color: ecv('--ec-text') } },
-      series: [ { name: '成交量', type: 'bar', data: S.volume.slice(-S.dates.length),
-        itemStyle: { color: '#9aa3b0' } } ]
+      series: volSeries
     });
   }
 
@@ -4505,7 +4888,7 @@ function drawCharts(d){
       title: { text: 'MACD (12,26,9)', left: 0, top: 0, textStyle: { fontSize: 12, color: ecv('--ec-text'), fontWeight: 600 } },
       tooltip: { trigger: 'axis',
         backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
-        textStyle: { color: '#eaecef', fontSize: 12 } },
+        textStyle: { color: ecv('--ec-tip-fg'), fontSize: 12 } },
       legend: { data: ['DIF','DEA','MACD'], top: 0, right: 0, textStyle: { fontSize: 11, color: ecv('--ec-text') } },
       grid: { left: 52, right: 16, top: 32, bottom: 28 },
       xAxis: { type: 'category', data: S.dates,
@@ -4534,7 +4917,7 @@ function drawCharts(d){
       title: { text: 'RSI (6,14)', left: 0, top: 0, textStyle: { fontSize: 12, color: ecv('--ec-text'), fontWeight: 600 } },
       tooltip: { trigger: 'axis',
         backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
-        textStyle: { color: '#eaecef', fontSize: 12 } },
+        textStyle: { color: ecv('--ec-tip-fg'), fontSize: 12 } },
       legend: { data: ['RSI6','RSI14'], top: 0, right: 0, textStyle: { fontSize: 11, color: ecv('--ec-text') } },
       grid: { left: 52, right: 16, top: 32, bottom: 28 },
       xAxis: { type: 'category', data: S.dates,
@@ -4563,7 +4946,7 @@ function drawCharts(d){
       title: { text: 'KDJ (9,3,3)', left: 0, top: 0, textStyle: { fontSize: 12, color: ecv('--ec-text'), fontWeight: 600 } },
       tooltip: { trigger: 'axis',
         backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
-        textStyle: { color: '#eaecef', fontSize: 12 } },
+        textStyle: { color: ecv('--ec-tip-fg'), fontSize: 12 } },
       legend: { data: ['K','D','J'], top: 0, right: 0, textStyle: { fontSize: 11, color: ecv('--ec-text') } },
       grid: { left: 52, right: 16, top: 32, bottom: 28 },
       xAxis: { type: 'category', data: S.dates,
@@ -8467,7 +8850,7 @@ function loadAbout(){
       '<p>· <b>策略表达</b>：两种自定义策略方式。① <b>自然语言</b>——用一句话描述策略（如「均线金叉并且放量，跌破10日线止损，激进风格」），自动解析出指标、策略类型、风险偏好、入场/出场规则与建议止损止盈，可直接一键回测；② <b>通达信公式</b>——直接编写 TDX 公式（支持 MA/EMA/SMA/WMA/HHV/LLV/SUM/REF/COUNT/STD/CROSS/IF/BARSLAST/EXIST/EVERY/BETWEEN 等 21 个函数与 AND/OR/NOT 算子），编译后回测。<i>自然语言解析借鉴三省六部的 strategy_intent 模块，通达信公式借鉴其 tdx 模块（改为白名单 AST 解释器，杜绝任意代码执行）</i>。</p>' +
       '<p style="margin-top:14px"><b>数据时效说明</b></p>' +
       '<p>为避免误读，各模块数据口径如下（<span class="ktag ktag-live">实时</span>＝今日盘中快照，含午休与收盘后当日；<span class="ktag ktag-live">午休</span>/<span class="ktag ktag-live">收盘</span>＝今日快照但已冻结；<span class="ktag ktag-eod">盘后</span>＝收盘后生成或上一交易日数据）：</p>' +
-      '<table class="about-tbl">' +
+      '<div class="tblscroll"><table class="about-tbl">' +
         '<tr><th>模块</th><th>数据口径</th><th>说明</th></tr>' +
         '<tr><td>市场温度·综合评分</td><td><span class="ktag ktag-live">实时</span><span class="ktag ktag-live">收盘</span><span class="ktag ktag-eod">盘后</span></td><td>集合竞价/交易/午休/收盘后当日显示合成评分（涨跌家数/涨停跌停/成交额环比合成 0-60 量表，交易时段每 60s 刷新，收盘后冻结）；盘前/周末/节假日显示西财盘后 13 维评分（上一交易日）</td></tr>' +
         '<tr><td>市场温度·涨跌/成交额</td><td><span class="ktag ktag-live">实时</span><span class="ktag ktag-live">收盘</span><span class="ktag ktag-eod">盘后</span></td><td>两市涨跌家数、涨停跌停、成交额：今日盘中快照（收盘后当日为收盘冻结值）；盘前/周末/节假日为上一交易日快照</td></tr>' +
@@ -8484,7 +8867,7 @@ function loadAbout(){
         '<tr><td>个股·AI 深度分析</td><td><span class="ktag ktag-live">实时</span><span class="ktag ktag-eod">缓存</span></td><td>综合行情/技术面/资金筹码/板块/快讯由 LLM 解读；进页自动分析，30 分钟内重复进页命中缓存（不消耗配额），点「重新分析」强制刷新；「大白话」开关把同一份数据翻成小白语言（不额外消耗）；资金/筹码取 westock 实时值，快讯为 24h 窗口</td></tr>' +
         '<tr><td>小白/策略/条件选股</td><td><span class="ktag ktag-eod">盘后</span></td><td>基于历史日线计算（条件选股页内「分钟级扫描」为盘中实时）</td></tr>' +
         '<tr><td>策略回测</td><td><span class="ktag ktag-eod">盘后</span></td><td>历史日线回测，本身即历史口径</td></tr>' +
-      '</table>' +
+      '</table></div>' +
       '<p style="margin-top:14px"><b>技术实现</b></p>' +
       '<p>· 数据源：腾讯财经行情/K线接口（多域自动降级：ifzq → proxy.finance → web.ifzq）；股票池来自中证指数公司成分股清单。</p>' +
       '<p>· 计算核心：复用 <code>a-stock-data-quant</code> 技能的 MyTT 指标库与策略引擎（内置 71 个指标函数，面板已启用其中 ' + ind.total + ' 项），与命令行工具口径一致。</p>' +
@@ -10816,7 +11199,7 @@ function renderGrid(d, el){
       legend: { data: ['K线', '买入', '卖出'], top: 0, textStyle: { fontSize: 11, color: ecv('--ec-text') } },
       tooltip: { trigger: 'axis', axisPointer: { type: 'cross' },
         backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
-        textStyle: { color: '#eaecef', fontSize: 12 } },
+        textStyle: { color: ecv('--ec-tip-fg'), fontSize: 12 } },
       grid: { left: 56, right: 20, top: 30, bottom: 44 },
       xAxis: { type: 'category', data: kd, boundaryGap: true,
         axisLine: { lineStyle: { color: ecv('--ec-line') } },
@@ -10995,7 +11378,7 @@ function renderStockFactors(d, out){
     return;
   }
   var items = d.items || [];
-  var h = '<div class="card"><div class="card-h"><h2>因子画像</h2>' +
+  var h = '<div class="card" id="secFactor"><div class="card-h"><h2>因子画像</h2>' +
     '<div class="meta">近 ' + d.days + ' 个交易日（' + esc(d.span[0]) + ' ~ ' + esc(d.span[1]) +
     '）· 12 个因子</div></div><div class="card-b">';
   // 表头
@@ -11062,7 +11445,7 @@ function loadStockExtra(code){
       var maxAbs = Math.max(Math.abs(item.main_net), Math.abs(item.jumbo_net),
                            Math.abs(item.block_net), Math.abs(item.mid_net),
                            Math.abs(item.small_net), 1);
-      h += '<div class="card"><div class="card-h"><h2>资金流向</h2><div class="meta">' +
+      h += '<div class="card" id="secMoney"><div class="card-h"><h2>资金流向</h2><div class="meta">' +
            esc(item.date || '') + ' · 主力净额 ' +
            '<b class="' + cls(item.main_net) + '">' + fmtFlow(item.main_net) + '</b></div></div><div class="card-b">';
       var rows = [
@@ -11082,14 +11465,14 @@ function loadStockExtra(code){
       if(item.main_rank) h += '<div class="mcell"><div class="k">主力流入排名</div><div class="v">第 ' + item.main_rank + '</div></div>';
       h += '</div></div></div></div>';
     } else if(ff && !ff.available){
-      h += '<div class="card"><div class="card-h"><h2>资金流向</h2></div><div class="card-b">' +
+      h += '<div class="card" id="secMoney"><div class="card-h"><h2>资金流向</h2></div><div class="card-b">' +
            '<div class="empty">⚠️ westock 数据源不可用</div></div></div>';
     }
 
     // --- 筹码 ---
     var c = chip && chip.data;
     if(c && c.avg_cost){
-      h += '<div class="card"><div class="card-h"><h2>筹码分布</h2><div class="meta">' + esc(c.date||'') + '</div></div><div class="card-b">';
+      h += '<div class="card" id="secChips"><div class="card-h"><h2>筹码分布</h2><div class="meta">' + esc(c.date||'') + '</div></div><div class="card-b">';
       h += '<div class="mgrid">';
       h += '<div class="mcell"><div class="k">平均成本</div><div class="v">' + fmt(c.avg_cost) + '</div></div>';
       h += '<div class="mcell"><div class="k">现价</div><div class="v">' + fmt(c.close) + '</div></div>';
@@ -11108,7 +11491,7 @@ function loadStockExtra(code){
     // --- 基本面 ---
     var fd = fund && fund.data;
     if(fd && (fd.income || fd.balance || fd.cashflow)){
-      h += '<div class="card"><div class="card-h"><h2>基本面</h2><div class="meta">报告期 ' +
+      h += '<div class="card" id="secFund"><div class="card-h"><h2>基本面</h2><div class="meta">报告期 ' +
            esc(fd.period || '—') + '</div></div><div class="card-b">';
       var groups = [
         ['盈利与估值', fd.income, ['eps','revenue','revenue_yoy_q','npp','npp_yoy','gross_margin','net_margin','roe','roe_ttm','roa','roic']],
@@ -11157,7 +11540,7 @@ function loadStockExtra(code){
 
     // --- 研报 + 公告 ---
     if((rep && rep.items && rep.items.length) || (noti && noti.items && noti.items.length)){
-      h += '<div class="card"><div class="card-h"><h2>研报与公告</h2></div><div class="card-b">';
+      h += '<div class="card" id="secReport"><div class="card-h"><h2>研报与公告</h2></div><div class="card-b">';
       if(rep && rep.items && rep.items.length){
         h += '<div style="font-size:12.5px;font-weight:600;color:var(--tx2);margin-bottom:6px">机构研报</div>';
         rep.items.forEach(function(x){
@@ -13226,6 +13609,9 @@ document.addEventListener('click', function(ev){
 (function(){
   var rt = null;
   window.addEventListener('resize', function(){
+    // header 高度可能与宽度有关（窄屏导航换行），resize 时同步一次，
+    // 否则 --hdr-h 还是旧值，锚点跳转会差几十像素
+    syncHeaderVar();
     clearTimeout(rt);
     rt = setTimeout(function(){
       [state.charts, idState.charts].forEach(function(bag){
@@ -13237,6 +13623,7 @@ document.addEventListener('click', function(ev){
     }, 120);
   });
 })();
+syncHeaderVar();
 </script>
 
 <!-- Task#99 命令面板(Cmd+K) + 沪深交易时段时钟 入口 -->
