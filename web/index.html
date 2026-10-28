@@ -72,6 +72,13 @@ if (typeof echarts === 'undefined') {
   --ec-ma5:#e08c1a; --ec-ma10:#3b82f6; --ec-ma20:#a855f7; --ec-ma60:#0f9b8e;
   --ec-chan-up:#ef4444; --ec-chan-mid:#94a3b8; --ec-chan-down:#22c55e;
   --ec-stop:#f97316;
+  /* 技术分析三表的五段弧（强卖/卖/中/买/强买）。
+     两档"卖"必须一深一亮，否则相邻两段糊成一条看不出分档。
+     注意这不走 --up/--down：仪表盘的五段是**评级刻度**，不是涨跌，
+     和表格里 红=涨/绿=跌 的语义不同，混用会让"卖出"段变绿、与
+     "红=买"的评级色习惯打架。 */
+  --gauge-s0:#7f1d1d; --gauge-s1:#f6465d; --gauge-s2:#8b95a5;
+  --gauge-s3:#3b82f6; --gauge-s4:#1d4ed8;
   --focus-wash:rgba(252,213,53,.18);  /* 聚焦/选中着色（暗底用主强调黄） */
   /* 温度仪表专用色（牛熊速查）：跨主题恒定——温度语义（绿=冷→红=热）不随
      涨跌/强调色主题漂移，否则浅色下「黄档」会变成蓝（accent 是信息蓝） */
@@ -101,6 +108,9 @@ if (typeof echarts === 'undefined') {
   --ec-ma5:#b76b00; --ec-ma10:#1d4ed8; --ec-ma20:#7c3aed; --ec-ma60:#0b7a6f;
   --ec-chan-up:#dc2626; --ec-chan-mid:#64748b; --ec-chan-down:#15803d;
   --ec-stop:#c2410c;
+  /* 浅底五段弧：中段要压深，否则 #8b95a5 在白上只有 2.8:1 看不清 */
+  --gauge-s0:#991b1b; --gauge-s1:#dc2626; --gauge-s2:#6b7280;
+  --gauge-s3:#2563eb; --gauge-s4:#1e3a8a;
   --focus-wash:rgba(31,95,214,.09);
   --on-primary:#ffffff;         /* 浅：蓝底白字 */
 }
@@ -398,12 +408,16 @@ tbody tr:hover{background:#f7f9fc}
   box-shadow:var(--shadow)}
 .secnav::-webkit-scrollbar{display:none}
 .secnav a{flex:none;font-size:12.5px;color:var(--tx2);text-decoration:none;
-  padding:4px 10px;border-radius:6px;white-space:nowrap;transition:background .12s,color .12s}
+  padding:4px 10px;border-radius:6px;white-space:nowrap;transition:background .12s,color .12s;
+  display:inline-flex;align-items:center}
 .secnav a:hover{background:var(--bg2);color:var(--tx)}
 .secnav a.on{background:var(--accent-bg);color:var(--accent);font-weight:650}
 
 /* 视图切换 */
-.vtabs{display:flex;gap:6px}
+/* flex-wrap 必需：暗色/浅色两套下按钮宽度固定，390px 里 5 个通道按钮
+   + 3 个周期按钮放不进一行，不换行就顶出卡片（实测溢出 10px）。
+   桌面端一行放得下，wrap 不会生效，视觉无变化。 */
+.vtabs{display:flex;gap:6px;flex-wrap:wrap}
 .periods{display:flex;gap:6px;flex-wrap:wrap}
 
 .backlink{display:inline-flex;align-items:center;gap:5px;font-size:13px;color:var(--tx2);
@@ -455,6 +469,35 @@ tbody tr:hover{background:#f7f9fc}
   .idbook{grid-template-columns:1fr;gap:14px}
   .idnavbar{padding:10px 14px}
   .idnavbar .px{font-size:17px;width:100%;text-align:left;margin-left:0}
+
+  /* ── 移动端可用性 ──────────────────────────────────────────────
+     1) 触摸目标：实测 24 个可点元素不足 40px（分区导航每个 28px 高），
+        手指点下去经常点到隔壁。规范建议 ≥44px，这里取 40px 折中
+        （导航项 9 个横排，全 44px 会浪费过多纵向空间）。
+     2) 字号：实测 137 处 < 11.5px，手机上要凑近看。正文统一抬到 12px，
+        刻度/角标类允许 11px（它们是辅助信息，抬大会挤）。
+     3) 技术指标四张图竖排 1360px，图表高度压到 240px / 收起三张。 */
+  .secnav{padding:4px 5px}
+  .secnav a{min-height:40px;padding:0 12px;font-size:13px}
+  .btn{min-height:36px;padding:8px 12px;font-size:13px}
+  .vtabs .btn, .chanbtns .btn{min-height:36px}
+  .chart{height:240px} .chart.lg{height:280px}
+  .hd-stats .k, .hd-range-lb{font-size:11.5px}
+  .qg .k, .vbox .lb, .gauge .g-votes{font-size:11.5px}
+  /* 全套技术指标里的指标名（61 处）：11px 在手机上要凑近看。
+     只抬字号不加宽——.ik 本来就有 ellipsis，真放不下会出省略号而不是撑破格子。 */
+  .indcell .ik{font-size:11.5px}
+  .gauge .g-title{font-size:12px}
+  .gauge .g-val{font-size:14px}
+  /* 三张仪表在 390px 下各分到 ~110px，SVG 会等比缩小，弧仍看得清；
+     若排成两行反而更占高度，所以保持一行三列。 */
+  .gauges{gap:8px}
+  /* 390px 下三格各 ~104px，「0 买 / 2 卖 / 13 中」放不下会折成两行、
+     还把数字与标签拆开。窄屏只留多空两票（中性票信息量最低），
+     完整票数在 .g-votes 的 title 里，长按可看。 */
+  .gauge .g-votes{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .gauge .g-votes .neu{display:none}
+  .gauge{padding:9px 4px 8px}
 }
 @media(max-width:400px){ .filters{grid-template-columns:1fr} }
 
@@ -638,6 +681,66 @@ tbody tr:hover{background:#f7f9fc}
 .rtag.r-sell{background:rgba(14,203,129,.12);color:var(--down-on)}
 .rtag.r-neutral{background:rgba(146,154,165,.15);color:var(--tx3)}
 .rate-buy{color:var(--up)} .rate-sell{color:var(--down)} .rate-neutral{color:var(--tx3)}
+
+/* 技术分析三表（借鉴 TradingView technicals）：
+   半圆五段弧 + 一根指针，一眼看出「技术面整体偏多还是偏空」。
+   用 SVG 而不是 ECharts：这张图没有坐标轴、没有交互缩放，
+   上 ECharts 要多一个实例、多一次 resize 监听，不值。
+   五段的角度边界按 TradingView 惯例均分（各 36°），
+   指针角度由 score(0-100) 线性映射到 -90°~+90°。 */
+.gauges{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}
+.gauge{background:var(--bg2);border:1px solid var(--line2);border-radius:10px;
+  padding:12px 10px 10px;text-align:center;min-width:0}
+.gauge svg{display:block;width:100%;height:auto;max-width:150px;margin:0 auto}
+.gauge .g-title{font-size:12px;color:var(--tx3);margin-top:2px;font-weight:500}
+.gauge .g-val{font-size:15px;font-weight:700;margin-top:1px;letter-spacing:-.2px}
+.gauge .g-votes{font-size:11px;color:var(--tx3);margin-top:3px;
+  font-variant-numeric:tabular-nums;line-height:1.45;
+  /* 不能 nowrap：三列仪表在 390px 下每格只有 ~104px，
+     「买 12 · 卖 6 · 中 17」放不下会顶出卡片（实测溢出 9px）。
+     允许折行，用 · 作可视分隔，两行也读得通。 */
+  overflow-wrap:anywhere}
+/* 弧段配色：强卖→卖→中→买→强买。暗底要亮、浅底要深，
+   所以走主题令牌而不是写死色值。 */
+.g-seg{fill:none;stroke-width:13;stroke-linecap:butt}
+.g-s0{stroke:var(--gauge-s0)}
+.g-s1{stroke:var(--gauge-s1)}
+.g-s2{stroke:var(--gauge-s2)}
+.g-s3{stroke:var(--gauge-s3)}
+.g-s4{stroke:var(--gauge-s4)}
+/* 指针：细长三角 + 根部圆点，与 TradingView 同形 */
+.g-needle{fill:var(--tx);transition:transform .45s cubic-bezier(.34,1.3,.64,1);
+  transform-origin:0 0}
+.g-hub{fill:var(--bg2);stroke:var(--tx);stroke-width:1.5}
+@media(prefers-reduced-motion:reduce){.g-needle{transition:none}}
+/* 移动端长卡片折叠（通用）。
+   目的不是删信息，是改默认曝光量：个股页移动端总高 11600px≈13.8 屏，
+   其中「全套技术指标」2205px、「基本面」1334、「研报」1317、「AI」1225。
+   把超过阈值的长卡片在移动端默认收起，首屏才找得到东西。
+
+   为什么用 max-height 而不是 display:none：
+   ECharts 在 display:none 容器里量到 0 宽高，会画出变形图；而 chart 图
+   在收起状态下仍要能被 resize 到正确尺寸，所以容器必须保持有宽度。
+
+   为什么挂在 .card 上而不是包一层：卡片本身就是自然的分节单位，
+   JS 只需按实测高度决定要不要给它挂按钮，不用改任何渲染模板。 */
+.mobfold-btn{display:none}
+@media(max-width:640px){
+  .mobfold-btn{display:flex;align-items:center;justify-content:center;gap:6px;
+    width:100%;min-height:44px;margin-top:10px;
+    border:1px solid var(--line);border-radius:8px;background:var(--bg2);
+    color:var(--tx2);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit}
+  .mobfold-btn:active{background:var(--accent-bg);color:var(--accent)}
+  /* 收起：给个固定可视高度 + 底部渐隐，读者能看出"下面还有" */
+  .card.mobfold-on .card-b{position:relative;max-height:420px;overflow:hidden;
+    transition:max-height .3s ease}
+  .card.mobfold-on.mobfold-open .card-b{max-height:none;overflow:visible}
+  .card.mobfold-on:not(.mobfold-open) .card-b::after{content:'';position:absolute;
+    left:0;right:0;bottom:0;height:56px;pointer-events:none;
+    background:linear-gradient(to top,var(--card),transparent)}
+  .mobfold-btn .arw{display:inline-block;transition:transform .3s}
+  .card.mobfold-open .mobfold-btn .arw{transform:rotate(180deg)}
+}
 
 /* 多股对比 */
 .cmptbl{font-size:12.5px}
@@ -2772,6 +2875,73 @@ function esc(s){
     .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
     .replace(/"/g,'&quot;');
 }
+
+/* ── 技术分析仪表盘（借鉴 TradingView technicals）────────────────────
+   半圆从左下(-90°)扫到右下(+90°)，均分五段，指针按 score 定位。
+
+   为什么自己算弧的 path 而不用 ECharts gauge：
+   这张图只要「五个色段 + 一根针」，没有 tooltip、没有缩放、没有图例。
+   起一个 ECharts 实例要配 series/axis 一堆，还要额外监听 resize，
+   换来的只是同样的几个色块。手写路径反而更可控、也更轻。
+
+   评分到角度的映射：score 是 0-100 的多空强度（50 = 平衡），
+   正好线性映射到 -90°~+90°。指针角度 = (score-50)/50*90。 */
+function gaugeSvg(score, rating){
+  var CX = 158, CY = 152, R = 128, W = 13;
+  // 五个扇段：每段 36°，段间留 2.5° 缝，视觉上分得开又不至于碎
+  var GAP = 2.5;
+  var segs = [0,1,2,3,4].map(function(i){
+    var a0 = -180 + i * 36 + (i ? GAP : 0);
+    var a1 = -180 + (i + 1) * 36 - (i < 4 ? GAP : 0);
+    var p0 = [CX + R * Math.cos(a0 * Math.PI / 180), CY + R * Math.sin(a0 * Math.PI / 180)];
+    var p1 = [CX + R * Math.cos(a1 * Math.PI / 180), CY + R * Math.sin(a1 * Math.PI / 180)];
+    // large-arc 恒为 0：单段 36° < 180°
+    return '<path class="g-seg g-s' + i + '" d="M' + p0[0].toFixed(2) + ' ' + p0[1].toFixed(2) +
+           ' A' + R + ' ' + R + ' 0 0 1 ' + p1[0].toFixed(2) + ' ' + p1[1].toFixed(2) + '"></path>';
+  }).join('');
+
+  /* 指针：从圆心朝 -90° 方向的细三角（画一次，靠 CSS transform 旋转）。
+     长度取到 R-14，别顶到弧上，留一点"读数还在弧内"的余地。 */
+  var NL = R - 16, HW = 6;
+  var needle = 'M' + (CX - HW) + ' ' + CY + ' L' + CX + ' ' + (CY - NL) + ' L' + (CX + HW) + ' ' + CY +
+               ' Z';
+  var ang = (score === null || score === undefined) ? 0 : (score - 50) / 50 * 90;
+  ang = Math.max(-90, Math.min(90, ang));
+
+  return '<svg viewBox="0 0 316 162" preserveAspectRatio="xMidYMid meet" role="img" aria-hidden="true">' +
+    segs +
+    '<g class="g-needle" style="transform:rotate(' + ang.toFixed(1) + 'deg);' +
+      'transform-origin:' + CX + 'px ' + CY + 'px">' +
+      '<path d="' + needle + '"></path></g>' +
+    '<circle class="g-hub" cx="' + CX + '" cy="' + CY + '" r="7"></circle>' +
+    '</svg>';
+}
+
+/* 三张并列的仪表。数据来自后端 rating_gauges（震荡 / 均线 / 总结）。
+   评级用文字颜色区分（买=红 卖=绿 中=灰），和全站 .rate-* 保持一致；
+   五段弧本身是**刻度尺**，不随评级变色——否则读者会以为"买"那段变红了。 */
+function gaugesHtml(list){
+  if(!list || !list.length) return '';
+  var items = list.map(function(g){
+    var rc = g.rating === 'BUY' ? 'rate-buy' : (g.rating === 'SELL' ? 'rate-sell' : 'rate-neutral');
+    // 票数：买/卖为主信息，中性票塞进 .neu——窄屏 CSS 会隐藏它，
+    // 宽屏三格空间够，照样显示完整三档。
+    var full = g.total_rated
+      ? g.buy + ' 买 / ' + g.sell + ' 卖' + (g.neutral ? ' / ' + g.neutral + ' 中' : '')
+      : '本组无可评级指标';
+    var votes = g.total_rated
+      ? g.buy + ' 买 / ' + g.sell + ' 卖' +
+        (g.neutral ? '<span class="neu"> / ' + g.neutral + ' 中</span>' : '')
+      : '本组无可评级指标';
+    return '<div class="gauge" data-gauge="' + esc(g.key) + '">' +
+      gaugeSvg(g.score, g.rating) +
+      '<div class="g-title">' + esc(g.name) + '</div>' +
+      '<div class="g-val ' + rc + '">' + esc(g.label) + '</div>' +
+      '<div class="g-votes" title="' + esc(full) + '">' + votes + '</div>' +
+      '</div>';
+  }).join('');
+  return '<div class="gauges">' + items + '</div>';
+}
 function marketTag(code){
   if(code.indexOf('bj') === 0) return '<span class="tag bj">北</span>';
   if(code.indexOf('sh68') === 0) return '<span class="tag n">科创</span>';
@@ -3904,6 +4074,8 @@ function renderStockAi(r, out){
     h += '<div class="meta" style="margin-top:6px;font-size:12px;color:var(--tx3)">缺失维度：' +
          ctx.missing.map(function(x){ return esc(x); }).join('、') + '</div>';
   out.innerHTML = '<div class="intentbox">' + h + '</div>';
+  // AI 结论同样是异步产出，晚于 renderStock 的折叠判定，补一次
+  requestAnimationFrame(function(){ if(typeof bindMobFold === 'function') bindMobFold(); });
 }
 /* 市盈率文案：ETF / 指数没有 PE 概念，上游统一给 0；真亏损股给负数。
    两者都用「0 或负」表达，最早统一写成「亏损」，结果沪深300ETF 显示
@@ -3969,6 +4141,58 @@ function bindSecNav(){
   };
   window.addEventListener('scroll', window._secNavScroll, { passive: true });
   window._secNavScroll();
+}
+/* 移动端长卡片折叠（通用）。桌面端不做任何事：按钮 display:none，
+   卡片也不会被加 mobfold-on，行为与改造前完全一致。
+
+   判定依据是实测高度而不是写死卡片 id：以后新增长卡片会自动纳入，
+   不用回来改名单。阈值取 2 屏（≈900px 内容高）——低于它的卡片
+   一屏能看到底，折叠反而多一次点击。 */
+var MOBFOLD_MIN_H = 900;
+function bindMobFold(){
+  var isMob = window.matchMedia('(max-width:640px)').matches;
+  var cards = document.querySelectorAll('#stockWrap .card');
+  cards.forEach(function(card){
+    var btn = card.querySelector(':scope > .mobfold-btn');
+    // 先撤掉上次渲染留下的折叠态，避免切回桌面/换股票后残留
+    if(!isMob){
+      card.classList.remove('mobfold-on', 'mobfold-open');
+      if(btn) btn.remove();
+      return;
+    }
+    var body = card.querySelector('.card-b');
+    if(!body) return;
+    // 量"展开后"的高度：先清掉折叠限制再量
+    card.classList.remove('mobfold-on');
+    var full = body.scrollHeight;
+    if(full < MOBFOLD_MIN_H){
+      if(btn) btn.remove();
+      return;
+    }
+    card.classList.add('mobfold-on');
+    if(!btn){
+      btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'mobfold-btn';
+      card.appendChild(btn);
+      btn.onclick = function(){
+        var open = card.classList.toggle('mobfold-open');
+        btn.innerHTML = open
+          ? '<span class="arw">▲</span><span>收起</span>'
+          : '<span class="arw">▼</span><span>展开全文（约 ' + Math.round(full / 400) + ' 屏）</span>';
+        // 等 max-height 过渡走完再 resize，否则量到的是动画中间态
+        setTimeout(function(){
+          Object.keys(state.charts || {}).forEach(function(k){
+            var c = state.charts[k];
+            if(c && c.resize) c.resize();
+          });
+        }, 320);
+      };
+    }
+    btn.innerHTML = card.classList.contains('mobfold-open')
+      ? '<span class="arw">▲</span><span>收起</span>'
+      : '<span class="arw">▼</span><span>展开全文（约 ' + Math.round(full / 400) + ' 屏）</span>';
+  });
 }
 /* 吸顶高度写进 CSS 变量：header 在窄屏会换行变高，硬编码 93px 迟早错位 */
 function syncHeaderVar(){
@@ -4173,12 +4397,25 @@ function renderStock(d){
     '<b>吊灯止损</b>＝近 22 日最高价 − 3×ATR(22)，是一条随波动率移动的多头止损线，' +
     '收盘跌破即为离场信号。</div>' +
     '</div></div>';
-  h += '<div class="card" id="secInd"><div class="card-h"><h2>技术指标</h2></div><div class="card-b">' +
+  /* 技术指标卡片：顶部先给三张仪表（震荡/均线/总结），再往下才是四张明细图。
+     顺序上把"结论"放在"证据"前面，和本页页头「大字结论」的既有风格一致。
+     移动端四张图竖排要 1300px+，由 bindMobFold 按实测高度自动收起，
+     这里不写死折叠结构，模板保持干净。
+     注意 d._full 与图表数据是两次独立请求，可能只到其一，所以要判空。 */
+  h += '<div class="card" id="secInd"><div class="card-h"><h2>技术指标</h2>' +
+    '<div class="meta">震荡 / 均线 / 综合</div></div><div class="card-b">' +
+    (function(){
+      var gs = (d._full && d._full.rating_gauges) || null;
+      // 存一份给检查脚本核对「指针角度 ↔ 评分」的对应关系；
+      // 只读不写渲染，删掉也不影响页面。
+      state._gauges = gs;
+      return gs ? gaugesHtml(gs) : '';
+    })() +
     '<div class="chartgrid c2">' +
-    '<div><div class="chart" id="cmacd"></div></div>' +
-    '<div><div class="chart" id="cvol"></div></div>' +
-    '<div><div class="chart" id="crsi"></div></div>' +
-    '<div><div class="chart" id="ckdj"></div></div>' +
+      '<div><div class="chart" id="cmacd"></div></div>' +
+      '<div><div class="chart" id="cvol"></div></div>' +
+      '<div><div class="chart" id="crsi"></div></div>' +
+      '<div><div class="chart" id="ckdj"></div></div>' +
     '</div></div></div>';
 
   // 策略信号
@@ -4294,6 +4531,8 @@ function renderStock(d){
     document.querySelector('[data-tab="rank"]').click();
   };
   bindSecNav();
+  // 注意：bindMobFold 不在这里调。它按实测高度判定，
+  // 此时图表还没画、卡片还是空的，调了等于没调（见 renderStock 末尾）。
   // 日/周/月周期
   document.querySelectorAll('#perBtns .btn').forEach(function(b){
     b.onclick = function(){
@@ -4341,6 +4580,11 @@ function renderStock(d){
   } else if(d.indicators){
     drawCharts(d);
   }
+  /* 折叠必须在图表画完之后再判定：bindMobFold 是按 body.scrollHeight
+     实测高度决定收谁的，图表还没画时容器高度接近 0，所有卡片都会
+     被判成"不够高、不用折"，等于折叠从未生效。
+     推到下一帧，等 ECharts 把 canvas 撑开。 */
+  requestAnimationFrame(function(){ bindMobFold(); });
   // 因子画像：本地库计算，与行情无关，不看停牌/交易时段，进页就算
   loadStockFactors(d.code || state.stockCode);
 }
@@ -11578,6 +11822,9 @@ function loadStockExtra(code){
           '暂无扩展数据（可能需要配置 westock 数据源）</div></div></div>';
     }
     wrap.innerHTML = h;
+    /* 资金/基本面/研报是异步到的，renderStock 里那次 bindMobFold 跑的时候
+       这些卡片还不存在。这里补一次，否则 1334px 的基本面在手机上照样拉满。 */
+    requestAnimationFrame(function(){ if(typeof bindMobFold === 'function') bindMobFold(); });
   }).catch(function(e){
     die(wrap, '扩展数据加载失败：' + e.message);
   });
@@ -13620,6 +13867,9 @@ document.addEventListener('click', function(ev){
           if(bag[k]){ try { bag[k].resize(); } catch(e){} }
         });
       });
+      // 跨断点时重算折叠：桌面→移动需挂按钮，移动→桌面需撤掉，
+      // 否则从窄屏拖宽后卡片仍被 max-height 裁着
+      if(typeof bindMobFold === 'function') bindMobFold();
     }, 120);
   });
 })();

@@ -184,6 +184,40 @@ def main():
         ck("x 轴日期做了抽稀（长序列不重叠）",
            xa["hasFn"] and xa["hide"] and xa["n"] > 100, xa)
 
+        # ── 2b. 技术分析三表（震荡/均线/总结）
+        # 数据来自后端 rating_gauges，指针角度 = (score-50)/50*90。
+        # 三个表必须都在、且指针角度与 score 对得上——只看「有没有画出来」
+        # 是不够的，角度算错的话指针会指向错误的结论。
+        gg = pg.evaluate("""()=>{
+          const boxes=[...document.querySelectorAll('.gauge')];
+          return boxes.map(b=>{
+            const g=b.querySelector('.g-needle');
+            const m=g && /rotate\\((-?[\\d.]+)deg\\)/.exec(g.getAttribute('style')||'');
+            const key=b.dataset.gauge;
+            const src=(state._gauges||[]).find(x=>x.key===key)||{};
+            return {key, title:(b.querySelector('.g-title')||{}).textContent,
+                    val:(b.querySelector('.g-val')||{}).textContent,
+                    deg:m?parseFloat(m[1]):null,
+                    score:src.score, rating:src.rating,
+                    segs:b.querySelectorAll('.g-seg').length,
+                    votes:(b.querySelector('.g-votes')||{}).textContent||''};
+          });
+        }""")
+        ck("技术指标卡片有三张仪表", len(gg) == 3, [x["key"] for x in gg])
+        ck("仪表顺序是 震荡/均线/总结",
+           [x["key"] for x in gg] == ["osc", "ma", "sum"], [x["key"] for x in gg])
+        ck("每张表都画了 5 段弧", all(x["segs"] == 5 for x in gg), [x["segs"] for x in gg])
+        # 角度必须与 score 一致（容差 1.5°，取整误差）
+        bad_ang = [x for x in gg
+                   if x["score"] is not None and x["deg"] is not None
+                   and abs(x["deg"] - max(-90, min(90, (x["score"] - 50) / 50 * 90))) > 1.5]
+        ck("指针角度与评分一致", not bad_ang, bad_ang[:2])
+        ck("三表都有票数说明", all(x["votes"] for x in gg), [x["votes"] for x in gg])
+        # 均线表不能永远 0 票：MA 系列按「现价 vs 均线」评级，曾是空白
+        ma = next((x for x in gg if x["key"] == "ma"), None)
+        ck("移动平均线表有评级票（不是永远 0 票）",
+           ma and ma["votes"] and "无可评级" not in ma["votes"], ma and ma["votes"])
+
         vol = pg.evaluate("""()=>{
           const o=state.charts['cvol'].getOption();
           const names=(o.series||[]).map(s=>s.name);
@@ -261,7 +295,10 @@ def main():
 
         # ── 5. 窄屏不溢出
         pg.set_viewport_size({"width": 390, "height": 900})
-        pg.wait_for_timeout(600)
+        # resize 到窄屏后要等两件事：图表 resize（120ms 防抖）和
+        # bindMobFold 重算（在 resize 回调里，且要量 scrollHeight）。
+        # 只等 600ms 会卡在两者之间，卡片还没被折叠就去做断言。
+        pg.wait_for_timeout(1600)
         ovf = pg.evaluate("""()=>{
           const bad=[];
           document.querySelectorAll('#stockWrap *').forEach(el=>{
@@ -278,6 +315,55 @@ def main():
           return g?getComputedStyle(g).gridTemplateColumns.split(' ').length:0;
         }""")
         ck("390px 报价网格为 3 列（省高度）", cols == 3, cols)
+
+        # ── 6. 移动端可用性
+        # 触摸目标：导航项曾只有 28px 高，手指点不准（规范建议 ≥44，取 40 折中）
+        tgt = pg.evaluate("""()=>{
+          const bad=[];
+          document.querySelectorAll('#secNav a, #secNav button').forEach(e=>{
+            const r=e.getBoundingClientRect();
+            if(r.height>0 && r.height<40) bad.push({t:e.textContent.trim().slice(0,8),
+                                                    h:Math.round(r.height)});
+          });
+          return bad;
+        }""")
+        ck("移动端分区导航触摸目标 ≥40px", not tgt, tgt[:4])
+
+        # 长卡片折叠：桌面端不折（按钮隐藏），移动端按实测高度自动折
+        fold = pg.evaluate("""()=>{
+          const on=[...document.querySelectorAll('#stockWrap .card.mobfold-on')];
+          return {n:on.length,
+                  withBtn:on.filter(c=>c.querySelector(':scope > .mobfold-btn')).length,
+                  ids:on.map(c=>c.id),
+                  pageH:document.body.scrollHeight};
+        }""")
+        ck("移动端长卡片已折叠（≥3 张，含全套指标）",
+           fold["n"] >= 3 and fold["withBtn"] == fold["n"], fold)
+        ck("折叠卡片都带展开按钮", fold["withBtn"] == fold["n"], fold)
+        # 折叠后整页应显著变短（改造前 12212px）
+        ck("折叠后整页高度明显下降（<9000px）", fold["pageH"] < 9000, fold["pageH"])
+
+        # 展开必须能真的看到内容，且图表要重新 resize（否则画出半张图）
+        exp = pg.evaluate("""()=>{
+          const card=document.querySelector('#secInd');
+          if(!card || !card.classList.contains('mobfold-on')) return {skip:true};
+          const before=card.querySelector('.card-b').clientHeight;
+          card.querySelector('.mobfold-btn').click();
+          return {before, opened:card.classList.contains('mobfold-open')};
+        }""")
+        pg.wait_for_timeout(700)
+        exp2 = pg.evaluate("""()=>{
+          const card=document.querySelector('#secInd');
+          const b=card.querySelector('.card-b');
+          const cv=document.querySelector('#cvol canvas');
+          return {after:b.clientHeight,
+                  styleMax:getComputedStyle(b).maxHeight,
+                  volW:cv?cv.clientWidth:0, volH:cv?cv.clientHeight:0};
+        }""")
+        ck("展开后内容区变高（不是点了没反应）",
+           exp.get("skip") or exp2["after"] > exp["before"], (exp, exp2))
+        ck("展开后图表有正常尺寸（不是 0 宽）",
+           exp.get("skip") or (exp2["volW"] > 100 and exp2["volH"] > 50), exp2)
 
         ck("全程无 JS 报错", not errs, errs[:3])
         b.close()

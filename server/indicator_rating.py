@@ -135,6 +135,11 @@ def rate_indicator(name: str, value: Any,
         return _cmp(cur, v)   # 现价高于中轨 / BBI → BUY
     if n == "吊灯止损":
         return _cmp(cur, v)   # 现价高于止损线（未破位）→ BUY
+    # MA 系列：价位判断，不是阈值判断——现价在均线上方即多头占优。
+    # 原先一律不评级，导致「移动平均线」那张表永远 0 票、画不出指针。
+    # 这不是"没有明确阈值"的问题：MA 的多空含义就是价格与它的相对位置。
+    if n.startswith("MA") and n[2:].isdigit():
+        return _cmp(cur, v)
 
     # ---------- 波动率类 ----------
     if n == "布林%B":
@@ -194,6 +199,40 @@ def aggregate_rating(groups: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+# TradingView 技术分析三表的映射。
+# 它那三个仪表盘不是三套算法，而是同一批指标按类切三份：
+#   「震荡指标」只看摆动类，「移动平均线」只看均线，「总结」是全部。
+# 这里照搬这个切法，聚合仍走 aggregate_rating，保证三个表口径一致、
+# 且分表之和必然等于总结（不会出现"震荡说买、均线说卖、总结说中立"
+# 却和两边票数都对不上的情况）。
+GAUGE_GROUPS = [
+    ("osc", "震荡指标", ["震荡"]),
+    ("ma", "移动平均线", ["均线"]),
+    ("sum", "总结", None),          # None = 全部组
+]
+
+
+def gauge_ratings(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """按 GAUGE_GROUPS 切出三个仪表盘的评级。
+
+    组名对不上（后续增删分组）时该表 total_rated=0，rating=None，
+    前端会显示"—"而不是画一个假装有结论的指针。
+    """
+    out = []
+    for key, label, cats in GAUGE_GROUPS:
+        sub = groups if cats is None else [
+            g for g in groups if g.get("cat") in cats]
+        agg = aggregate_rating(sub)
+        agg["key"] = key
+        agg["name"] = label
+        if not agg["total_rated"]:
+            agg["rating"] = None
+            agg["label"] = "—"
+            agg["score"] = 50.0
+        out.append(agg)
+    return out
+
+
 def selfcheck(verbose: bool = True) -> Dict[str, Any]:
     """评级规则自检：覆盖每个算子、float 边界、配对、缺失、聚合。"""
     cases = [
@@ -248,9 +287,16 @@ def selfcheck(verbose: bool = True) -> Dict[str, Any]:
         ("Z-Score(20)", -2.5, None, BUY),
         # 缺失 / 无规则
         ("RSI6", None, None, None),
-        ("MA5", 10.0, None, None),               # 无规则
         ("ADX", 30, None, None),                 # 无方向
         ("成交量", 100000, None, None),
+        # MA 系列：价位判断（现价 vs 均线），不是阈值判断。
+        # 原先这里断言「无规则」，导致「移动平均线」仪表永远 0 票。
+        # 注意 ctx 必须带 cur，只给 None 会让 _cmp 返回 None，
+        # 于是"期望 None"的旧用例永远通过 —— 测试看着绿，规则其实没生效。
+        ("MA5", 10.0, {"cur": 11.0}, BUY),       # 现价在均线上方
+        ("MA5", 10.0, {"cur": 9.0}, SELL),       # 现价在均线下方
+        ("MA20", 10.0, {"cur": 10.0}, NEUTRAL),  # 贴线
+        ("MA5", 10.0, None, None),               # 没有现价 → 不评级
     ]
     fails = 0
     for name, val, ctx, exp in cases:

@@ -895,8 +895,11 @@ def all_indicators(klines):
         }
         ir.rate_groups(groups, ctx)
         rating_summary = ir.aggregate_rating(groups)
+        # 三表：震荡 / 均线 / 总结。与 rating_summary 同源，只是换了切法。
+        rating_gauges = ir.gauge_ratings(groups)
     except Exception:
         rating_summary = None
+        rating_gauges = None
 
     return {
         "groups": groups,
@@ -922,4 +925,5 @@ def all_indicators(klines):
         "overbought_count": rev_overbought,
         "indicator_count": sum(len(g["items"]) for g in groups),
         "rating_summary": rating_summary,
+        "rating_gauges": rating_gauges,
     }
