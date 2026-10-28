@@ -79,6 +79,9 @@ if (typeof echarts === 'undefined') {
      "红=买"的评级色习惯打架。 */
   --gauge-s0:#7f1d1d; --gauge-s1:#f6465d; --gauge-s2:#8b95a5;
   --gauge-s3:#3b82f6; --gauge-s4:#1d4ed8;
+  /* 五档评级的「强烈」两档：与 --up/--down 同色相、更亮一档。
+     暗底需要提亮才够对比，浅底（见下）反过来压深。 */
+  --rate-strong-up:#ff6b7f; --rate-strong-down:#3ddc97;
   --focus-wash:rgba(252,213,53,.18);  /* 聚焦/选中着色（暗底用主强调黄） */
   /* 温度仪表专用色（牛熊速查）：跨主题恒定——温度语义（绿=冷→红=热）不随
      涨跌/强调色主题漂移，否则浅色下「黄档」会变成蓝（accent 是信息蓝） */
@@ -111,6 +114,8 @@ if (typeof echarts === 'undefined') {
   /* 浅底五段弧：中段要压深，否则 #8b95a5 在白上只有 2.8:1 看不清 */
   --gauge-s0:#991b1b; --gauge-s1:#dc2626; --gauge-s2:#6b7280;
   --gauge-s3:#2563eb; --gauge-s4:#1e3a8a;
+  /* 浅底「强烈」两档压深：亮色在白底上对比度不足，反而不如常规档醒目 */
+  --rate-strong-up:#b91c1c; --rate-strong-down:#047857;
   --focus-wash:rgba(31,95,214,.09);
   --on-primary:#ffffff;         /* 浅：蓝底白字 */
 }
@@ -681,6 +686,10 @@ tbody tr:hover{background:#f7f9fc}
 .rtag.r-sell{background:rgba(14,203,129,.12);color:var(--down-on)}
 .rtag.r-neutral{background:rgba(146,154,165,.15);color:var(--tx3)}
 .rate-buy{color:var(--up)} .rate-sell{color:var(--down)} .rate-neutral{color:var(--tx3)}
+/* 五档里的「强烈」两档：同色但更深，靠字重再区分一次。
+   不用新色相——同色不同深浅，读者一眼知道是"同一个方向、程度更重"。 */
+.rate-strong-buy{color:var(--rate-strong-up);font-weight:800}
+.rate-strong-sell{color:var(--rate-strong-down);font-weight:800}
 
 /* 技术分析三表（借鉴 TradingView technicals）：
    半圆五段弧 + 一根指针，一眼看出「技术面整体偏多还是偏空」。
@@ -2917,24 +2926,36 @@ function gaugeSvg(score, rating){
     '</svg>';
 }
 
-/* 三张并列的仪表。数据来自后端 rating_gauges（震荡 / 均线 / 总结）。
-   评级用文字颜色区分（买=红 卖=绿 中=灰），和全站 .rate-* 保持一致；
-   五段弧本身是**刻度尺**，不随评级变色——否则读者会以为"买"那段变红了。 */
+/* 三张并列的仪表。数据来自后端 rating_gauges —— TradingView 口径：
+   26 项（均线 15 + 震荡 11）、事件判定、五档分档、总结两组等权平均。
+
+   注意 avg 与旧的 score 不是一回事：
+     score（旧）：自有 61 项口径，0~100，50 为平衡。
+     avg（新）  ：-1 ~ +1 的票数均值，0 为平衡。
+   指针统一走 0~100，所以这里用 (avg+1)/2*100 换算，视觉不跳变。
+
+   五档（强烈卖出/卖出/中立/买入/强烈买入）用文字颜色区分，
+   弧段本身是**刻度尺**，不随评级变色。 */
 function gaugesHtml(list){
   if(!list || !list.length) return '';
+  var LVL_CLS = {'STRONG_BUY':'rate-strong-buy','BUY':'rate-buy','NEUTRAL':'rate-neutral',
+                 'SELL':'rate-sell','STRONG_SELL':'rate-strong-sell'};
   var items = list.map(function(g){
-    var rc = g.rating === 'BUY' ? 'rate-buy' : (g.rating === 'SELL' ? 'rate-sell' : 'rate-neutral');
+    var rc = LVL_CLS[g.rating] || 'rate-neutral';
+    var has = g.total > 0 && g.avg !== null && g.avg !== undefined;
+    var pct = has ? ((g.avg + 1) / 2 * 100) : 50;
     // 票数：买/卖为主信息，中性票塞进 .neu——窄屏 CSS 会隐藏它，
     // 宽屏三格空间够，照样显示完整三档。
-    var full = g.total_rated
-      ? g.buy + ' 买 / ' + g.sell + ' 卖' + (g.neutral ? ' / ' + g.neutral + ' 中' : '')
+    var full = has
+      ? g.buy + ' 买 / ' + g.sell + ' 卖' + (g.neutral ? ' / ' + g.neutral + ' 中' : '') +
+        '（共 ' + g.total + ' 项）'
       : '本组无可评级指标';
-    var votes = g.total_rated
+    var votes = has
       ? g.buy + ' 买 / ' + g.sell + ' 卖' +
         (g.neutral ? '<span class="neu"> / ' + g.neutral + ' 中</span>' : '')
       : '本组无可评级指标';
     return '<div class="gauge" data-gauge="' + esc(g.key) + '">' +
-      gaugeSvg(g.score, g.rating) +
+      gaugeSvg(pct, g.rating) +
       '<div class="g-title">' + esc(g.name) + '</div>' +
       '<div class="g-val ' + rc + '">' + esc(g.label) + '</div>' +
       '<div class="g-votes" title="' + esc(full) + '">' + votes + '</div>' +
@@ -4403,7 +4424,7 @@ function renderStock(d){
      这里不写死折叠结构，模板保持干净。
      注意 d._full 与图表数据是两次独立请求，可能只到其一，所以要判空。 */
   h += '<div class="card" id="secInd"><div class="card-h"><h2>技术指标</h2>' +
-    '<div class="meta">震荡 / 均线 / 综合</div></div><div class="card-b">' +
+    '<div class="meta">震荡 / 总结 / 均线</div></div><div class="card-b">' +
     (function(){
       var gs = (d._full && d._full.rating_gauges) || null;
       // 存一份给检查脚本核对「指针角度 ↔ 评分」的对应关系；

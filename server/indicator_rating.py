@@ -199,38 +199,9 @@ def aggregate_rating(groups: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
-# TradingView 技术分析三表的映射。
-# 它那三个仪表盘不是三套算法，而是同一批指标按类切三份：
-#   「震荡指标」只看摆动类，「移动平均线」只看均线，「总结」是全部。
-# 这里照搬这个切法，聚合仍走 aggregate_rating，保证三个表口径一致、
-# 且分表之和必然等于总结（不会出现"震荡说买、均线说卖、总结说中立"
-# 却和两边票数都对不上的情况）。
-GAUGE_GROUPS = [
-    ("osc", "震荡指标", ["震荡"]),
-    ("ma", "移动平均线", ["均线"]),
-    ("sum", "总结", None),          # None = 全部组
-]
-
-
-def gauge_ratings(groups: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """按 GAUGE_GROUPS 切出三个仪表盘的评级。
-
-    组名对不上（后续增删分组）时该表 total_rated=0，rating=None，
-    前端会显示"—"而不是画一个假装有结论的指针。
-    """
-    out = []
-    for key, label, cats in GAUGE_GROUPS:
-        sub = groups if cats is None else [
-            g for g in groups if g.get("cat") in cats]
-        agg = aggregate_rating(sub)
-        agg["key"] = key
-        agg["name"] = label
-        if not agg["total_rated"]:
-            agg["rating"] = None
-            agg["label"] = "—"
-            agg["score"] = 50.0
-        out.append(agg)
-    return out
+# 三表仪表已迁到 tv_rating.py（TradingView 口径：26 项、事件判定、五档）。
+# 原先这里有个 gauge_ratings() 按自有 61 项切三份，与 TradingView 对不上，
+# 已删除；本模块现在只负责「全套技术指标」明细表的水平阈值评级。
 
 
 def selfcheck(verbose: bool = True) -> Dict[str, Any]:

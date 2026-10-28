@@ -884,7 +884,14 @@ def all_indicators(klines):
     # ---------- Tier 4：指标多空评级（BUY/SELL/NEUTRAL）----------
     # 与上面的事件型 signals/verdict 并存独立：signals 看「金叉/死叉/突破」事件，
     # rating 看「各指标当前所处区间」的多空倾向，二者可能不同，均为参考。
+    #
+    # 两个口径，用途不同，不要合并：
+    #   rating_summary —— 自有口径（61 项、水平阈值），给「全套技术指标」明细表用。
+    #   rating_gauges  —— TradingView 口径（26 项、事件判定、五档），给三张半圆仪表用。
+    # 分开是因为 RSI 在两边语义相反：TradingView 是「上穿 70 才卖」的事件，
+    # 我们是「高于 70 即卖」的水平。混进同一套票数里，两边数字都会失真。
     rating_summary = None
+    rating_gauges = None
     try:
         import indicator_rating as ir
         ctx = {
@@ -895,10 +902,14 @@ def all_indicators(klines):
         }
         ir.rate_groups(groups, ctx)
         rating_summary = ir.aggregate_rating(groups)
-        # 三表：震荡 / 均线 / 总结。与 rating_summary 同源，只是换了切法。
-        rating_gauges = ir.gauge_ratings(groups)
     except Exception:
         rating_summary = None
+    try:
+        import tv_rating
+        rating_gauges = tv_rating.tv_gauges(klines)
+    except Exception:
+        # 三表算不出来时宁可不画（前端显示「—」），也不退回旧口径冒充，
+        # 否则用户会以为「和 TradingView 对上了」。
         rating_gauges = None
 
     return {

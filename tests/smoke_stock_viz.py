@@ -67,10 +67,21 @@ def main():
         # 三者都是预期内的接口应答，不是页面 JS 异常，滤掉噪声否则永远红。
         def _noise(t):
             return ("401" in t or "400 (Bad Request)" in t or "403 (Forbidden)" in t)
+        # 本测试验的是个股页渲染，不验 AI。但进页会自动触发一次「AI 深度分析」，
+        # 这会把测试账号的每日配额（默认 10 次）真烧掉，跑几次就 429，
+        # 于是「全程无 JS 报错」这条随机变红——红的原因和被测代码无关。
+        # 直接把 AI 接口挡在浏览器侧，返回 200 + 空的 llm，页面照常渲染 AI 卡。
+        AI_STUB = ('{"llm": null, "llm_error": "test-stub", "code": "", "name": "", '
+                   '"items": [], "cached": true}')
+        pg.route("**/api/stock/analyze*", lambda route: route.fulfill(
+            status=200, content_type="application/json", body=AI_STUB))
         pg.on("console", lambda m: errs.append("CONSOLE " + m.text)
               if m.type == "error" and not _noise(m.text) else None)
         login(pg)
-        open_stock(pg, "000001")
+        # 用 600519 而不是 000001：000001 当前震荡组与均线组的买卖比例恰好接近，
+        # 「等权平均」与「26 项混算」两种算法只差 0.0005，区分不了口径——
+        # 拿它测三表口径等于没测。600519 两者相差 0.06，能把混算缺陷照出来。
+        open_stock(pg, "600519")
 
         # ── 1. 页头
         hd = pg.evaluate("""()=>{
@@ -184,10 +195,10 @@ def main():
         ck("x 轴日期做了抽稀（长序列不重叠）",
            xa["hasFn"] and xa["hide"] and xa["n"] > 100, xa)
 
-        # ── 2b. 技术分析三表（震荡/均线/总结）
-        # 数据来自后端 rating_gauges，指针角度 = (score-50)/50*90。
-        # 三个表必须都在、且指针角度与 score 对得上——只看「有没有画出来」
-        # 是不够的，角度算错的话指针会指向错误的结论。
+        # ── 2b. 技术分析三表（震荡/总结/均线）—— TradingView 口径
+        # 数据来自后端 rating_gauges，字段是 avg（-1~1 票数均值），
+        # 前端换算成 0~100 后指针角度 = (pct-50)/50*90，即 avg*90。
+        # 只看「有没有画出来」不够：角度算错，指针会指向相反的结论。
         gg = pg.evaluate("""()=>{
           const boxes=[...document.querySelectorAll('.gauge')];
           return boxes.map(b=>{
@@ -197,24 +208,64 @@ def main():
             const src=(state._gauges||[]).find(x=>x.key===key)||{};
             return {key, title:(b.querySelector('.g-title')||{}).textContent,
                     val:(b.querySelector('.g-val')||{}).textContent,
+                    cls:(b.querySelector('.g-val')||{}).className||'',
                     deg:m?parseFloat(m[1]):null,
-                    score:src.score, rating:src.rating,
+                    avg:src.avg, level:src.level, rating:src.rating,
+                    total:src.total, buy:src.buy, sell:src.sell, neutral:src.neutral,
                     segs:b.querySelectorAll('.g-seg').length,
                     votes:(b.querySelector('.g-votes')||{}).textContent||''};
           });
         }""")
         ck("技术指标卡片有三张仪表", len(gg) == 3, [x["key"] for x in gg])
-        ck("仪表顺序是 震荡/均线/总结",
-           [x["key"] for x in gg] == ["osc", "ma", "sum"], [x["key"] for x in gg])
+        # 顺序按 TradingView 页面：震荡指标、总结、移动平均线
+        ck("仪表顺序是 震荡/总结/均线",
+           [x["key"] for x in gg] == ["osc", "sum", "ma"], [x["key"] for x in gg])
         ck("每张表都画了 5 段弧", all(x["segs"] == 5 for x in gg), [x["segs"] for x in gg])
-        # 角度必须与 score 一致（容差 1.5°，取整误差）
+        # 角度 = avg*90（容差 1.5°，取整误差）。avg 为 None 时跳过该项。
         bad_ang = [x for x in gg
-                   if x["score"] is not None and x["deg"] is not None
-                   and abs(x["deg"] - max(-90, min(90, (x["score"] - 50) / 50 * 90))) > 1.5]
-        ck("指针角度与评分一致", not bad_ang, bad_ang[:2])
+                   if x["avg"] is not None and x["deg"] is not None
+                   and abs(x["deg"] - max(-90, min(90, x["avg"] * 90))) > 1.5]
+        ck("指针角度与 avg 一致", not bad_ang, bad_ang[:2])
         ck("三表都有票数说明", all(x["votes"] for x in gg), [x["votes"] for x in gg])
-        # 均线表不能永远 0 票：MA 系列按「现价 vs 均线」评级，曾是空白
-        ma = next((x for x in gg if x["key"] == "ma"), None)
+
+        # 口径契约：26 项 = 均线 15 + 震荡 11，总结是两组等权平均而非混算。
+        # 这三条是「对齐 TradingView」的硬约定，任何一条破了就说明又退回旧口径。
+        by = {x["key"]: x for x in gg}
+        ck("震荡组为 11 项（TradingView 口径）", by["osc"]["total"] == 11, by["osc"]["total"])
+        ck("均线组为 15 项（TradingView 口径）", by["ma"]["total"] == 15, by["ma"]["total"])
+        ck("总结为 26 项 = 11 + 15",
+           by["sum"]["total"] == by["osc"]["total"] + by["ma"]["total"], by["sum"]["total"])
+        # 总结均值必须是两组等权平均，不能等于 26 项混算。
+        # ⚠ 这里曾经写成「拿某只票的 avg 和期望值比、容差 0.011」，
+        # 结果在 000001 上永远通过——那只票震荡与均线两组的比例恰好让
+        # 两种算法差 0.0005，注入混算缺陷也抓不出来（假绿）。
+        # 改成不依赖具体股票：直接核对 (osc+ma)/2 这个恒等式，
+        # 并且要求两组的票数不同——票数相同的话两种算法本来就等价，
+        # 那样的票区分不了口径，必须换一只。
+        o_avg, m_avg = by["osc"]["avg"], by["ma"]["avg"]
+        if o_avg is not None and m_avg is not None:
+            expect = (o_avg + m_avg) / 2
+            mixed = ((by["osc"]["buy"] - by["osc"]["sell"])
+                     + (by["ma"]["buy"] - by["ma"]["sell"])) / by["sum"]["total"]
+            # 先证明这只票能区分两种算法，否则本条无效（避免又一次假绿）
+            ck("所选股票能区分「等权平均」与「26 项混算」",
+               abs(mixed - expect) > 0.02,
+               {"混算": round(mixed, 4), "等权": round(expect, 4),
+                "差": round(abs(mixed - expect), 4), "_note": "换一只票重测"})
+            ck("总结 = (震荡均值 + 均线均值) / 2，不是 26 项混算",
+               abs(by["sum"]["avg"] - expect) < 0.011,
+               {"sum": by["sum"]["avg"], "expect": round(expect, 4)})
+        # 五档标签必须和 avg 阈值自洽（防止后端分档与前端标签各说各话）
+        LV = {2: "强烈买入", 1: "买入", 0: "中立", -1: "卖出", -2: "强烈卖出"}
+        bad_lv = [x for x in gg if x["level"] is not None and x["val"] != LV.get(x["level"])]
+        ck("仪表文字与 level 一致", not bad_lv, bad_lv[:2])
+        # 「强烈」两档要有独立的颜色类，否则和普通买/卖看不出差别
+        bad_cls = [x for x in gg
+                   if x["rating"] in ("STRONG_BUY", "STRONG_SELL")
+                   and "rate-strong" not in x["cls"]]
+        ck("强烈买/卖用独立颜色类", not bad_cls, bad_cls[:2])
+        # 均线表不能永远 0 票：曾因 MA 一律不评级导致永远 0 票
+        ma = by["ma"]
         ck("移动平均线表有评级票（不是永远 0 票）",
            ma and ma["votes"] and "无可评级" not in ma["votes"], ma and ma["votes"])
 
