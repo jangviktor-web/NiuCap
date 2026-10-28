@@ -19,7 +19,7 @@
 <sub>⚠️ 2026-10 域名变更：旧 <code>*.app.workbuddy.host</code> 已停用，现地址为 <code>*.app.workbuddy.link</code>（<a href="#-部署教程一键发布到-workbuddy-云平台">原因见下</a>）</sub>
 
 [![Gitee 仓库](https://img.shields.io/badge/Gitee-jangviktor%2Fniucap-C71D23.svg)](https://gitee.com/jangviktor/niucap)
-[![Version](https://img.shields.io/badge/version-v1.1.0-blue.svg)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-v1.1.1-blue.svg)](CHANGELOG.md)
 ![GitHub Stars](https://img.shields.io/github/stars/jangviktor-web/niucap?style=social)
 ![GitHub last commit](https://img.shields.io/github/last-commit/jangviktor-web/niucap)
 ![Repo size](https://img.shields.io/github/repo-size/jangviktor-web/niucap)
