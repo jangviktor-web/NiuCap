@@ -93,12 +93,21 @@ def fetch_list(force=False, with_snapshot=True):
             })
         if not rows:
             raise RuntimeError("解析出 0 条，接口可能改版")
-        if with_snapshot:
-            enrich_snapshots(rows)
+        # 清单已经拿到了，就先落缓存 —— 补快照是「锦上添花」，
+        # 它失败不该把 1715 行清单一起丢进 except。实际踩过：enrich 偶发
+        # 失败 → 整个 try 抛 → 缓存空时返回 [] → 上层（hs300_etf_ratio）
+        # 只能报「池为空」，而真实原因是拉取失败，报错信息完全指错了方向。
         _CACHE["ts"] = now
         _CACHE["rows"] = rows
-        _CACHE["enriched"] = bool(with_snapshot)
+        _CACHE["enriched"] = False
         _CACHE["snap_at"] = now
+        if with_snapshot:
+            try:
+                enrich_snapshots(rows)
+                _CACHE["enriched"] = True
+            except Exception as e:
+                # 规模补不上，清单仍是可用的（只是没有 cap 字段）
+                print(f"[etf] 补快照失败，清单仍可用：{type(e).__name__}: {e}")
         return rows, "sina"
     except Exception:
         if _CACHE["rows"]:

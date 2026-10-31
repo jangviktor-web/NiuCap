@@ -6,6 +6,7 @@ import re
 import os
 import json
 import time
+import datetime
 import threading
 import requests
 from typing import Optional
@@ -261,8 +262,13 @@ PERIOD_MAP = {
 _PERIOD_ALIAS = {
     "d": "1d", "day": "1d", "daily": "1d", "1day": "1d",
     "w": "1w", "week": "1w", "weekly": "1w",
-    "m": "1M", "month": "1M", "monthly": "1M", "1m": "1M",
+    "m": "1M", "month": "1M", "monthly": "1M",
 }
+# 别在这里写 "1m": "1M"：分钟线和月线撞了写法，谁先归谁。
+# "1m" 一律当「1 分钟」处理（本文件的 INTRADAY_PERIODS 就是这么认的）。
+# 历史上这里有过这条映射，结果是 /api/indicators_full?period=1m
+# 被悄悄当成月线、拿到 28 根 K 线后返回空表——不报错，只是没有数据。
+# 月度请用 "1M"（大写）或 "month"。
 
 
 def normalize_period(period):
@@ -418,7 +424,7 @@ def kline_sina(code, count=250):
 def get_kline(code, period="1d", count=250, use_cache=True):
     """K线多源降级：腾讯 -> 新浪 -> 同花顺（日线），带缓存
 
-    注：分钟/周/月线仅腾讯支持（上游同花顺只给日线）；日线三源互备。
+    注：周/月线腾讯是唯一源；日线三源互备。
     """
     code = normalize(code)
     period = normalize_period(period)
@@ -428,15 +434,66 @@ def get_kline(code, period="1d", count=250, use_cache=True):
         if hit is not None:
             return hit
 
+    # 分钟周期走分钟线取数口（eltdx 优先，腾讯降级）。以前这里直接调
+    # kline_tencent(code, '15m')，而腾讯 mkline 端点要的是 'm15'——
+    # 没有转换就永远返回 0 根，前端看到的是「未取到K线数据」。
+    if period in INTRADAY_PERIODS:
+        rows = get_kline_intraday(code, period, count, use_cache=use_cache)
+        _cache_put(_kline_cache, ckey, rows, skip_empty=True)
+        return rows
+
     rows = kline_tencent(code, period, count)
+    # 月线复权价可能是负数：茅台 300 根月线里 177 根 open/close 为负
+    # （前复权把几十年的分红除权累积扣下来会穿过 0）。指标照单全收会得出
+    # 「现价 1330 > MA200 -314」这种荒谬结论，所以一旦出现非正价就整段弃用。
+    if rows and any(r["close"] <= 0 for r in rows):
+        rows = []
     if not rows and period == "1d":
         rows = kline_sina(code, count)
         if not rows:
             rows = kline_hithink(code, count)
+    # 周/月线腾讯取不到是常态（ifzq 与 web.ifzq 被它的 WAF 拦成 501，
+    # 只有 proxy.finance 通）。拿同花顺的日线重采样，比直接 404 好。
+    elif not rows and period in ("1w", "1M"):
+        rows = _resample(kline_hithink(code, 2400), period)
+        rows = rows[-count:] if count else rows
 
     # 不缓存空结果：数据源限流时会静默返回空，缓存了会把自己锁死 TTL。
     _cache_put(_kline_cache, ckey, rows, skip_empty=True)
     return rows
+
+
+def _resample(rows, period):
+    """日线 → 周线/月线。
+
+    只为「腾讯不让取」时兜底，口径按自然周/自然月：
+    单根的开盘取该期第一根的 open、收盘取最后一根的 close、
+    高低取区间极值、成交量求和。前复权数据直接重采样即可，
+    不需要再处理除权——腾讯给的日线本身就是前复权。
+    """
+    if not rows:
+        return []
+    key = (lambda d: d[:7]) if period == "1M" else (
+        lambda d: datetime.date.fromisoformat(d[:10]).isocalendar()[:2])
+    out, cur = [], None
+    for r in rows:
+        k = key(str(r["date"]))
+        if cur is None or cur["_k"] != k:
+            if cur:
+                cur.pop("_k", None)
+                out.append(cur)
+            cur = {"_k": k, "date": r["date"], "open": r["open"], "close": r["close"],
+                   "high": r["high"], "low": r["low"], "volume": r.get("volume") or 0}
+        else:
+            cur["date"] = r["date"]                 # 以该期最后一根为日期
+            cur["close"] = r["close"]
+            cur["high"] = max(cur["high"], r["high"])
+            cur["low"] = min(cur["low"], r["low"])
+            cur["volume"] += r.get("volume") or 0
+    if cur:
+        cur.pop("_k", None)
+        out.append(cur)
+    return out
 
 
 def kline_hithink(code, count=250, adjust="forward"):

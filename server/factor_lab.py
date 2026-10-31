@@ -48,6 +48,12 @@ FACTOR_DEFS: List[Tuple[str, str, str, str]] = [
     ("boll_pct",  "布林%B",    "超买超卖", "_f_boll"),
     ("amt_60",    "60日均成交额(对数)", "流动性", "_f_amt"),
     ("vol_surge", "5日/60日量比", "量能", "_f_surge"),
+    # ---- QuanTAlib 桥接（447 个交叉验证指标，见 quantalib_bridge.py）----
+    ("qtl_tsi_25",    "TSI 双平滑动量", "动量",   "_f_qtl_tsi"),
+    ("qtl_fisher_9",  "Fisher 变换",   "动量",   "_f_qtl_fisher"),
+    ("qtl_stc",       "Schaff 趋势周期", "超买超卖", "_f_qtl_stc"),
+    ("qtl_vortex_14", "Vortex 趋势方向", "动量",  "_f_qtl_vortex"),
+    ("qtl_coppock",   "Coppock 长期动量", "动量", "_f_qtl_coppock"),
 ]
 
 FORWARDS = (5, 10, 20)     # 未来收益窗口（交易日）
@@ -411,6 +417,60 @@ def _f_surge(mats: Dict[str, Any], short: int = 5, long: int = 60) -> np.ndarray
     return out
 
 
+# ---- QuanTAlib 桥接因子（qtl 未装或单列异常时该列 NaN，不炸评估）----
+# 为什么选这五个：动量/趋势族里自有池没有的形态（双平滑、Fisher 变换、
+# Schaff 周期、Vortex 方向、长期 Coppock），且 qtl 与 TA-Lib/pandas-ta
+# 交叉验证过，实现可信。vortex 需要 H/L/C 三条序列，单独写不走通用工厂。
+
+
+def _f_qtl_tsi(mats: Dict[str, Any]) -> np.ndarray:
+    import quantalib_bridge as qb
+    return qb.column_factor(mats, "tsi", 25, 13) if qb.AVAILABLE \
+        else np.full_like(mats["close"], np.nan)
+
+
+def _f_qtl_fisher(mats: Dict[str, Any]) -> np.ndarray:
+    """Fisher 变换用中间价 (H+L)/2（经典口径），不是收盘价。"""
+    import quantalib_bridge as qb
+    if not qb.AVAILABLE:
+        return np.full_like(mats["close"], np.nan)
+    hl2 = (mats["high"] + mats["low"]) / 2.0
+    return qb.column_factor({"close": hl2}, "fisher", 9)
+
+
+def _f_qtl_stc(mats: Dict[str, Any]) -> np.ndarray:
+    import quantalib_bridge as qb
+    return qb.column_factor(mats, "stc") if qb.AVAILABLE \
+        else np.full_like(mats["close"], np.nan)
+
+
+def _f_qtl_vortex(mats: Dict[str, Any]) -> np.ndarray:
+    """VI+ − VI−：>0 上行趋势占优。qtl.vortex(high, low, close, n) 三条序列。"""
+    import quantalib_bridge as qb
+    if not qb.AVAILABLE:
+        return np.full_like(mats["close"], np.nan)
+    H, L, C = mats["high"], mats["low"], mats["close"]
+    T, N = C.shape
+    out = np.full((T, N), np.nan)
+    n = 14
+    for j in range(N):
+        ok = ~np.isnan(C[:, j])
+        if ok.sum() < 40:
+            continue
+        try:
+            vip, vim = qb.qtl.vortex(H[:, j][ok], L[:, j][ok], C[:, j][ok], n)
+            out[ok, j] = np.asarray(vip, dtype=float) - np.asarray(vim, dtype=float)
+        except Exception:    # noqa: BLE001
+            continue
+    return out
+
+
+def _f_qtl_coppock(mats: Dict[str, Any]) -> np.ndarray:
+    import quantalib_bridge as qb
+    return qb.column_factor(mats, "coppock") if qb.AVAILABLE \
+        else np.full_like(mats["close"], np.nan)
+
+
 def factor_fns(keys: Optional[Sequence[str]] = None
                ) -> Dict[str, Callable[[Dict[str, Any]], np.ndarray]]:
     """把因子 key 解析成「单参数函数」，供因果性检查逐个调用。
@@ -430,6 +490,11 @@ def factor_fns(keys: Optional[Sequence[str]] = None
         "_f_boll": lambda m: _f_boll(m, 20),
         "_f_amt": lambda m: _f_amt(m, 60),
         "_f_surge": lambda m: _f_surge(m, 5, 60),
+        "_f_qtl_tsi": lambda m: _f_qtl_tsi(m),
+        "_f_qtl_fisher": lambda m: _f_qtl_fisher(m),
+        "_f_qtl_stc": lambda m: _f_qtl_stc(m),
+        "_f_qtl_vortex": lambda m: _f_qtl_vortex(m),
+        "_f_qtl_coppock": lambda m: _f_qtl_coppock(m),
     }
     out: Dict[str, Callable[[Dict[str, Any]], np.ndarray]] = {}
     for key, _name, _cat, fname in FACTOR_DEFS:

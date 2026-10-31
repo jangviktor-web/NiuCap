@@ -377,13 +377,39 @@ def _pack(key, name, votes, avg=None):
     }
 
 
+#: 这只表要多少根 K 线才敢给结论。
+#:
+#: 最长窗口是均线组的 SMA/EMA(200)，加一目云 Span B(52) 的前移，
+#: 约需 260 根 EMA200 才收敛，取 300 留余量。根数不够时 ema200 仍是 NaN，
+#: 那 2 项会被跳过 —— 于是均线组只剩 13 项、总结被静默算偏，
+#: 而页面上看不出「少了两项」。所以宁可整表返回 None（显示「—」），
+#: 也不给出一个看起来正常的错数字。这与本模块「事件判定不能退化成
+#: 水平判定」是同一条原则：宁可没有，不要假有。
+MIN_BARS = 300
+
+#: 前端按周期取多少根。TradingView 各周期都是同一套指标，200 周期均线
+#: 在月线上要 200 个月（16 年）——腾讯月线只给得到 28 根，所以月线永远
+#: 出不了仪表，这是数据源边界，不是 bug。周线要到 300 根同样取不满，
+#: 取 250 拿到腾讯能给的全部（实测约 120 根），照样显示「—」。
+#: 日线与 60/30/15 分钟能满 300 根，5m 取 800，1m 取 1200（约 5 天）。
+BARS_BY_PERIOD = {
+    "1d": 300, "1w": 250, "1M": 250,
+    "1m": 1200, "5m": 800, "15m": 300, "30m": 300, "60m": 300,
+}
+
+
+def bars_for_period(period):
+    """该周期取多少根（未收录的周期回落到 MIN_BARS）。"""
+    return BARS_BY_PERIOD.get(period, MIN_BARS)
+
+
 def tv_gauges(klines):
     """K 线 → 三张表（震荡 / 总结 / 均线）。
 
     ★ 顺序按 TradingView 页面排布：震荡指标、总结、移动平均线。
     总结 = (均线均值 + 震荡均值) / 2，两组等权；任一组缺失则取另一组。
     """
-    if not klines or len(klines) < 30:
+    if not klines or len(klines) < MIN_BARS:
         return None
     c = np.array([k["close"] for k in klines], dtype=float)
     h = np.array([k["high"] for k in klines], dtype=float)
@@ -427,6 +453,15 @@ def selfcheck(verbose=True):
     ]:
         ck(classify(avg) == exp, f"classify({avg}) 期望 {exp} 得到 {classify(avg)}")
     ck(classify(None) is None, "classify(None) 应为 None")
+
+    # 最小根数：少于 MIN_BARS 必须整表放弃，而不是少几项照样给结论
+    ck(tv_gauges([]) is None, "空 K 线应返回 None")
+    ck(tv_gauges([{"close": 1.0, "high": 1.0, "low": 1.0, "volume": 1}] * (MIN_BARS - 1)) is None,
+       f"少于 {MIN_BARS} 根应返回 None")
+    ck(bars_for_period("1d") >= MIN_BARS, "日线取根数应 >= MIN_BARS")
+    ck(bars_for_period("1m") >= MIN_BARS, "1m 取根数应 >= MIN_BARS")
+    ck(bars_for_period("1w") >= 200, "周线取根数应 >= 200")
+    ck(bars_for_period("nope") == MIN_BARS, "未收录周期应回落 MIN_BARS")
 
     # 均值
     ck(_mean([]) is None, "空票应为 None")

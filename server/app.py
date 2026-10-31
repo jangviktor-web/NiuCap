@@ -57,6 +57,7 @@ from fastapi.staticfiles import StaticFiles
 
 import datasource as ds
 import indicator as ind
+import tv_rating
 import indicators_extra as ix
 import screener as scr
 import backtest as bt
@@ -70,6 +71,10 @@ import strategies as strat
 import westock as wst
 import bullbear as bb
 import stock_bond_lab as sbl
+import hs300_etf_ratio as hser
+import market_vitals as mktv
+import margin_lab as margin
+import crowding as crowd
 import hithink as htk
 import intent as itt
 import tdx as tdxc
@@ -2103,28 +2108,81 @@ def api_moves(
 # 全套技术指标（借鉴 Klang 的 info 命令：30+ 指标一屏总览）
 # ===========================================================================
 
+def _tf_or_daily(period):
+    """周期写法 → 本接口的内部键（1d/1w/1M 或 1m/5m/15m/30m/60m）。
+
+    '1m' 在这套代码里是**歧义**写法：分钟线口写 '1m'，老接口也把 '1m'
+    当过月度。这里按「字面大小写」定归属，不用 normalize_* 猜：
+        '1M'             → 1M（大写 M = 月度）
+        '1m'/'M1'/'min'  → 1m（分钟）
+        5m/15m/30m/60m   → 原样
+        其余（day/week/month/1d/1w） → normalize_period
+    为什么不用 normalize_intraday_period：它对大小写不敏感，
+    '1M' 会被认成 1 分钟，月线就变成「最近 5 天的分钟线」——数字算得出来，
+    口径完全错了。这就是本文件顶部说的「不报错的错误」。
+    """
+    raw = str(period or "").strip()
+    if raw == "1M":
+        return "1M"
+    if raw.lower() == "1m":
+        return "1m"
+    if raw in ds.INTRADAY_PERIODS:
+        return raw
+    return ds.normalize_period(raw)
+
+
 @app.get("/api/indicators_full")
 def api_indicators_full(
     code: str = Query(...),
     period: str = Query("1d"),
-    count: int = Query(250, ge=60, le=800),
+    count: int = Query(0, ge=0, le=5000),
 ):
-    """个股全套技术指标 + 自动信号汇总"""
+    """个股全套技术指标 + 自动信号汇总
+
+    三种周期共用这一个入口（TradingView 的「指标概览」也是同一块表换周期）：
+      日/周/月  1d / 1w / 1M      → 腾讯日线接口，三源互备
+      分钟     1m/5m/15m/30m/60m  → 分钟线接口（eltdx 优先）
+
+    count=0（默认）按周期取 `tv_rating.bars_for_period`：仪表最长窗口是
+    SMA/EMA(200)，根数不足时那些项会被静默跳过、总结悄悄算偏，
+    所以取根数必须够，不够就整表返回 None 让前端显示「—」。
+    """
     code = ds.normalize(code)
-    period = ds.normalize_period(period)
-    klines = ds.get_kline(code, period, count)
+    period = _tf_or_daily(period)
+    intraday = period in ds.INTRADAY_PERIODS
+    n = count or tv_rating.bars_for_period(period)
+    if intraday:
+        klines = ds.get_kline_intraday(code, period, n)
+    else:
+        klines = ds.get_kline(code, period, n)
     if not klines or len(klines) < 30:
-        raise HTTPException(404, f"未取到 {code} 的足够K线数据")
+        # 根数不足不是故障，是数据源边界（新股 / 腾讯只回 28 根月线）。
+        # 返回一份带原因的空表，而不是 404 —— 前端要拿它解释「为什么没有仪表」，
+        # 换成错误码，用户看到的就只是「加载失败」。
+        return {
+            "code": code, "name": code, "period": period,
+            "bars": len(klines or []), "bars_need": tv_rating.MIN_BARS,
+            "rating_gauges": None,
+            "insufficient": True,
+            "date_range": ([klines[0]["date"], klines[-1]["date"]] if klines else None),
+        }
 
     res = ind.all_indicators(klines)
     if not res:
         raise HTTPException(500, "指标计算失败")
+
+    # 根数不够就整表放弃。宁可页面显示「本周期无评级」+ 原因，
+    # 也不给一份少了两根长均线、总结被静默算偏的结论——那种错看不出来。
+    gauges = tv_rating.tv_gauges(klines)
+    res["rating_gauges"] = gauges
 
     quotes = ds.quote_tencent([code])
     q = quotes.get(code) or {}
     res["code"] = code
     res["name"] = q.get("name", code)
     res["period"] = period
+    res["bars"] = len(klines)
+    res["bars_need"] = tv_rating.MIN_BARS
     res["quote"] = q
     res["date_range"] = [klines[0]["date"], klines[-1]["date"]]
     return res
@@ -3061,6 +3119,18 @@ def api_market_overview():
     }
 
 
+@app.get("/api/crowding")
+def api_crowding():
+    """行业拥挤度：成交占比/换手/动量当日读数 + 自建历史分位（攒够 30 天才给）。"""
+    return crowd.build()
+
+
+@app.get("/api/margin")
+def api_margin():
+    """两融杠杆：余额/融资/融券/杠杆率 + 2010 年起历史序列（东财数据中心）。"""
+    return margin.build()
+
+
 @app.get("/api/bullbear")
 def api_bullbear():
     """牛熊温度 0-100 + 六档仓位建议 + 情绪面六维（复用上游 13 维，不再单独取数）。"""
@@ -3070,6 +3140,8 @@ def api_bullbear():
     return {
         "data": bb.score(ov),
         "radar": bb.radar(ov),
+        # 恐贪指数（逆向情绪量表，与 13 维温度语义相反，前端并排展示不混算）
+        "fear_greed": bb.fear_greed(),
         "updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     }
 
@@ -3092,6 +3164,36 @@ def api_bullbear_history(days: int = Query(365, ge=1, le=1825)):
 # 一个是「现在多热」，一个是「相对债券多贵」，混进一个分数会让两者互相稀释。
 _SB_CACHE: Dict[str, Any] = {"key": None, "at": 0.0, "val": None}
 _SB_TTL = 600      # 10 分钟：eltdx 是实时行情，盘中也最多每 10 分钟打一次
+
+
+@app.get("/api/hs300_etf_ratio")
+def api_hs300_etf_ratio(force: bool = Query(False)):
+    """沪深300 ETF 合计规模 ÷ 指数流通市值（B 方案：季频历史 + 今日实时点）。
+
+    与上面两套口径的关系，别混读：
+      - bullbear    ：13 维横截面温度，回答「市场多热」；
+      - stock_bond  ：股/债比值的历史位置，回答「股票相对债券多贵」；
+      - 本接口      ：被动资金规模占比，回答「ETF 相对流通盘有多大」。
+    三条都是慢变量或不同维度，混进一个分数只会互相稀释。
+
+    为什么历史是季频：份额只有季报，指数流通市值没有任何历史源。
+    详见 hs300_etf_ratio 模块头——那里写了为什么不能在季报之间插值。
+    """
+    return hser.build(force=force)
+
+
+@app.get("/api/market_vitals")
+def api_market_vitals(force: bool = Query(False)):
+    """市场体检：破净率（全A PB<1 占比）+ 风格罗盘（三对指数比值分位）+ 宽基指数 PE。
+
+    第四套口径，回答的是「市场的结构位置」：
+      - 破净率    ：资产端有多便宜（全 A 横截面）；
+      - 风格罗盘  ：近期谁在占优（小盘/大盘、成长/价值、红利/成长）；
+      - 指数 PE   ：宽基估值绝对水平（历史分位自建样本攒够 30 天才给）。
+    破净率与指数 PE 的历史要每天落一行慢慢攒（历史估值没有稳定免费源），
+    风格分位用 K 线比值、立即可用。详见 market_vitals 模块头。
+    """
+    return mktv.build(force=force)
 
 
 @app.get("/api/stock_bond")

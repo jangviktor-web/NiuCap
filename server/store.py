@@ -575,6 +575,17 @@ CREATE TABLE IF NOT EXISTS bullbear_daily (
 );
 CREATE INDEX IF NOT EXISTS idx_bb_date ON bullbear_daily(date DESC);
 
+-- 市场体检日序列：破净率 + 宽基指数 PE，每天收盘后一行。
+-- 历史估值无免费源，分位只能自己攒（样本 <30 天不给分位，见 market_vitals.py）。
+CREATE TABLE IF NOT EXISTS market_vitals_daily (
+    date           TEXT PRIMARY KEY,
+    broken_ratio   REAL,
+    broken_n       INTEGER,
+    total_n        INTEGER,
+    index_pe_json  TEXT NOT NULL DEFAULT '{}',
+    updated_at     REAL NOT NULL
+);
+
 -- 落库任务进度（记录每只股票已同步到哪一天，支持增量拉取）
 CREATE TABLE IF NOT EXISTS bar_sync (
     code        TEXT PRIMARY KEY,
@@ -782,6 +793,16 @@ CREATE TABLE IF NOT EXISTS bullbear_daily (
     updated_at   DOUBLE NOT NULL
 );
 CREATE INDEX idx_bb_date ON bullbear_daily(date DESC);
+
+-- 市场体检日序列（与 SQLite 版同构）
+CREATE TABLE IF NOT EXISTS market_vitals_daily (
+    date           VARCHAR(10) PRIMARY KEY,
+    broken_ratio   DOUBLE NULL,
+    broken_n       INT NULL,
+    total_n        INT NULL,
+    index_pe_json  TEXT NOT NULL,
+    updated_at     DOUBLE NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS bar_sync (
     code        VARCHAR(32) PRIMARY KEY,
@@ -1267,6 +1288,29 @@ def bullbear_daily_list(days: int = 365) -> List[Dict[str, Any]]:
         "ORDER BY date DESC LIMIT ?", (int(days),)).fetchall()
     out = [dict(r) for r in rows]
     out.reverse()          # 上层画图要时间正序
+    return out
+
+
+def market_vitals_daily_save(row: Dict[str, Any]) -> None:
+    """市场体检日序列落一行。只在缺行时由调用方写入（幂等靠 K_LAST_DAY 判断）。"""
+    c = _conn()
+    c.execute(
+        "REPLACE INTO market_vitals_daily"
+        "(date,broken_ratio,broken_n,total_n,index_pe_json,updated_at) "
+        "VALUES(?,?,?,?,?,?)",
+        (row.get("date"), row.get("broken_ratio"), row.get("broken_n"),
+         row.get("total_n"), row.get("index_pe_json"), row.get("updated_at")))
+    c.commit()
+
+
+def market_vitals_daily_list(days: int = 750) -> List[Dict[str, Any]]:
+    """最近 N 天的市场体检序列，按日期升序。"""
+    c = _conn()
+    rows = c.execute(
+        "SELECT date,broken_ratio,broken_n,total_n,index_pe_json "
+        "FROM market_vitals_daily ORDER BY date DESC LIMIT ?", (int(days),)).fetchall()
+    out = [dict(r) for r in rows]
+    out.reverse()
     return out
 
 

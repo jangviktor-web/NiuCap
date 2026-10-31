@@ -585,6 +585,14 @@ tbody tr:hover{background:#f7f9fc}
   padding:7px 11px;border-radius:8px;background:var(--warn-bg);border:1px solid var(--warn-line)}
 .innote.live{background:rgba(246,70,93,.06);border-color:rgba(246,70,93,.22);color:var(--up-on)}
 .innote.err{background:var(--up-bg);border-color:var(--up-line);color:var(--up-on)}
+/* ETF 规模占比卡：跨度切换 + 百分位表（跟随主题令牌，不写死色值） */
+.erspanbar{display:flex;gap:6px;margin:0 0 8px;flex-wrap:wrap}
+.erseg{border:1px solid var(--line,#2b3240);background:transparent;color:var(--tx2);
+  font-size:12px;padding:3px 10px;border-radius:6px;cursor:pointer}
+.erseg.on{background:var(--accent,#f0b90b);border-color:var(--accent,#f0b90b);
+  color:var(--bg,#111);font-weight:600}
+.pcttbl th,.pcttbl td{text-align:center;padding:5px 8px}
+.pcttbl .sub{margin-left:3px;opacity:.6;font-size:10px}
 /* 深度指标一行摘要（原「分时看盘」的 8 张指标卡压缩而来） */
 .mtsum{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;
   margin-bottom:10px;padding:9px 12px;border-radius:8px;background:var(--bg2,#161b21);
@@ -722,6 +730,28 @@ tbody tr:hover{background:#f7f9fc}
   transform-origin:0 0}
 .g-hub{fill:var(--bg2);stroke:var(--tx);stroke-width:1.5}
 @media(prefers-reduced-motion:reduce){.g-needle{transition:none}}
+
+/* 仪表周期条（1分~1月）。
+   排成一行不换行：TradingView 是这么排的，8 个短标签在 390px 里
+   宽度约 300px，放得下；超窄屏（<340px）退化为横向滚动，
+   宁可滚也不折成两行——折行后它就不像一条「时间轴」了。 */
+.g-tf{margin-bottom:14px;gap:2px;flex-wrap:nowrap;overflow-x:auto;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch}
+.g-tf::-webkit-scrollbar{display:none}
+.g-tf .btn{padding:5px 9px;font-size:12.5px;white-space:nowrap;flex:0 0 auto}
+/* 390px 里 8 个标签合计 ~362px，卡内只有 ~338px：收紧内距让它一屏放得下，
+   否则「1月」会被切掉半格，用户以为只有 7 个周期。
+   再窄（<340px）仍走上面的横向滚动，不折行——折了就失去「时间轴」的读法。 */
+@media(max-width:420px){
+  .g-tf{gap:0}
+  .g-tf .btn{padding:5px 7px;font-size:12px}
+}
+/* 切周期时的等待：别让旧读数看起来还是新的 */
+#gaugeBox.busy{opacity:.55;transition:opacity .12s}
+/* 该周期算不出来（月线根数不够 / 新股） */
+.gauge-none{background:var(--bg2);border:1px dashed var(--line2);border-radius:10px;
+  padding:20px 16px;text-align:center;color:var(--tx3);font-size:12.5px;line-height:1.65}
+.gauge-none b{display:block;color:var(--tx2);font-size:13.5px;margin-bottom:4px}
 /* 移动端长卡片折叠（通用）。
    目的不是删信息，是改默认曝光量：个股页移动端总高 11600px≈13.8 屏，
    其中「全套技术指标」2205px、「基本面」1334、「研报」1317、「AI」1225。
@@ -802,6 +832,11 @@ tbody tr:hover{background:#f7f9fc}
 .bbdim .dots i.on{background:var(--accent)}
 .bbdim .st{flex:1;color:var(--tx3);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
 .bbnote{margin-top:14px;font-size:12px;color:var(--tx3);line-height:1.65}
+.vrow{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tx2);padding:4px 0}
+.vrow input{width:110px;padding:4px 8px;border:1px solid var(--line);border-radius:6px;
+  background:var(--bg1,var(--bg));color:var(--tx);font-size:12px}
+.vrow input:focus{outline:none;border-color:var(--accent)}
+.vout{margin-top:8px;font-size:13px;color:var(--tx);min-height:20px}
 .bbsec{margin-top:18px}
 .bbh2{font-size:13px;font-weight:650;margin-bottom:8px;display:flex;align-items:baseline;gap:8px}
 .bbh2 .sub{font-size:11px;font-weight:400;color:var(--tx3)}
@@ -2587,6 +2622,59 @@ td .starbtn{font-size:16px}
       </div>
     </div>
 
+    <!-- 沪深300 ETF 规模占比：与上面温度/股债是第三套口径，独立成卡 -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-h">
+        <h2>🧱 沪深300 ETF 规模占比</h2>
+        <div class="meta" id="erMeta">—</div>
+      </div>
+      <div class="card-b" id="erBody">
+        <div class="load"><span class="spin"></span>读取 ETF 规模…</div>
+      </div>
+    </div>
+
+    <!-- 市场体检：破净率/风格罗盘/宽基PE，第四套口径独立成卡 -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-h">
+        <h2>🩺 市场体检</h2>
+        <div class="meta" id="mvMeta">—</div>
+      </div>
+      <div class="card-b" id="mvBody">
+        <div class="load"><span class="spin"></span>读取全市场快照…（首次约 35 秒）</div>
+      </div>
+    </div>
+
+    <!-- 两融杠杆：东财数据中心 2010 年起，恐贪第 6 子指标的数据面 -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-h">
+        <h2>💳 两融杠杆</h2>
+        <div class="meta" id="mgMeta">—</div>
+      </div>
+      <div class="card-b" id="mgBody">
+        <div class="load"><span class="spin"></span>读取两融历史…</div>
+      </div>
+    </div>
+
+    <!-- 行业拥挤度：成交占比/换手/动量 + 自建分位（攒够 30 天才给综合值） -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-h">
+        <h2>🔥 行业拥挤度</h2>
+        <div class="meta" id="crMeta">—</div>
+      </div>
+      <div class="card-b" id="crBody">
+        <div class="load"><span class="spin"></span>读取板块行情…</div>
+      </div>
+    </div>
+
+    <!-- 估值计算器：纯前端工具（DCF/PE/DDM），无后端依赖 -->
+    <div class="card" style="margin-top:14px">
+      <div class="card-h">
+        <h2>🧮 估值计算器</h2>
+        <div class="meta">纯本地计算 · 不构成投资建议</div>
+      </div>
+      <div class="card-b" id="valBody"></div>
+    </div>
+
     <!-- 股债温度：与上面的 0-100 温度是两套口径，刻意并排而不是混算 -->
     <div class="card" style="margin-top:14px">
       <div class="card-h">
@@ -2852,6 +2940,7 @@ var state = {
     bbRadar: null,          // /api/bullbear 的 radar
     bbTrend: null,          // /api/bullbear/history
     sb: null,               // /api/stock_bond
+    er: null,               // /api/hs300_etf_ratio
     nav: null               // 导航栏瀑布图
   }
 };
@@ -2936,7 +3025,7 @@ function gaugeSvg(score, rating){
 
    五档（强烈卖出/卖出/中立/买入/强烈买入）用文字颜色区分，
    弧段本身是**刻度尺**，不随评级变色。 */
-function gaugesHtml(list){
+function gaugesHtml(list, trans){
   if(!list || !list.length) return '';
   var LVL_CLS = {'STRONG_BUY':'rate-strong-buy','BUY':'rate-buy','NEUTRAL':'rate-neutral',
                  'SELL':'rate-sell','STRONG_SELL':'rate-strong-sell'};
@@ -2958,11 +3047,142 @@ function gaugesHtml(list){
       gaugeSvg(pct, g.rating) +
       '<div class="g-title">' + esc(g.name) + '</div>' +
       '<div class="g-val ' + rc + '">' + esc(g.label) + '</div>' +
-      '<div class="g-votes" title="' + esc(full) + '">' + votes + '</div>' +
+      // tr：切换周期时控件原地换了，仪表走 CSS 过渡扫到新角度。
+      // 首次渲染不加，避免进页三个针同时从 0° 甩过来。
+      '<div class="g-votes"' + (trans ? ' data-tr="1"' : '') +
+        ' title="' + esc(full) + '">' + votes + '</div>' +
       '</div>';
   }).join('');
-  return '<div class="gauges">' + items + '</div>';
+  return '<div class="gauges"' + (trans ? ' data-tr="1"' : '') + '>' + items + '</div>';
 }
+
+/* 工时周期条：1分~1月，与 TradingView「指标概览」同序。
+   为什么复用 state.stockPeriod / state.stockMinute 而不是新开一个
+   state.gaugePeriod：K线图就在下面，「图上是 5 分钟、仪表给的是日线」
+   这种状态错位比仪表不跟随更糟。两条状态本来就是一回事。
+   点日级 = 整页按该周期重拉（K线、指标、仪表一起变）；
+   点分钟 = 只换仪表，K线图仍由自己的分钟模块管（不打断看盘）。 */
+var GAUGE_TFS = [['1m','1分'],['5m','5分'],['15m','15分'],['30m','30分'],
+                 ['60m','1小时'],['1d','1天'],['1w','1周'],['1M','1月']];
+
+function gaugeTfBar(period, minute){
+  var cur = minute || period;
+  return '<div class="vtabs g-tf" id="gaugeTfBtns">' + GAUGE_TFS.map(function(p){
+    return '<button class="btn' + (cur === p[0] ? ' on' : '') +
+      '" data-gtf="' + p[0] + '">' + p[1] + '</button>';
+  }).join('') + '</div>';
+}
+
+/* 周期切换的共用实现：日级走整页重拉，分钟只换仪表。 */
+function setStockPeriod(p){
+  var min = (p.length === 2 && p[0] !== '1') || p === '1m';
+  if(min){
+    state.stockPeriod = p;                 // 与 K 线图共用一个口径
+    state.stockMinuteData = null;
+    renderStockMtSummary(null);
+    var nb = $('stockPerNote');
+    if(nb) nb.style.display = 'none';
+    document.querySelectorAll('#perMinBtns .btn').forEach(function(x){
+      x.classList.toggle('on', x.dataset.minperiod === p);
+    });
+    document.querySelectorAll('#perBtns .btn').forEach(function(x){
+      x.classList.remove('on');
+    });
+    loadStockMinute(state.stockCode, p);   // K线图换分钟，仪表随指标重拉
+    // 整页重绘会把周期条一起换掉，指针要接上一次的角度继续扫。
+    // 角度从 DOM 现取：setStockPeriod 是独立函数，拿不到 renderStock 里的闭包变量。
+    flipGauges(readGaugeAngles(), p);
+  }else{
+    state.stockPeriod = p;
+    state.stockMinute = null;
+    loadStock(state.stockCode);
+  }
+}
+
+/* 只重拉仪表（不动 K 线）。分钟周期下用得最多，
+   因为 loadStockMinute 只重画图、不会顺带更新指标卡片。 */
+function reloadGauges(){
+  var box = $('gaugeBox');
+  if(!box || !state.stockCode) return;
+  var p = state.stockMinute || state.stockPeriod;
+  box.classList.add('busy');
+  api('/api/indicators_full?code=' + encodeURIComponent(state.stockCode) +
+      '&period=' + p)
+    .then(function(r){
+      box.classList.remove('busy');
+      if(r && r.rating_gauges){
+        box.innerHTML = gaugesHtml(r.rating_gauges, true);
+      }else{
+        box.innerHTML = gaugeEmpty(p, r && r.bars, r && r.bars_need);
+      }
+      var bar = $('gaugeTfBtns');
+      if(bar) bar.querySelectorAll('.btn').forEach(function(b){
+        b.classList.toggle('on', b.dataset.gtf === p);
+      });
+    })
+    .catch(function(e){
+      box.classList.remove('busy');
+      box.innerHTML = '<div class="empty">指标加载失败：' + esc(e.message) + '</div>';
+    });
+}
+
+/* 仪表算不出来时的说明。
+   最常见的原因是根数不够（月线、新股），不是故障，得说清楚——
+   否则用户会以为「这个页面坏了」，或者更糟：以为「没有信号」。 */
+function gaugeEmpty(period, bars, need){
+  var reason = (bars && need && bars < need)
+    ? '该周期只有 ' + bars + ' 根 K 线，而计算 200 周期均线需 ' + need +
+      ' 根（数据源最多只提供这么多），根数不足会让均线组少几项、结论悄悄算偏，故不展示。'
+    : '该周期 K 线不足，无法计算 26 项指标。';
+  return '<div class="gauge-none"><b>本周期无评级</b><span>' + esc(reason) + '</span></div>';
+}
+
+/* 指针从上一次的读数扫到新读数。
+   入参 oldG 是换周期前记下的 [{k, ang}]（见 renderStock 开头）。
+   做法：新 DOM 画在正确角度 → 抹掉 transition → 贴回旧角度 → 强制回流
+   → 恢复 transition → 异步贴回正确角度。
+   没有这段，换周期的指针是「瞬间闪现」，因为 innerHTML 重建后浏览器
+   看不到前后是同一个元素。 */
+/* 读当前三根指针的角度。换周期前调一次，交给 flipGauges 做补间起手。 */
+function readGaugeAngles(){
+  var out = [];
+  document.querySelectorAll('#gaugeBox .gauge').forEach(function(el){
+    var nd = el.querySelector('.g-needle');
+    if(!nd || !el.dataset.gauge) return;
+    out.push({k: el.dataset.gauge, ang: rotOf(nd)});
+  });
+  return out;
+}
+function rotOf(nd){
+  return (String(nd.style.transform || '').match(/-?[\d.]+(?=deg)/) || ['0'])[0];
+}
+
+function flipGauges(oldG, period){
+  if(!oldG || !oldG.length) return;
+  var box = $('gaugeBox');
+  if(!box) return;
+  var moved = [];
+  oldG.forEach(function(o){
+    var nd = box.querySelector('.gauge[data-gauge="' + o.k + '"] .g-needle');
+    if(!nd) return;
+    var to = nd.style.transform;              // rotate(Xdeg)，已是新值
+    var da = Math.abs(parseFloat((to.match(/-?[\d.]+(?=deg)/) || ['0'])[0]) -
+                      parseFloat(o.ang));
+    if(da < 0.5) return;                      // 几乎没动，就别演了
+    nd.style.transition = 'none';
+    nd.style.transform = 'rotate(' + o.ang + 'deg)';
+    moved.push([nd, to]);
+  });
+  if(!moved.length) return;
+  void box.offsetWidth;                       // 强制回流，让「旧角度」生效
+  moved.forEach(function(m){
+    m[0].style.transition = '';
+    m[0].style.transform = m[1];
+  });
+  // 无障碍：prefers-reduced-motion 下 CSS 已把 transition 关掉，
+  // 这里贴回终值即可，不会动。
+}
+
 function marketTag(code){
   if(code.indexOf('bj') === 0) return '<span class="tag bj">北</span>';
   if(code.indexOf('sh68') === 0) return '<span class="tag n">科创</span>';
@@ -3155,6 +3375,13 @@ function switchTab(want){
   if(want === 'bullbear' && !bbState.loaded) loadBullbear();
   // 股债温度挂在牛熊速查页当第二张卡，同样懒加载（它要拉 5000+ 根 K 线，不预取）
   if(want === 'bullbear' && !sbState.loaded) loadStockBond();
+  // ETF 规模占比是牛熊页第三张卡。首屏要拉全量 ETF 清单 + 季报，约 10s，
+  // 必须懒加载且带 loading 态，否则进页会像卡死。
+  if(want === 'bullbear' && !erState.loaded && !erState.busy) loadEtfRatio();
+  // 市场体检是牛熊页第四张卡。全 A 快照要 35s，必须懒加载。
+  if(want === 'bullbear' && !mvState.loaded && !mvState.busy) loadMarketVitals();
+  if(want === 'bullbear' && !mgState.loaded && !mgState.busy) loadMargin();
+  if(want === 'bullbear' && !crState.loaded && !crState.busy) loadCrowding();
   // 懒加载：首次进入「因子实验室」时读股票池覆盖情况
   if(want === 'factorlab' && !flState.loaded) loadFactorLab();
   // 懒加载：首次进入「连板梯队」时拉取（#100）
@@ -3956,6 +4183,7 @@ function loadStock(code){
     if(res[3] && res[3].valuation) d._valuation = res[3].valuation;
     renderStock(d);
     appendStockAiCard();
+    appendStockValCard(d.quote || {});
     loadStockExtra(code);
     runStockAiGuarded();   // A 常驻：进页自动拉一次（命中后端缓存则不消耗配额）
   }).catch(function(e){ die(el, '个股数据加载失败：' + e.message); });
@@ -3982,8 +4210,30 @@ function appendStockAiCard(){
     '  <div class="card-b" id="stockAiOut"><div class="empty">正在分析…</div></div>' +
     '</div>');
 }
-/* C 小白视角开关：状态存 localStorage，切换后仅重绘当前结果，不重新调 LLM */
-function toggleStockAiPlain(on){
+/* 个股页估值计算器：牛熊页同一套三模型（valInit/valCalc 带 pfx），挂在 stockWrap 末尾
+   （renderStock 整体覆盖，与 appendStockAiCard 同理只能动态追加）。预填规则（quote 快照）：
+   股价×3 ← price；EPS ← price/pe（pe>0 才填）；目标PE ← 当前 pe；股本 ← total_cap/price（亿）。
+   FCF 与每股股息行情快照里没有，保持默认值——页面上如实说明，不假装有数据。 */
+function appendStockValCard(q){
+  var wrap = $('stockWrap');
+  if(!wrap || $('stockValCard')) return;
+  var pre = {};
+  var pr = (typeof q.price === 'number' && q.price > 0) ? q.price : null;
+  if(pr){
+    pre.Price = pr; pre.Price2 = pr; pre.Price3 = pr;
+    if(q.pe > 0){ pre.Eps = +(pr / q.pe).toFixed(4); pre.Pe = +q.pe.toFixed(1); }
+    if(typeof q.total_cap === 'number' && q.total_cap > 0)
+      pre.Share = +(q.total_cap / pr).toFixed(3);
+  }
+  wrap.insertAdjacentHTML('beforeend',
+    '<div class="card" id="stockValCard" style="margin-top:12px">' +
+    '<div class="card-h"><h2>🧮 估值计算器</h2>' +
+    '<div class="meta">' + (pr ? '参数已按当前行情预填，FCF 与股息快照里没有、保持默认，请按自己的判断修改'
+      : '行情缺股价，未能预填；下面是通用默认参数') + '</div></div>' +
+    '<div class="card-b" id="stockValBody"></div></div>');
+  valInit('stockValBody', 'sv', pre);
+}
+/* C 小白视角开关：状态存 localStorage，切换后仅重绘当前结果，不重新调 LLM */function toggleStockAiPlain(on){
   localStorage.setItem('stockAiPlain', on ? '1' : '0');
   if(window._lastStockAi) renderStockAi(window._lastStockAi, $('stockAiOut'));
 }
@@ -4225,6 +4475,9 @@ function syncHeaderVar(){
 }
 
 function renderStock(d){
+  // 换周期前先把旧指针的角度记下来（renderStock 出口用，见 flipGauges）。
+  // 不在这里就重画，否则旧值会被新 DOM 顶掉，FLIP 就无从取旧值。
+  var oldG = readGaugeAngles();
   // 主题切换重绘的数据源：存最近一次完整响应，换主题时重画而不重新取数
   state.chartCache.stock = d;
   var q = d.quote || {};
@@ -4430,7 +4683,12 @@ function renderStock(d){
       // 存一份给检查脚本核对「指针角度 ↔ 评分」的对应关系；
       // 只读不写渲染，删掉也不影响页面。
       state._gauges = gs;
-      return gs ? gaugesHtml(gs) : '';
+      // 周期条永远渲染：没有仪表时它也是「换个周期再看看」的入口。
+      return gaugeTfBar(state.stockPeriod, state.stockMinute) +
+        '<div id="gaugeBox">' +
+        (gs ? gaugesHtml(gs, true) : gaugeEmpty(state.stockPeriod,
+              d._full && d._full.bars, d._full && d._full.bars_need)) +
+        '</div>';
     })() +
     '<div class="chartgrid c2">' +
       '<div><div class="chart" id="cmacd"></div></div>' +
@@ -4556,11 +4814,7 @@ function renderStock(d){
   // 此时图表还没画、卡片还是空的，调了等于没调（见 renderStock 末尾）。
   // 日/周/月周期
   document.querySelectorAll('#perBtns .btn').forEach(function(b){
-    b.onclick = function(){
-      state.stockPeriod = b.dataset.period;
-      state.stockMinute = null;              // 点日线即退出分钟模式
-      loadStock(state.stockCode);
-    };
+    b.onclick = function(){ setStockPeriod(b.dataset.period); };
   });
   // 分钟周期：同一张图就地切换。不重新请求日线接口，
   // 只换 ckline 的数据源，所以不需要整页 loading。
@@ -4584,6 +4838,18 @@ function renderStock(d){
       loadStockMinute(state.stockCode, p);
     };
   });
+  // 仪表周期条（1分~1月）：与上面两排是同一份周期状态，
+  // 只是排布顺序和文案跟 TradingView 一致。
+  document.querySelectorAll('#gaugeTfBtns .btn').forEach(function(b){
+    b.onclick = function(){
+      var p = b.dataset.gtf;
+      if(p === (state.stockMinute || state.stockPeriod)) return;
+      document.querySelectorAll('#gaugeTfBtns .btn').forEach(function(x){
+        x.classList.toggle('on', x === b);
+      });
+      setStockPeriod(p);
+    };
+  });
   // 通道切换：仅重绘画图，无需重新请求数据
   document.querySelectorAll('#chanBtns .btn').forEach(function(b){
     b.onclick = function(){
@@ -4601,6 +4867,14 @@ function renderStock(d){
   } else if(d.indicators){
     drawCharts(d);
   }
+  // 同一帧里换周期时，对视觉做一次连续插值（FLIP）。
+  //
+  // 为什么不能只靠 CSS transition：换周期会重拉整页、走 innerHTML 重建，
+  // DOM 是新的，浏览器不会把「旧节点的角度」和「新节点的角度」关联起来，
+  // transition 永远不触发，指针是瞬间跳过去的。TradingView 的那种感觉来自
+  // 指针真的在扫。所以记下旧几何 → 拆掉动效 → 用新值画好 → 再把旧值贴回去
+  // 并触发 transition，让浏览器补上中间帧。
+  flipGauges(oldG, state.stockMinute || state.stockPeriod);
   /* 折叠必须在图表画完之后再判定：bindMobFold 是按 body.scrollHeight
      实测高度决定收谁的，图表还没画时容器高度接近 0，所有卡片都会
      被判成"不够高、不用折"，等于折叠从未生效。
@@ -4706,6 +4980,7 @@ function loadStockMinute(code, period){
     stockMinuteNote(d);
     renderStockMtSummary(d);
     drawStockMinute(d);
+    reloadGauges();          // 周期变了，仪表跟着换口径
   }).catch(function(e){
     var msg = e.message || '';
     stockMinuteNote({ error: '分钟线加载失败：' + msg +
@@ -4713,6 +4988,7 @@ function loadStockMinute(code, period){
     renderStockMtSummary(null);
     var c = ec('ckline');
     if(c) c.clear();
+    reloadGauges();          // 图没了，仪表也别留在上一周期的读数上
   });
 }
 
@@ -4840,8 +5116,11 @@ function redrawChartsForTheme(){
     // 2) 牛熊速查：雷达 + 温度趋势
     if(cc.bbRadar) drawBBRadar(cc.bbRadar);
     if(cc.bbTrend) drawBBTrend(cc.bbTrend);
+    if(cc.mg) drawMarginChart(cc.mg);
     // 3) 股债温度
-    if(cc.sb) drawSBChart(cc.sb);
+    if(cc.sb){ drawSBChart(cc.sb); drawSBLegs(cc.sb); }
+    // 3b) 沪深300 ETF 规模占比（两张图：季报份额 + 今日占比）
+    if(cc.er){ drawErHist(cc.er); drawErToday(cc.er); }
     // 4) 回测净值图（个股/牛熊/公式三个容器，各自的数据独立缓存）
     Object.keys(cc).forEach(function(k){
       if(k.indexOf('bt_') === 0 && cc[k]){
@@ -8232,9 +8511,10 @@ function loadBullbear(){
       h += '</div>';
     });
     h += '</div>';
+    h += renderFearGreed(r.fear_greed);
     h += '<div class="bbsec"><div class="bbh2">情绪面六维' +
       '<span class="sub">与上面四类是两套切分：六维只看情绪面，估值/量能不在雷达里</span></div>' +
-      '<div id="bbRadar" class="bbchart"></div></div>';
+      '<div id="bbRadar" class="bbchart" style="height:300px"></div></div>';
     h += '<div class="bbsec"><div class="bbh2">温度趋势' +
       '<span class="sub" id="bbTrendMeta"></span></div>' +
       '<div id="bbTrend" class="bbchart"></div></div>';
@@ -8274,15 +8554,45 @@ function drawBBRadar(rd){
     return;
   }
   var items = rd.items || [];
-  var c = ec('bbRadar');
+  // 左雷达 + 右读数条：雷达受高度限制画不大，宽屏两侧全是空白；
+  // 且雷达读不出数值，六维分数旁边直接列出来更可读
+  el.innerHTML = '<div style="display:flex;align-items:center;gap:24px;flex-wrap:wrap">' +
+    '<div id="bbRadarC" style="width:340px;height:300px;flex:none"></div>' +
+    '<div style="flex:1;min-width:260px">' + items.map(function(x){
+      var v = x.score;
+      var bar = v == null ? '' :
+        '<span style="display:inline-block;height:8px;width:' +
+        Math.round(v / 100 * 100) + 'px;max-width:120px;background:rgba(252,213,53,.65);' +
+        'border-radius:2px;vertical-align:middle;margin:0 8px"></span>';
+      return '<div style="display:flex;align-items:center;font-size:12px;padding:6px 0;' +
+        'border-bottom:1px solid var(--line2)">' +
+        '<span style="width:44px;color:var(--tx2)">' + esc(x.name) + '</span>' + bar +
+        '<span style="color:' + (v == null ? 'var(--tx3)' : 'var(--tx)') + ';font-weight:600">' +
+        (v == null ? '缺数' : Number(v).toFixed(1)) + '</span></div>';
+    }).join('') +
+    '<div style="font-size:11px;color:var(--tx3);margin-top:8px">六维分数与雷达同一数据：' +
+    '缺数维度按 0 画（塌陷角），轴名已置灰标注</div></div></div>';
+  var c = ec('bbRadarC');
   if(!c) return;
+  // 缺数维度：轴名置灰加「缺」标记（数据仍按 0 画，塌陷角一眼能看出来源）
+  var missMap = {};
+  items.forEach(function(x){ if(x.score == null) missMap[x.name] = true; });
   c.setOption({
     tooltip: { backgroundColor: ecv('--ec-tip-bg'), borderColor: ecv('--ec-line'),
       textStyle: { color: ecv('--ec-text'), fontSize: 12 } },
     radar: {
       indicator: items.map(function(x){ return {name: x.name, max: 100}; }),
-      radius: '66%', center: ['50%', '54%'],
-      axisName: { fontSize: 12, color: ecv('--ec-text') },
+      radius: '68%',
+      center: ['50%', '52%'],
+      axisName: {
+        formatter: function(name){
+          return missMap[name] ? '{miss|' + name + ' · 缺}' : '{ok|' + name + '}';
+        },
+        rich: {
+          ok: { color: ecv('--ec-text'), fontSize: 12 },
+          miss: { color: ecv('--tx3'), fontSize: 11 }
+        }
+      },
       axisLine: { lineStyle: { color: ecv('--ec-line') } },
       splitLine: { lineStyle: { color: ecv('--ec-line') } },
       splitArea: { areaStyle: { color: [ecv('--ec-split'), 'transparent'] } }
@@ -8291,11 +8601,17 @@ function drawBBRadar(rd){
       type: 'radar', symbolSize: 4,
       // 缺数维度回落 0 会把「没取到」画成「跌到谷底」，用 tooltip 说明即可，
       // 但雷达会把 0 显示成塌陷的角——所以缺数时按 0 画并在标题标出 have/total
-      data: [{ name: '情绪面', value: items.map(function(x){
+      data: [{ name: '情绪面（' + (rd.have || 0) + '/' + (rd.total || 0) + ' 维有效）',
+        value: items.map(function(x){
           return x.score == null ? 0 : x.score; }),
         itemStyle: { color: 'rgba(252,213,53,.9)' },
         areaStyle: { color: 'rgba(252,213,53,.18)' },
-        lineStyle: { width: 2, color: 'rgba(252,213,53,.9)' } }]
+        lineStyle: { width: 2, color: 'rgba(252,213,53,.9)' },
+        tooltip: { formatter: function(){
+          return items.map(function(x){
+            return x.name + '：' + (x.score == null ? '缺数' : x.score);
+          }).join('<br/>');
+        } } }]
     }]
   }, true);
 }
@@ -8360,6 +8676,700 @@ function scheduleBullbear(){
     if(on && !document.hidden && $('autoRef') && $('autoRef').checked) loadBullbear();
     else scheduleBullbear();
   }, 300000);
+}
+
+/* =========================================================================
+   两融杠杆：余额/杠杆率 2010 年起（东财数据中心，T+1 日频）
+   ========================================================================= */
+var mgState = {loaded:false, busy:false};
+function loadMargin(){
+  var el = $('mgBody'), meta = $('mgMeta');
+  if(!el || mgState.busy) return;
+  mgState.busy = true;
+  api('/api/margin').then(function(d){
+    mgState.busy = false; mgState.loaded = true;
+    if(!d || !d.ok){
+      die(el, '两融数据暂不可用：' + ((d && d.error) || '接口未就绪'));
+      if(meta) meta.textContent = '数据暂缺';
+      return;
+    }
+    var L = d.latest || {};
+    meta.innerHTML = esc(d.date) + ' · ' + (d.hist_days || 0) + ' 个交易日 · ' +
+      esc(d.since || '') + ' 起' + (d.cached ? ' <span class="ktag">缓存</span>' : '');
+    var h = '<div class="bbhero">' +
+      '<span class="n">' + (L.rzrq != null ? (L.rzrq / 10000).toFixed(2) : '—') +
+      '</span><span class="band">万亿元两融余额</span>' +
+      '<span class="bbpos">融资 <b>' + (L.rz != null ? (L.rz / 10000).toFixed(2) : '—') +
+      '</b> 万亿 · 融券 <b>' + (L.rq != null ? L.rq.toFixed(0) : '—') +
+      '</b> 亿 · 杠杆率 <b>' + (L.lev != null ? L.lev.toFixed(2) + '%' : '—') + '</b></span></div>';
+    h += '<div class="bbgrp" style="grid-template-columns:repeat(auto-fit,minmax(150px,1fr))">' +
+      [['日变化', L.day_chg != null ? (L.day_chg > 0 ? '+' : '') + L.day_chg.toFixed(1) + ' 亿' : '—'],
+       ['近7天', L.chg7 != null ? (L.chg7 > 0 ? '+' : '') + L.chg7.toFixed(2) + '%' : '—'],
+       ['近1个月', L.chg30 != null ? (L.chg30 > 0 ? '+' : '') + L.chg30.toFixed(2) + '%' : '—'],
+       ['近20日', L.chg20 != null ? (L.chg20 > 0 ? '+' : '') + L.chg20.toFixed(2) + '%' : '—'],
+       ['20日变化分位', d.chg20_pct != null ? (d.chg20_pct * 100).toFixed(0) + '%' : '攒分位中']
+      ].map(function(x){
+        return '<div><div class="bbh"><span class="nm">' + esc(x[0]) + '</span>' +
+          '<span class="sc">' + esc(x[1]) + '</span></div></div>';
+      }).join('') + '</div>';
+    h += '<div id="mgChart" class="bbchart"></div>';
+    if(d.caveats && d.caveats.length)
+      h += '<div class="bbnote">' + d.caveats.map(esc).join('<br/>') + '</div>';
+    el.innerHTML = h;
+    state.chartCache.mg = d;
+    drawMarginChart(d);
+  }).catch(function(e){
+    mgState.busy = false;
+    die(el, '两融加载失败：' + e.message);
+  });
+}
+/* 双轴：蓝线两融余额（左轴，亿元）、红线杠杆率（右轴，%） */
+function drawMarginChart(d){
+  var el = $('mgChart');
+  if(!el || !d || !d.ok) return;
+  var s = d.series || [];
+  var c = ec('mgChart');
+  if(!c) return;
+  c.setOption({
+    tooltip: { trigger: 'axis', backgroundColor: ecv('--ec-tip-bg'),
+      borderColor: ecv('--ec-line'),
+      textStyle: { color: ecv('--ec-text'), fontSize: 12 } },
+    legend: { data: ['两融余额', '杠杆率'], textStyle: { color: ecv('--ec-text'), fontSize: 11 } },
+    grid: { left: 56, right: 56, top: 34, bottom: 46 },
+    dataZoom: [{ type: 'inside' }, { type: 'slider', height: 16, bottom: 8 }],
+    xAxis: { type: 'category', data: s.map(function(x){ return x[0]; }),
+      axisLine: { lineStyle: { color: ecv('--ec-line') } },
+      axisLabel: { fontSize: 10.5, color: ecv('--ec-text'),
+        formatter: function(v){ return String(v).slice(0, 7); } },
+      splitLine: { show: false } },
+    yAxis: [
+      { type: 'value', name: '余额(亿)', scale: true,
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
+        splitLine: { lineStyle: { color: ecv('--ec-split') } } },
+      { type: 'value', name: '杠杆率(%)', scale: true, position: 'right',
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
+        splitLine: { show: false } }
+    ],
+    series: [
+      { name: '两融余额', type: 'line', showSymbol: false,
+        data: s.map(function(x){ return x[1]; }),
+        lineStyle: { width: 1.5, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' } },
+      { name: '杠杆率', type: 'line', yAxisIndex: 1, showSymbol: false,
+        data: s.map(function(x){ return x[2] == null ? null : Number(x[2]); }),
+        lineStyle: { width: 1.5, color: '#ef4444' }, itemStyle: { color: '#ef4444' } }
+    ]
+  }, true);
+}
+
+/* =========================================================================
+   行业拥挤度：成交占比/换手/动量（当日读数），综合分位攒够 30 天才给
+   ========================================================================= */
+var crState = {loaded:false, busy:false};
+function loadCrowding(){
+  var el = $('crBody'), meta = $('crMeta');
+  if(!el || crState.busy) return;
+  crState.busy = true;
+  api('/api/crowding').then(function(d){
+    crState.busy = false; crState.loaded = true;
+    if(!d || !d.ok){
+      die(el, '拥挤度暂不可用：' + ((d && d.error) || '接口未就绪'));
+      if(meta) meta.textContent = '数据暂缺';
+      return;
+    }
+    meta.innerHTML = esc(d.date) + ' · ' + (d.n_boards || 0) + ' 个板块 · ' +
+      (d.enough ? '分位样本 ' + d.hist_days + ' 天'
+                : '分位样本 ' + d.hist_days + '/30 天（攒分位中）');
+    var h = '';
+    var items = d.items || [];
+    function crTable(list, offset){
+      var maxRatio = Math.max.apply(null, items.map(function(x){ return x.to_ratio || 0; })) || 1;
+      var t = '<div class="tbl-wrap"><table class="tbl"><thead><tr>' +
+        '<th>#</th><th>板块</th><th>成交占比</th><th>换手率</th><th>涨跌</th>' +
+        '<th title="成交占比/换手/动量三个历史分位的均值">综合拥挤度</th></tr></thead><tbody>';
+      list.forEach(function(x, i){
+        var lv = x.crowd == null ? '' : (x.crowd >= 66 ? '🔴' : x.crowd >= 33 ? '🟡' : '🟢');
+        t += '<tr><td>' + (offset + i + 1) + '</td><td>' + esc(x.name) + '</td>' +
+          '<td><span style="display:inline-block;height:8px;width:' +
+          Math.round((x.to_ratio || 0) / maxRatio * 60) + 'px;background:var(--accent);vertical-align:middle;margin-right:6px;border-radius:2px"></span>' +
+          (x.to_ratio * 100).toFixed(2) + '%</td>' +
+          '<td>' + (x.tr != null ? x.tr.toFixed(2) + '%' : '—') + '</td>' +
+          '<td style="color:' + (x.chg > 0 ? 'var(--up)' : x.chg < 0 ? 'var(--dn)' : 'var(--tx3)') + '">' +
+          (x.chg != null ? (x.chg > 0 ? '+' : '') + x.chg.toFixed(2) + '%' : '—') + '</td>' +
+          '<td>' + (x.crowd != null ? lv + ' ' + x.crowd + '%'
+            : '<span style="color:var(--tx3)">攒分位中</span>') + '</td></tr>';
+      });
+      return t + '</tbody></table></div>';
+    }
+    // 默认只展开前 15，其余折叠——124 行一屏放不下
+    h += crTable(items.slice(0, 15), 0);
+    if(items.length > 15){
+      h += '<details class="bbdet"><summary>其余 ' + (items.length - 15) + ' 个板块</summary>' +
+        crTable(items.slice(15), 15) + '</details>';
+    }
+    if(d.caveats && d.caveats.length)
+      h += '<div class="bbnote">' + d.caveats.map(esc).join('<br/>') + '</div>';
+    el.innerHTML = h;
+  }).catch(function(e){
+    crState.busy = false;
+    die(el, '拥挤度加载失败：' + e.message);
+  });
+}
+
+/* =========================================================================
+   估值计算器：DCF（两阶段 FCF）/ PE 目标价 / DDM（两阶段股息）
+   纯前端本地计算，无后端无数据源；参数敏感是模型本性，页面上如实写明
+   ========================================================================= */
+/* bodyId/pfx/prefill：牛熊页 valInit() 行为不变（pfx='v'）；
+   个股页 appendStockValCard 传 pfx='sv' + 行情预填（股价×3 / EPS / 目标PE / 股本）。 */
+function valInit(bodyId, pfx, prefill){
+  bodyId = bodyId || 'valBody';
+  pfx = pfx || 'v';
+  var el = $(bodyId);
+  if(!el || el.dataset.ready) return;
+  el.dataset.ready = '1';
+  function inp(label, id, def, step){
+    return '<div class="vrow">' + label +
+      '<input type="number" id="' + pfx + id + '" value="' + def + '" step="' + step + '"></div>';
+  }
+  el.innerHTML =
+    '<div class="bbgrp" style="grid-template-columns:repeat(auto-fit,minmax(260px,1fr))">' +
+    // —— DCF ——
+    '<div><div class="bbh"><span class="nm">DCF 两阶段（FCF）</span></div>' +
+    inp('近四季自由现金流 FCF(亿)', 'Fcf', 100, 1) +
+    inp('高增 g1（%，1~5年）', 'G1', 10, 0.5) +
+    inp('永续 g2（%）', 'G2', 3, 0.25) +
+    inp('折现率 WACC（%）', 'Wacc', 9, 0.5) +
+    inp('总股本（亿股）', 'Share', 10, 0.1) +
+    inp('当前股价', 'Price', 20, 0.01) +
+    '<div class="vout" id="' + pfx + 'DcfOut"></div></div>' +
+    // —— PE ——
+    '<div><div class="bbh"><span class="nm">PE 目标价</span></div>' +
+    inp('每股收益 EPS', 'Eps', 1.5, 0.01) +
+    inp('目标市盈率', 'Pe', 20, 0.5) +
+    inp('当前股价', 'Price2', 20, 0.01) +
+    '<div class="vout" id="' + pfx + 'PeOut"></div></div>' +
+    // —— DDM ——
+    '<div><div class="bbh"><span class="nm">DDM 两阶段（股息）</span></div>' +
+    inp('每股股息 D0', 'Div', 0.8, 0.01) +
+    inp('高增 g1（%，1~10年）', 'Dg1', 8, 0.5) +
+    inp('永续 g2（%）', 'Dg2', 3, 0.25) +
+    inp('要求回报率 r（%）', 'Dr', 9, 0.5) +
+    inp('当前股价', 'Price3', 20, 0.01) +
+    '<div class="vout" id="' + pfx + 'DdmOut"></div></div>' +
+    '</div>' +
+    '<div class="bbnote">三个模型都对参数高度敏感：永续增长率 g2 必须小于折现率，' +
+    '否则公式发散（会算出天文数字，那不是估值是 bug）。输入自己的假设，输出自己的结论；' +
+    '本工具只做算术，不预测任何参数。参考 guchacha 估值工具的模型形式。</div>';
+  // 预填（个股页传行情快照；键名 = id 去掉 pfx）
+  if(prefill){
+    Object.keys(prefill).forEach(function(k){
+      var ip = $(pfx + k);
+      if(ip && prefill[k] != null && isFinite(prefill[k])) ip.value = prefill[k];
+    });
+  }
+  el.querySelectorAll('input').forEach(function(inp2){
+    inp2.addEventListener('input', function(){ valCalc(pfx); });
+  });
+  valCalc(pfx);
+}
+function _v(id, pfx){
+  pfx = pfx || 'v';
+  var x = parseFloat(($(pfx + id) || {}).value);
+  return isFinite(x) ? x : null;
+}
+function _fmt6(x){
+  if(x == null || !isFinite(x) || x > 1e8) return '—（参数发散，检查 g2 &lt; 折现率）';
+  return x.toFixed(2);
+}
+function valCalc(pfx){
+  pfx = (typeof pfx === 'string') ? pfx : 'v';   // addEventListener 会传 event 对象进来
+  // DCF 两阶段：PV = Σ FCF₀(1+g1)^t/(1+r)^t (t=1..5) + TV5 ÷ (1+r)^5
+  var fcf = _v('Fcf', pfx), g1 = _v('G1', pfx), g2 = _v('G2', pfx), r = _v('Wacc', pfx),
+      sh = _v('Share', pfx), pr = _v('Price', pfx);
+  var out = $(pfx + 'DcfOut');
+  if(out){
+    if(fcf && g1 != null && g2 != null && r && sh){
+      var r1 = r / 100, a = 1 + g1 / 100, b = 1 + g2 / 100;
+      if(g2 / 100 >= r1){
+        out.innerHTML = '永续 g2 ≥ 折现率，公式不收敛，改参数再算。';
+      } else {
+        var pv = 0, f = fcf;
+        for(var t = 1; t <= 5; t++){ f *= a; pv += f / Math.pow(1 + r1, t); }
+        var tv = f * b / (r1 - g2 / 100);          // gordon 终值（FCF5 ×(1+g2)/(r-g2)）
+        pv += tv / Math.pow(1 + r1, 5);
+        var per = pv / sh;
+        var mg = pr ? (per / pr - 1) * 100 : null;
+        out.innerHTML = '每股内在价值 <b>' + _fmt6(per) + '</b> 元' +
+          (mg != null ? '（现价 ' + pr.toFixed(2) + '，' +
+            (mg >= 0 ? '折价 ' : '溢价 ') + Math.abs(mg).toFixed(1) + '%）' : '');
+      }
+    } else out.textContent = '参数不全';
+  }
+  // PE
+  var eps = _v('Eps', pfx), pe = _v('Pe', pfx), p2 = _v('Price2', pfx), o2 = $(pfx + 'PeOut');
+  if(o2){
+    if(eps && pe){
+      var tp = eps * pe;
+      var mg2 = p2 ? (tp / p2 - 1) * 100 : null;
+      o2.innerHTML = '目标价 <b>' + tp.toFixed(2) + '</b> 元' +
+        (mg2 != null ? '（现价 ' + p2.toFixed(2) + '，' +
+          (mg2 >= 0 ? '空间 +' : '空间 ') + mg2.toFixed(1) + '%）' : '');
+    } else o2.textContent = '参数不全';
+  }
+  // DDM 两阶段：D0(1+g1)^t/(1+r)^t (t=1..10) + gordon 终值折现
+  var d0 = _v('Div', pfx), dg1 = _v('Dg1', pfx), dg2 = _v('Dg2', pfx), dr = _v('Dr', pfx),
+      p3 = _v('Price3', pfx), o3 = $(pfx + 'DdmOut');
+  if(o3){
+    if(d0 && dg1 != null && dg2 != null && dr){
+      var rr = dr / 100, a1 = 1 + dg1 / 100, b1 = 1 + dg2 / 100;
+      if(dg2 / 100 >= rr){
+        o3.textContent = '永续 g2 ≥ 要求回报率，公式不收敛。';
+      } else {
+        var pv2 = 0, d = d0;
+        for(var t2 = 1; t2 <= 10; t2++){ d *= a1; pv2 += d / Math.pow(1 + rr, t2); }
+        var tv2 = d * b1 / (rr - dg2 / 100);
+        pv2 += tv2 / Math.pow(1 + rr, 10);
+        var mg3 = p3 ? (pv2 / p3 - 1) * 100 : null;
+        o3.innerHTML = '每股内在价值 <b>' + _fmt6(pv2) + '</b> 元' +
+          (mg3 != null ? '（现价 ' + p3.toFixed(2) + '，' +
+            (mg3 >= 0 ? '折价 ' : '溢价 ') + Math.abs(mg3).toFixed(1) + '%）' : '');
+      }
+    } else o3.textContent = '参数不全';
+  }
+}
+// 进入牛熊页就初始化（纯本地，无成本）
+var _oldBullbearLoad = loadBullbear;
+loadBullbear = function(){
+  _oldBullbearLoad.apply(this, arguments);
+  valInit();
+};
+
+/* 恐贪指数子块（0-100，越高越贪婪）。注意配色与上面温度条方向相反：
+   红=恐慌（逆向关注）、绿=贪婪（逆向警惕），与后端 _FG_BANDS 一一对应 */
+var FG_SEGS = [['crimson',25],['red',20],['yellow',10],['lime',20],['green',25]];
+function renderFearGreed(fg){
+  if(!fg) return '';
+  if(!fg.ok){
+    return '<div class="bbsec"><div class="bbh2">恐贪指数<span class="sub">' +
+      esc(fg.error || '暂不可用') + '</span></div></div>';
+  }
+  var b = fg.band || {};
+  var h = '<div class="bbsec"><div class="bbh2">恐贪指数' +
+    '<span class="sub">逆向情绪量表：分越高越贪婪（与左侧温度语义相反，并排看别混算）</span></div>';
+  h += '<div class="bbhero">' +
+    '<span class="n">' + Number(fg.score).toFixed(1) + '</span>' +
+    '<span class="band"><i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:' +
+    esc(b.color || 'yellow') + ';margin-right:5px"></i>' + esc(b.name) + '</span>' +
+    '<span class="bbpos">' + esc(b.note || '') + '</span>' +
+    '<span class="bbpos" style="color:var(--tx3)">' + (fg.have || 0) + '/' + (fg.total || 0) + ' 项子指标</span>' +
+    '</div>';
+  h += '<div class="bbbar">' + FG_SEGS.map(function(s){
+      return '<i class="' + s[0] + '" style="width:' + s[1] + '%;background:' + s[0] + '"></i>';
+    }).join('') +
+    '<span class="bbpin" style="left:calc(' + Number(fg.score) + '% - 1px)"></span></div>';
+  h += '<div class="bbgrp" style="grid-template-columns:1fr">';
+  (fg.items || []).forEach(function(x){
+    h += '<div class="bbdim" title="' + esc(x.hint || '') + '"><span class="nm">' + esc(x.name) +
+      '</span><span class="sc">' + (x.score == null
+        ? '<span style="color:var(--tx3)">缺数</span>' : Number(x.score).toFixed(1)) +
+      '</span><span class="st">' + esc(x.detail || '') + '</span></div>';
+  });
+  (fg.missing || []).forEach(function(m){
+    h += '<div class="bbdim"><span class="nm" style="color:var(--tx3)">' + esc(m) +
+      '</span><span class="st">未取到，权重已摊给其余项</span></div>';
+  });
+  h += '</div>';
+  if(fg.caveats && fg.caveats.length){
+    h += '<div class="bbnote">' + fg.caveats.map(esc).join('<br/>') + '</div>';
+  }
+  return h + '</div>';
+}
+
+/* =========================================================================
+   沪深300 ETF 规模占比（B 方案：季频历史 + 今日实时点）
+   --------------------------------------------------------------------------
+   为什么要拆成两张图，而不是一条线画到底：
+     分子（ETF 份额）只有季报，一年 4 个点；
+     分母（指数流通市值）连季报都没有，只有当日快照。
+   于是「占比」只在今天这一个点上成立。把两者合到一根 y 轴，单位不同的
+   两组数会互相冒充——「亿份」看起来就像「%」。所以：
+     上图：季报份额（亿份）折线，只画真实点，不插值；
+     下图：今日一个占比点（%），没有历史线可画，就老实只画一个点。
+   季报点之间不连线（虚线只是视觉引导），因为季报之间份额到底怎么变没数据。
+   ========================================================================= */
+var erState = {loaded:false, busy:false, d:null, span:'all'};
+
+function erSetSpan(s){
+  erState.span = s;
+  var seg = $('erSpanBar');
+  if(seg){ Array.prototype.forEach.call(seg.children, function(b){
+    b.className = 'erseg' + (b.dataset.s === s ? ' on' : '');
+  }); }
+  if(erState.d) drawErHist(erState.d);
+}
+
+function loadEtfRatio(force){
+  var el = $('erBody'), meta = $('erMeta');
+  if(!el || erState.busy) return;
+  erState.busy = true;
+  el.innerHTML = '<div class="load"><span class="spin"></span>读取 ETF 规模与季报…（首次约 10 秒）</div>';
+  api('/api/hs300_etf_ratio' + (force ? '?force=true' : '')).then(function(d){
+    erState.busy = false;
+    if(!d || !d.ok){
+      die(el, 'ETF 规模占比暂不可用：' + ((d && d.error) || '上游未就绪'));
+      meta.textContent = '数据暂缺';
+      return;
+    }
+    erState.loaded = true;
+    erState.d = d;
+    renderEtfRatio(el, meta, d);
+  }).catch(function(e){
+    erState.busy = false;
+    die(el, 'ETF 规模占比加载失败：' + e.message);
+    meta.textContent = '加载失败';
+  });
+}
+
+function erYi(v, digits){
+  if(v == null || isNaN(v)) return '—';
+  var d = digits == null ? 1 : digits;
+  return v >= 10000 ? (v / 10000).toFixed(2) + ' 万亿' : v.toFixed(d) + ' 亿';
+}
+
+/* 季报末点 vs 今日实时的缺口说明。两句话，但缺了它整张卡会被误读：
+   季报末点与今日实时可能差 50%+，因为季报是季末快照、实时是今天。
+   不说明，读者会以为折线终点就是现在。 */
+function histGapHint(d){
+  var h = d.hist || [];
+  var top = (d.pool || [])[0];
+  if(!h.length || !top || !top.cap) return '';
+  var last = h[h.length - 1];
+  // 近 4 期的起止份额从数据里取，不写死「888→241」——写死的话换一只 ETF
+  // （或季报更新）就会印出一句与图不符的话，那比不说更糟。
+  var recent = h.slice(-4);
+  var swing = '';
+  if(recent.length >= 2){
+    var a = recent[0].shares, b = recent[recent.length - 1].shares;
+    if(a && b && Math.abs(b / a - 1) > 0.2){
+      swing = '（' + esc(top.name) + ' 近 ' + recent.length + ' 期从 ' +
+        a + ' 亿份到 ' + b + ' 亿份）';
+    }
+  }
+  return '<div class="innote" style="margin:0 0 8px">' +
+    '蓝线是<b>季报期末</b>的近似占比（510300 净资产 ÷ 折算流通市值，最后一点 ' +
+    esc(last.date) + '），红线是当日指数收盘。季报之间会发生大额申赎' + swing +
+    '，所以下面「今日占比」用的是今天的实时规模，不接在折线终点上。</div>';
+}
+
+function renderEtfRatio(el, meta, d){
+  state.chartCache.er = d;
+  var t = d.today || {}, ix = d.index || {};
+  meta.innerHTML = esc(t.date || '') +
+    (d.cached ? ' <span class="ktag" title="30 分钟缓存，季报本季度内不变">缓存</span>' : '') +
+    '<span class="ktag ktag-eod" style="margin-left:6px" title="份额与市值都是当日快照；历史是季报，季度更新">份额当日 · 历史季报</span>';
+
+  var h = '<div class="bbhero">' +
+    '<span class="n">' + (t.ratio == null ? '—' : (t.ratio * 100).toFixed(2) + '%') + '</span>' +
+    '<span class="band">ETF 合计 / 指数流通市值</span>' +
+    '<span class="bbpos">分子 <b>' + erYi(t.etf_cap, 0) + '</b>（' + (d.pool_n || 0) + ' 只）' +
+    ' · 分母 <b>' + erYi(t.index_cap, 0) + '</b></span>' +
+    '</div>';
+
+  // 百分位（参考 baifenwei 的读法）：只对 510300 口径给——历史重建线是
+  // 510300 一只的，拿全池今日占比去比等于换尺子。窗口样本不足时该格留「—」，
+  // 不硬给一个 4 个样本的「百分位」。
+  var tr = t.top_ratio;
+  if(tr != null && d.pct){
+    var head = '', cells = '';
+    [['all', '全部'], ['10', '近10年'], ['5', '近5年'], ['3', '近3年']]
+      .forEach(function(kv){
+        head += '<th>' + kv[1] + '</th>';
+        var p = d.pct[kv[0]];
+        cells += '<td>' + (p ? '<b>' + (p.pct * 100).toFixed(1) + '%</b>' +
+          '<span class="sub"> n=' + p.n + '</span>' : '—') + '</td>';
+      });
+    h += '<div class="bbsec"><div class="bbh2">规模占比历史百分位（510300 口径）' +
+      '<span class="sub">当前 ' + (tr * 100).toFixed(2) + '%；严格小于当前的样本 ÷ 窗口样本</span></div>' +
+      '<table class="sbtbl-t pcttbl"><thead><tr>' + head +
+      '</tr></thead><tbody><tr>' + cells + '</tr></tbody></table></div>';
+  }
+
+  h += '<div class="bbsec"><div class="bbh2">规模占比 × 沪深300（510300 口径，近似重建）' +
+    '<span class="sub">蓝线占比 · 红线指数收盘（右轴）</span></div>' +
+    // 跨度切换在数据端做（前端 slice），不重拉接口
+    '<div id="erSpanBar" class="erspanbar">' +
+    [['all','全部'],['10','近10年'],['5','近5年'],['3','近3年']].map(function(kv){
+      return '<button class="erseg' + (erState.span === kv[0] ? ' on' : '') +
+        '" data-s="' + kv[0] + '" onclick="erSetSpan(\'' + kv[0] + '\')">' + kv[1] + '</button>';
+    }).join('') + '</div>' +
+    // 季报末点与今日实时份额的缺口，必须在图上方说清：不说的话，读者会把
+    // 「最后那个季报点」和下面「今日占比」当成同一个时点的两件事。
+    histGapHint(d) +
+    '<div id="erHistChart" class="bbchart" style="height:280px"></div></div>';
+
+  h += '<div class="bbsec"><div class="bbh2">今日占比' +
+    '<span class="sub">只有这一个点有历史之外的意义：它是今天真实的占比</span></div>' +
+    // 同一把尺子的对照：510300 单只口径的今日占比 vs 它自己的历史序列。
+    // 全池占比（上面的大数字）没有历史可对比，所以百分位只在这里给。
+    (t.top_ratio != null && d.pct && d.pct.all ?
+      '<div class="innote" style="margin:0 0 8px">510300 单只口径今日 <b>' +
+      (t.top_ratio * 100).toFixed(2) + '%</b>，在其季频重建序列中位于' +
+      '<b>第 ' + (d.pct.all.pct * 100).toFixed(0) + ' 百分位</b>' +
+      '（样本高点 ' + (d.pct.all.hi * 100).toFixed(2) + '% @ ' + d.pct.all.hi_date +
+      ' · 低点 ' + (d.pct.all.lo * 100).toFixed(2) + '% @ ' + d.pct.all.lo_date + '）。</div>' : '') +
+    '<div id="erTodayChart" class="bbchart" style="height:120px"></div></div>';
+
+  // 池子明细：占比是「37 只合计」，不列出来用户无法判断漏没漏
+  if((d.pool || []).length){
+    h += '<details class="bbdet"><summary>ETF 池明细（按规模降序，前 ' +
+      (d.pool || []).length + ' / 共 ' + (d.pool_n || 0) + ' 只）</summary>' +
+      '<table class="sbtbl-t"><thead><tr><th>代码</th><th>名称</th><th>规模</th><th>占池子</th></tr></thead><tbody>' +
+      (d.pool || []).map(function(x){
+        var sh = d.pool_cap ? x.cap / d.pool_cap * 100 : null;
+        return '<tr><td>' + esc(x.code) + '</td><td>' + esc(x.name) + '</td>' +
+          '<td>' + erYi(x.cap) + '</td><td>' +
+          (sh == null ? '—' : sh.toFixed(1) + '%') + '</td></tr>';
+      }).join('') + '</tbody></table></details>';
+  }
+
+  if(d.hist_error){
+    h += '<div class="innote">季报历史取数失败（' + esc(d.hist_error) +
+      '），上图无数据；今日占比不受影响。</div>';
+  }
+
+  h += '<details class="bbdet"><summary>口径与局限（必读，尤其第 2 条）</summary>' +
+    '<ol class="sbca">' + (d.caveats || []).map(function(c){
+      return '<li>' + esc(c) + '</li>';
+    }).join('') + '</ol></details>';
+
+  h += '<div class="sbctl"><button class="btn" onclick="loadEtfRatio(true)">重新取数（跳过缓存）</button></div>';
+
+  h += '<div class="bbnote">读法：这个比例是<b>慢变量</b>，0.80% → 0.82% 是 +2.5% 的相对增长，' +
+    '不是「涨了 0.02 个点」。<br>它衡量的是<b>被动资金相对流通盘的大小</b>，' +
+    '<b>不判断涨跌</b>——占比高不代表要涨，只代表这部分筹码是被动锁定的。<br>' +
+    '上图双轴只<b>比较方向、不比较数值高低</b>（左轴 %、右轴点位）；蓝线是 510300 单只的' +
+    '近似重建，与上面全池主读数口径不同，别直接对读。</div>';
+
+  el.innerHTML = h;
+  drawErHist(d);
+  drawErToday(d);
+}
+
+function drawErHist(d){
+  var dom = $('erHistChart');
+  if(!dom) return;
+  var all = (d.hist || []).filter(function(x){
+    return x.ratio != null && x.idx_close != null;
+  });
+  if(all.length < 2){
+    dom.innerHTML = '<div class="innote">' +
+      ((d.hist_ratio_error || d.hist_error) ?
+        '历史占比重建失败（' + esc(d.hist_ratio_error || d.hist_error) + '）。' :
+        '季报点数不足，无法画趋势。') + '</div>';
+    return;
+  }
+  // 跨度切换：前端 slice，不重拉接口。季频数据 1 年只有 4 个点，
+  // 「近3年」是最细的窗口——不给「近1年」，4 个点画出来是误导。
+  var cut = {'all': 0, '10': 10, '5': 5, '3': 3}[erState.span] || 0;
+  var hist = all;
+  if(cut){
+    var lim = Date.now() - cut * 365.25 * 864e5;
+    hist = all.filter(function(x){ return new Date(x.date).getTime() >= lim; });
+  }
+  if(hist.length < 2){ hist = all; }
+  var c = ec('erHistChart');
+  if(!c) return;
+  c.setOption({
+    tooltip: { trigger: 'axis', backgroundColor: ecv('--ec-tip-bg'),
+      borderColor: ecv('--ec-line'), textStyle: { color: ecv('--ec-text'), fontSize: 12 },
+      formatter: function(ps){
+        var p = ps && ps[0]; if(!p) return '';
+        var o = hist[p.dataIndex] || {};
+        var s = o.date + '<br/>' + esc(d.hist_name || '') + ' 占比 <b>' +
+          (o.ratio * 100).toFixed(3) + '%</b>' +
+          '<br/>期末净资产 <b>' + erYi(o.nav_cap, 0) + '</b> · 份额 <b>' + o.shares + '</b> 亿份';
+        (ps.slice(1) || []).forEach(function(q){
+          if(q.seriesName === '沪深300收盘')
+            s += '<br/><span style="color:#e05a5a">沪深300收盘 <b>' +
+              Number(o.idx_close).toFixed(0) + '</b></span>';
+        });
+        s += '<br/><span style="opacity:.7">占比为近似重建：假设流通股本不变</span>';
+        return s;
+      } },
+    legend: { show: true, top: 0, right: 8, itemWidth: 14, textStyle: { color: ecv('--ec-text'), fontSize: 11 },
+      data: ['510300占比', '沪深300收盘'] },
+    grid: { left: 56, right: 62, top: 28, bottom: 28 },
+    xAxis: { type: 'category', data: hist.map(function(x){ return x.date; }),
+      // 季频点不多，但仍按容器宽度抽稀——窄屏「近3年」12 个点也放不下一行全画
+      axisLabel: { color: ecv('--ec-text'), fontSize: 11,
+        interval: function(idx){
+          var w = (dom.clientWidth || 800);
+          var n = Math.max(2, Math.ceil(hist.length / Math.max(3, Math.floor(w / 90))));
+          return idx % n === 0 || idx === hist.length - 1;
+        },
+        rotate: 0, hideOverlap: true },
+      axisLine: { lineStyle: { color: ecv('--ec-line') } } },
+    yAxis: [
+      { type: 'value', scale: true, name: '占比%',
+        nameTextStyle: { color: ecv('--ec-text'), fontSize: 10 },
+        axisLabel: { color: ecv('--ec-text'), fontSize: 11,
+          formatter: function(v){ return (v * 100).toFixed(2) + '%'; } },
+        splitLine: { lineStyle: { color: ecv('--ec-split') } } },
+      { type: 'value', scale: true, name: '点位', splitLine: { show: false },
+        nameTextStyle: { color: '#e05a5a', fontSize: 10 },
+        axisLabel: { color: '#e05a5a', fontSize: 11 } },
+    ],
+    series: [
+      { name: '510300占比', type: 'line',
+        data: hist.map(function(x){ return x.ratio; }),
+        // 只画真实季报点：线的连接是「相邻两次披露」，不是插值——
+        // 两次披露之间份额可能砍半，连线只是趋势方向、不是过程。
+        symbol: 'circle', symbolSize: 5, smooth: false,
+        lineStyle: { width: 1.6, color: ecv('--accent') },
+        itemStyle: { color: ecv('--accent') } },
+      { name: '沪深300收盘', type: 'line', yAxisIndex: 1,
+        data: hist.map(function(x){ return x.idx_close; }),
+        symbol: 'none', smooth: false,
+        lineStyle: { width: 1.2, color: '#e05a5a', opacity: .85 },
+        itemStyle: { color: '#e05a5a' } },
+    ],
+  }, true);
+}
+
+function drawErToday(d){
+  var dom = $('erTodayChart');
+  if(!dom) return;
+  var t = d.today || {};
+  if(t.ratio == null){ dom.innerHTML = '<div class="innote">今日占比不可用（缺分子或分母）。</div>'; return; }
+  var c = ec('erTodayChart');
+  if(!c) return;
+  var pct = t.ratio * 100;
+  // 0~2% 的刻度：实测约 0.8%，给到 2% 留出增长空间。超过 2% 时轴自动撑开。
+  var hi = Math.max(2, Math.ceil(pct * 1.5));
+  c.setOption({
+    tooltip: { trigger: 'item', backgroundColor: ecv('--ec-tip-bg'),
+      borderColor: ecv('--ec-line'), textStyle: { color: ecv('--ec-text'), fontSize: 12 },
+      formatter: function(){ return '今日占比 <b>' + pct.toFixed(2) + '%</b><br/>' +
+        'ETF 合计 ' + erYi(t.etf_cap, 0) + '<br/>指数流通市值 ' + erYi(t.index_cap, 0); } },
+    grid: { left: 52, right: 24, top: 30, bottom: 24 },
+    xAxis: { type: 'value', min: 0, max: hi,
+      axisLabel: { color: ecv('--ec-text'), fontSize: 11, formatter: '{value}%' },
+      splitLine: { lineStyle: { color: ecv('--ec-split') } } },
+    yAxis: { type: 'category', data: ['今日'], axisLabel: { color: ecv('--ec-text') } },
+    series: [{
+      type: 'bar', data: [pct], barWidth: 22,
+      itemStyle: { color: ecv('--accent'), borderRadius: [0, 4, 4, 0] },
+      label: { show: true, position: 'right', color: ecv('--ec-text'),
+        fontSize: 12, formatter: pct.toFixed(2) + '%' },
+    }],
+  }, true);
+}
+
+/* =========================================================================
+   市场体检：破净率 + 风格罗盘 + 宽基指数 PE
+   --------------------------------------------------------------------------
+   破净率/指数 PE 的历史分位是自建样本（每天落一行），攒够 30 天才显示；
+   风格分位用 K 线比值、立即可用。全 DOM 渲染不用 echarts——三块都是
+   「几个读数 + 一张小表」，画布是负担不是工具。
+   ========================================================================= */
+var mvState = {loaded:false, busy:false};
+
+function loadMarketVitals(force){
+  var el = $('mvBody'), meta = $('mvMeta');
+  if(!el || mvState.busy) return;
+  mvState.busy = true;
+  el.innerHTML = '<div class="load"><span class="spin"></span>读取全市场快照…（首次约 35 秒）</div>';
+  api('/api/market_vitals' + (force ? '?force=true' : '')).then(function(d){
+    mvState.busy = false;
+    if(!d || !d.ok){
+      die(el, '市场体检暂不可用：' + ((d && d.error) || '上游未就绪'));
+      meta.textContent = '数据暂缺';
+      return;
+    }
+    mvState.loaded = true;
+    renderMarketVitals(el, meta, d);
+  }).catch(function(e){
+    mvState.busy = false;
+    die(el, '市场体检加载失败：' + e.message);
+    meta.textContent = '加载失败';
+  });
+}
+
+/* 分位 → 冷热措辞。与牛熊温度的六档不同：分位 0.5 是「居中」，两头才极端。 */
+function mvPctTag(p){
+  if(p == null) return '<span class="ktag">攒分位中</span>';
+  var v = p * 100;
+  var cls = v >= 80 ? 'ktag-warn' : (v <= 20 ? 'ktag-eod' : '');
+  var word = v >= 80 ? '偏高' : (v >= 60 ? '中高' : (v >= 40 ? '居中' : (v >= 20 ? '中低' : '偏低')));
+  return '<span class="ktag ' + cls + '">' + v.toFixed(0) + '% · ' + word + '</span>';
+}
+
+function renderMarketVitals(el, meta, d){
+  var b = d.broken || {};
+  meta.innerHTML = esc(d.date || '') +
+    (d.cached ? ' <span class="ktag" title="30 分钟缓存">缓存</span>' : '') +
+    '<span class="ktag ktag-eod" style="margin-left:6px" title="破净率每天收盘后落一行，历史分位自建样本攒够 30 天才给">历史自建 · 逐日积累</span>';
+
+  var h = '<div class="bbhero">' +
+    '<span class="n">' + (b.ratio == null ? '—' : (b.ratio * 100).toFixed(2) + '%') + '</span>' +
+    '<span class="band">全 A 破净率（PB&lt;1 占比）</span>' +
+    '<span class="bbpos">破净 <b>' + (b.below_n || 0) + '</b> / ' + (b.total || 0) + ' 只' +
+    (b.neg_n ? ' · 净资产为负 ' + b.neg_n + ' 只（单列不计）' : '') + '</span></div>';
+
+  // 自建分位：样本不足时明说在攒，不硬给
+  h += '<div class="innote" style="margin:0 0 10px">历史分位：' +
+    (d.broken_pct != null
+      ? '<b>' + (d.broken_pct * 100).toFixed(1) + '%</b>（自建样本 ' + d.hist_days + ' 天）'
+      : '样本 ' + (d.hist_days || 0) + '/30 天，每天收盘后自动落一行，攒够 30 天后这里会显示分位') +
+    '。破净率高 = 资产端便宜的位置，不是买入信号。</div>';
+
+  // 风格罗盘：三对比值。分位 0 是合法读数（当前就是一年最低），必须照实显示
+  h += '<div class="bbsec"><div class="bbh2">风格罗盘' +
+    '<span class="sub">近 250/60 日分位 · 近 20 日涨跌</span></div>' +
+    '<table class="sbtbl-t"><thead><tr><th>风格对</th><th>比值</th><th>250日分位</th><th>60日分位</th><th>近20日</th></tr></thead><tbody>' +
+    (d.styles || []).map(function(s){
+      if(s.error) return '<tr><td>' + esc(s.label || '') + '</td><td colspan="4" class="sub">取数失败：' + esc(s.error) + '</td></tr>';
+      var cls = (s.chg20 || 0) >= 0 ? 'up' : 'down';
+      return '<tr><td>' + esc(s.label) + '<span class="sub"> ' + esc(s.desc) + '</span></td>' +
+        '<td><b>' + s.ratio.toFixed(3) + '</b></td>' +
+        '<td>' + mvPctTag(s.p250) + '</td><td>' + mvPctTag(s.p60) + '</td>' +
+        '<td class="' + cls + '">' + (s.chg20 == null ? '—' : (s.chg20 >= 0 ? '+' : '') + (s.chg20 * 100).toFixed(1) + '%') + '</td></tr>';
+    }).join('') + '</tbody></table>' +
+    '<div class="innote" style="margin-top:8px">比值 &gt;1 = 左边风格强。分位低说明这对比值处在近一年偏低位置（左边相对变弱），但今天是极端下跌日、读数贴地可能只是单日行情。</div></div>';
+
+  // 宽基 PE：今日读数 + 自建分位（攒够才显示）
+  h += '<div class="bbsec"><div class="bbh2">宽基指数 PE' +
+    '<span class="sub">当日快照 · 历史分位自建样本</span></div>' +
+    '<table class="sbtbl-t"><thead><tr><th>指数</th><th>PE</th><th>自建分位</th></tr></thead><tbody>' +
+    (d.index_pe || []).map(function(p){
+      var pc = (d.pe_pct || {})[p.code];
+      return '<tr><td>' + esc(p.name) + '</td>' +
+        '<td><b>' + (p.pe == null ? '—' : p.pe.toFixed(2)) + '</b></td>' +
+        '<td>' + (pc != null ? (pc * 100).toFixed(0) + '%' : '<span class="sub">攒分位中</span>') + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+
+  // 巴菲特指标：全A总市值 / GDP TTM（总市值来自同一份快照，零加请求）
+  var bf = d.buffett || {};
+  if(bf.ratio != null){
+    h += '<div class="bbsec"><div class="bbh2">巴菲特指标' +
+      '<span class="sub">全A总市值 / GDP 滚动四季</span></div>' +
+      '<div class="bbhero"><span class="n">' + (bf.ratio * 100).toFixed(1) + '%</span>' +
+      '<span class="band">总市值 ' + (bf.total_mv / 1e4).toFixed(1) + ' 万亿 · GDP(TTM) ' +
+      (bf.gdp_ttm / 1e4).toFixed(1) + ' 万亿</span>' +
+      '<span class="bbpos">' + esc(bf.gdp_label || '') +
+      ' · 自建分位 ' + (d.buffett_pct != null
+        ? '<b>' + (d.buffett_pct * 100).toFixed(1) + '%</b>'
+        : '样本 ' + (d.buffett_hist_days || 0) + '/30 天（攒分位中）') + '</span></div>' +
+      '<div class="innote" style="margin-top:8px">比值越高 = 股市相对经济体量越贵。参考站同口径 76.0%，'
+        + '两边差 2~3 个点来自快照时点与板块覆盖差异，口径互验成立。</div></div>';
+  }
+
+  h += '<details class="bbdet"><summary>口径与局限</summary>' +
+    '<ol class="sbca">' + (d.caveats || []).map(function(c){ return '<li>' + esc(c) + '</li>'; }).join('') + '</ol></details>';
+
+  h += '<div class="sbctl"><button class="btn" onclick="loadMarketVitals(true)">重新取数（跳过缓存）</button></div>';
+
+  el.innerHTML = h;
 }
 
 /* =========================================================================
@@ -8441,6 +9451,11 @@ function renderStockBond(el, meta, d) {
     '<span class="sub" id="sbChartMeta"></span></div>' +
     '<div id="sbChart" class="bbchart" style="height:260px"></div></div>';
 
+  h += '<div class="bbsec"><div class="bbh2">两条腿的走势' +
+    '<span class="sub">沪深300（左轴）× ' + esc((d.target || {}).bond_name || '国债ETF') +
+    '（右轴），量纲不同只比方向不比高低</span></div>' +
+    '<div id="sbLegs" class="bbchart" style="height:240px"></div></div>';
+
   h += '<div class="bbsec"><div class="bbh2">触轨之后股票相对债券怎么走' +
     '<span class="sub">对数超额收益，正=股票跑赢</span></div>' +
     sbFwdTable(d.fwd || []) + '</div>';
@@ -8469,6 +9484,47 @@ function renderStockBond(el, meta, d) {
 
   el.innerHTML = h;
   drawSBChart(d);
+  drawSBLegs(d);
+}
+
+/* 两条腿的价格线：蓝=沪深300（左轴），红=国债ETF（右轴）。
+   series 里本来就带两腿收盘价，纯前端复用，不向后端多要数据 */
+function drawSBLegs(d){
+  var dom = $('sbLegs');
+  if(!dom) return;
+  var s = d.series || [];
+  if(!s.length){ dom.innerHTML = ''; return; }
+  var c = ec('sbLegs');
+  if(!c) return;
+  c.setOption({
+    tooltip: { trigger: 'axis', backgroundColor: ecv('--ec-tip-bg'),
+      borderColor: ecv('--ec-line'),
+      textStyle: { color: ecv('--ec-text'), fontSize: 12 } },
+    legend: { data: ['沪深300', (d.target || {}).bond_name || '国债ETF'],
+      textStyle: { color: ecv('--ec-text'), fontSize: 11 } },
+    grid: { left: 60, right: 60, top: 30, bottom: 26 },
+    xAxis: { type: 'category', data: s.map(function(x){ return x.date; }),
+      axisLine: { lineStyle: { color: ecv('--ec-line') } },
+      axisLabel: { fontSize: 10.5, color: ecv('--ec-text'),
+        formatter: function(v){ return String(v).slice(0, 7); } },
+      splitLine: { show: false } },
+    yAxis: [
+      { type: 'value', name: '沪深300', scale: true,
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
+        splitLine: { lineStyle: { color: ecv('--ec-split') } } },
+      { type: 'value', name: 'ETF(元)', scale: true, position: 'right',
+        axisLabel: { fontSize: 10.5, color: ecv('--ec-text') },
+        splitLine: { show: false } }
+    ],
+    series: [
+      { name: '沪深300', type: 'line', showSymbol: false,
+        data: s.map(function(x){ return x.stock; }),
+        lineStyle: { width: 1.5, color: '#3b82f6' }, itemStyle: { color: '#3b82f6' } },
+      { name: (d.target || {}).bond_name || '国债ETF', type: 'line', yAxisIndex: 1,
+        showSymbol: false, data: s.map(function(x){ return x.bond; }),
+        lineStyle: { width: 1.5, color: '#ef4444' }, itemStyle: { color: '#ef4444' } }
+    ]
+  }, true);
 }
 
 function sbPct(v){

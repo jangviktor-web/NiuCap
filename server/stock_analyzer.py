@@ -203,6 +203,36 @@ def build_context(code: str, hours: int = 24) -> Dict[str, Any]:
     except Exception:
         ctx["missing"].append("近期快讯")
 
+    # 6) 关键价位（页面 K 线图画了 9 类支撑/压力线，AI 此前看不见）：
+    #    只挑离现价最近的一根支撑+一根压力给模型——9 根全给只会被摘要成废话，
+    #    「离现价多远」才是模型判断空间/风险要用的量。
+    try:
+        import keylevels as _kls
+        _klines = ds.get_kline(ncode, "1d", 250)
+        if _klines and len(_klines) >= 20:
+            _cur = ctx["quote"].get("price")
+            if not _cur:
+                _cur = float(_klines[-1]["close"])
+            _lv = _kls.key_levels(_klines) or []
+            for _l in _lv:
+                _l["side"] = "resistance" if _l["price"] > _cur else "support"
+                _l["dist"] = round((_l["price"] / _cur - 1) * 100, 2)
+            sup = sorted([_l for _l in _lv if _l["side"] == "support"],
+                         key=lambda x: -x["price"])[:2]
+            res = sorted([_l for _l in _lv if _l["side"] == "resistance"],
+                         key=lambda x: x["price"])[:2]
+            # 去重：5日压力与20日压力常是同一个价，给模型两条一模一样的没意义
+            seen_p, dedup = set(), []
+            for _l in sup + res:
+                if _l["price"] not in seen_p:
+                    seen_p.add(_l["price"])
+                    dedup.append(_l)
+            ctx["levels"] = dedup
+    except Exception:
+        pass
+    if not ctx.get("levels"):
+        ctx["missing"].append("关键价位")
+
     ctx["ok"] = bool(ctx["quote"] or ctx["tech"] or ctx["news"])
     if not ctx["ok"]:
         ctx["reason"] = "该股无可用数据（快照/技术面/快讯均缺失，可能代码有误或停牌）"
@@ -247,6 +277,13 @@ def _ctx_prompt(ctx: Dict[str, Any]) -> str:
             L.append("  信号：" + "；".join(f"{s.get('name')}({s.get('dir')})" for s in sigs))
     else:
         L.append("【技术面】暂无")
+    lv = ctx.get("levels") or []
+    if lv:
+        def _lvt(x):
+            tag = "压力" if x.get("side") == "resistance" else "支撑"
+            return f"{tag} {x.get('label')} {x['price']}（{x['dist']:+.1f}%）"
+        L.append("【关键价位】" + "；".join(_lvt(x) for x in lv) +
+                 "（括号内为距现价涨跌幅）")
     L.append("【所属板块】" + ("、".join(ctx.get("sectors") or []) or "暂无"))
     fl = ctx.get("flow") or {}
     if fl:
@@ -548,6 +585,14 @@ def selfcheck() -> int:
     p = _ctx_prompt(ctx)
     ok("_ctx_prompt：含股票名/行情/技术面/板块/快讯",
        "贵州茅台" in p and "1500" in p and "均线多头排列" in p and "白酒" in p and "白酒板块走高" in p)
+    # 关键价位维度：支撑在现价下方给负距、压力在上方给正距，渲染进 prompt
+    ctx_lv = dict(ctx, levels=[
+        {"label": "20日支撑", "price": 1450.0, "side": "support", "dist": -3.33},
+        {"label": "60日高", "price": 1560.0, "side": "resistance", "dist": 4.0}])
+    p_lv = _ctx_prompt(ctx_lv)
+    ok("_ctx_prompt：关键价位含支撑/压力与距现价%",
+       "关键价位" in p_lv and "支撑 20日支撑 1450.0（-3.3%）" in p_lv
+       and "压力 60日高 1560.0（+4.0%）" in p_lv)
     miss = {"name": "", "code": "sh000001", "quote": {}, "tech": {}, "sectors": [], "news": [], "missing": []}
     ok("_ctx_prompt：缺维度标注暂无(≥3)", _ctx_prompt(miss).count("暂无") >= 3)
 

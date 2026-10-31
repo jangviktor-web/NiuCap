@@ -14,3 +14,4 @@ pymysql>=1.1.0
 # ⚠️ 许可证为 ELTDX Research-Only License，仅限个人学习/研究，禁止商业使用。
 #    详见 server/sources/eltdx_source.py 的模块说明。
 eltdx>=3.2
+quantalib>=0.8

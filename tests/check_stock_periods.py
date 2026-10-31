@@ -235,7 +235,8 @@ def test_channel_and_subcharts(page):
 def main():
     errors = []
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+        browser = pw.chromium.launch(headless=True, args=["--no-sandbox"],
+                                     executable_path=os.environ.get("CHROME", "/usr/bin/chromium"))
         page = browser.new_page()
         page.on("console", lambda m: errors.append(m.text) if m.type == "error" else None)
         page.on("pageerror", lambda e: errors.append(str(e)))
@@ -244,6 +245,19 @@ def main():
         try:
             page.goto(BASE, wait_until="domcontentloaded")
             page.wait_for_timeout(1200)
+            # 未登录时进页会弹登录窗，把「我的自选」等按钮盖住，点击全超时。
+            # 本脚本测的是周期切换，不是权限；先把测试账号登进去。
+            page.evaluate("""async ()=>{
+              await fetch('/api/auth/register',{method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({username:'bltest',password:'bltest123',display:'x'})}).catch(()=>{});
+              await fetch('/api/auth/login',{method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({username:'bltest',password:'bltest123'})});}""")
+            page.reload(wait_until="domcontentloaded")
+            page.wait_for_timeout(1500)
+            page.evaluate("()=>{var m=document.getElementById('authModal');"
+                          " if(m){m.classList.remove('on'); m.style.display='none';}}")
             test_watch_all_periods(page)
             test_rank_entry(page)
             test_search_entry(page)

@@ -30,6 +30,7 @@ ponytail: 权重（估值30/资金25/情绪25/技术20）沿用外部模板的�
 from __future__ import annotations
 
 import datetime as _dt
+import math
 import os
 import threading
 import time
@@ -178,6 +179,244 @@ def radar(ov: Optional[Dict[str, Any]]) -> Dict[str, Any]:
 
 
 # ===========================================================================
+# 恐贪指数（参考站 baifenwei 口径的本地降配版）——并进牛熊卡当子指标
+# ---------------------------------------------------------------------------
+# 参考站用 6 子指标加权（波动率/相对换手/两融/市场宽度/RSI/涨跌停比）。
+# 逐项对照我们的数据可得性：
+#   波动率 / 相对换手 —— 指数 K 线就有 10 年历史，滚动分位今天就能给「真分位」；
+#   RSI(14)          —— K 线现算，量纲本身就是 0-100；
+#   市场宽度 / 涨跌停比 —— changedist() 当日快照有，但**无历史**，只能用绝对
+#                        阈值映射（宽度=上涨占比直接当分；涨跌停比对数映射），
+#                        不能假装它们有分位；
+#   两融情绪          —— margin_lab（东财数据中心 2010 年起），近20日融资余额
+#                        变化的历史分位，加仓=贪婪端。
+# 与上面 13 维评分的关系：**口径重叠约一半但语义相反**（13 维分越高=越热=减仓，
+# 恐贪分越高=越贪婪），所以只并排展示、绝不混算，也不动 13 维评分本身。
+# 缺失子指标按剩余权重再分配（与 score() 同纪律），绝不返回 0 分表达「取数失败」。
+# ===========================================================================
+FG_CACHE = "feargreed_cache"
+FG_TTL = 900          # 15 分钟：宽度/涨跌停比是当日快照，别太陈；K 线部分天级不变
+
+# 0-25 极度恐慌 … 75-100 极度贪婪（参考站五档）。注意配色方向与 13 维温度相反：
+# 恐贪红=恐慌（该贪婪）、绿=贪婪（该恐惧），是逆向指标。
+_FG_BANDS = (
+    (0, 25, "极度恐慌", "crimson", "市场在夺门而逃，历史上常是逆向关注区"),
+    (25, 45, "恐慌", "red", "情绪偏冷，分批比一把梭合适"),
+    (45, 55, "中性", "yellow", "不冷不热，恐贪本身不给方向"),
+    (55, 75, "贪婪", "lime", "情绪偏热，注意兑现节奏"),
+    (75, 101, "极度贪婪", "green", "人人乐观，历史上常是逆向警惕区"),
+)
+
+
+def _fg_band(score: float) -> Dict[str, Any]:
+    for lo, hi, name, color, note in _FG_BANDS:
+        if lo <= score < hi:
+            return {"name": name, "color": color, "note": note}
+    return {"name": "未知", "color": "yellow", "note": ""}
+
+
+def _fg_pct(cur: Optional[float], vals: List[Optional[float]],
+            min_n: int = 30) -> Optional[float]:
+    """当前值在历史样本中的分位（严格小于/样本数）。样本不足给 None。"""
+    vs = [v for v in vals if v is not None]
+    if cur is None or len(vs) < min_n:
+        return None
+    return sum(1 for v in vs if v < cur) / len(vs)
+
+
+def _fg_rsi(closes: List[float], n: int = 14) -> Optional[float]:
+    """Wilder RSI。样本不足或全平盘返回 None（全平盘 RSI 无定义，不能给 50 冒充）。"""
+    if len(closes) < n + 1:
+        return None
+    gains = losses = 0.0
+    diffs = [closes[i] - closes[i - 1] for i in range(1, len(closes))]
+    d = diffs[-n:]
+    for x in d:
+        if x > 0:
+            gains += x
+        else:
+            losses -= x
+    ag, al = gains / n, losses / n
+    if ag + al == 0:
+        return None
+    return ag / (ag + al) * 100.0
+
+
+def _fg_vol_series(closes: List[float], win: int = 20) -> List[Optional[float]]:
+    """滚动年化波动率序列（对数收益标准差 ×√250）。前 win-1 个点为 None。"""
+    rets: List[Optional[float]] = [None]
+    for i in range(1, len(closes)):
+        rets.append(math.log(closes[i] / closes[i - 1]) if closes[i - 1] > 0 else None)
+    out: List[Optional[float]] = []
+    for i in range(len(rets)):
+        if i < win - 1:
+            out.append(None)
+            continue
+        seg = [r for r in rets[i - win + 1:i + 1] if r is not None]
+        m = sum(seg) / len(seg)
+        out.append(math.sqrt(sum((r - m) ** 2 for r in seg) / (win - 1)) * math.sqrt(250.0))
+    return out
+
+
+def _fg_limit_score(up: Optional[int], down: Optional[int]) -> Optional[float]:
+    """涨跌停比 → 0-100。r=0.2 → 0 分，r=5 → 100 分（对数映射，两端截断）。
+
+    ±1 平滑：跌停为 0 时避免除零，也让比值对单只涨跌停不那么敏感。
+    无历史所以是绝对阈值映射，如实标注、不冒充分位。
+    """
+    if up is None or up < 0 or down is None or down < 0:
+        return None
+    r = (up + 1) / (down + 1)
+    s = 100.0 * math.log(r / 0.2) / math.log(25.0)
+    return max(0.0, min(100.0, s))
+
+
+def fear_greed(force: bool = False) -> Dict[str, Any]:
+    """恐贪指数 0-100（越高越贪婪）+ 五档 + 子指标明细。"""
+    import json as _json
+    import store as _st
+
+    now = time.time()
+    if not force:
+        raw = _st.meta_get(FG_CACHE, "")
+        if raw:
+            try:
+                c = _json.loads(raw)
+                if now - float(c.get("at") or 0) < FG_TTL and c.get("data"):
+                    return dict(c["data"], cached=True)
+            except Exception:
+                pass
+
+    import datasource as ds
+    import westock as _w
+
+    items: List[Dict[str, Any]] = []
+    caveats: List[str] = []
+
+    # —— 波动率 / 换手 / RSI：沪深300 日 K，10 年滚动分位 ——
+    try:
+        kl = ds.get_kline("sh000300", "1d", 3800)
+    except Exception as e:                          # noqa: BLE001
+        kl = []
+        caveats.append(f"K 线取数失败（{type(e).__name__}），历史分位类子指标全部缺席")
+    closes = [float(r["close"]) for r in kl if r.get("close")]
+    vols_raw = [r.get("volume") for r in kl]
+
+    if len(closes) >= 60:
+        vs = _fg_vol_series(closes)
+        cur_vol = next((v for v in reversed(vs) if v is not None), None)
+        p = _fg_pct(cur_vol, vs)
+        items.append({
+            "name": "波动率", "score": round((1 - p) * 100, 1) if p is not None else None,
+            "detail": (f"20日年化波动率 {cur_vol * 100:.1f}%，10年分位 {p * 100:.0f}%"
+                       if p is not None and cur_vol else "分位不足"),
+            "hint": "低波动=贪婪端（恐慌时波动先飙升）",
+        })
+        # 相对换手：成交量作换手代理（指数自由流通股本短期不变，量比≈换手比）
+        avgs = []
+        for i in range(len(vols_raw)):
+            if i < 20:
+                avgs.append(None)
+                continue
+            seg = [v for v in vols_raw[i - 19:i + 1] if v]
+            avgs.append(sum(seg) / len(seg) if seg else None)
+        cur_t = next((v for v in reversed(avgs) if v is not None), None)
+        p = _fg_pct(cur_t, avgs)
+        items.append({
+            "name": "相对换手", "score": round(p * 100, 1) if p is not None else None,
+            "detail": (f"20日均量 {cur_t / 1e8:.0f} 亿手，10年分位 {p * 100:.0f}%"
+                       if p is not None and cur_t else "分位不足"),
+            "hint": "换手越热=贪婪端",
+        })
+        rsi = _fg_rsi(closes)
+        items.append({
+            "name": "RSI(14)", "score": round(rsi, 1) if rsi is not None else None,
+            "detail": f"沪深300 RSI {rsi:.1f}" if rsi is not None else "样本不足",
+            "hint": "量纲即 0-100，70/30 为传统超买超卖线",
+        })
+    else:
+        caveats.append(f"K 线样本仅 {len(closes)} 根，波动率/换手/RSI 三项缺席")
+        items += [{"name": "波动率", "score": None, "detail": "K 线样本不足", "hint": ""},
+                  {"name": "相对换手", "score": None, "detail": "K 线样本不足", "hint": ""},
+                  {"name": "RSI(14)", "score": None, "detail": "K 线样本不足", "hint": ""}]
+
+    # —— 市场宽度 / 涨跌停比：changedist 当日快照，绝对映射 ——
+    try:
+        cd = _w.changedist()
+    except Exception as e:                          # noqa: BLE001
+        cd = {}
+        caveats.append(f"涨跌分布取数失败（{type(e).__name__}），宽度类子指标缺席")
+    ur = cd.get("up_ratio")
+    items.append({
+        "name": "市场宽度", "score": round(float(ur), 1) if ur else None,
+        "detail": (f"上涨 {cd.get('up', '—')} 家 / 下跌 {cd.get('down', '—')} 家，"
+                   f"上涨占比 {ur}%" if ur else "快照未返回"),
+        "hint": "上涨占比直接当分（无历史，不做分位）",
+    })
+    ls = _fg_limit_score(cd.get("up_limit"), cd.get("down_limit"))
+    items.append({
+        "name": "涨跌停比", "score": round(ls, 1) if ls is not None else None,
+        "detail": (f"涨停 {cd.get('up_limit', '—')} / 跌停 {cd.get('down_limit', '—')}，"
+                   "对数映射 0-100" if ls is not None else "快照未返回"),
+        "hint": "r=0.2 → 0 分，r=5 → 100 分（无历史，绝对阈值）",
+    })
+
+    # —— 两融情绪：margin_lab（东财数据中心，2010 年起真历史）——
+    # 余额绝对值长期通胀，分位用「近20日融资余额变化%」，加仓=贪婪端
+    try:
+        import margin_lab as _mg
+        md = _mg.build()
+    except Exception as e:                          # noqa: BLE001
+        md = {}
+        caveats.append(f"两融取数失败（{type(e).__name__}）")
+    if md.get("ok"):
+        p = md.get("chg20_pct")
+        c20 = (md.get("latest") or {}).get("chg20")
+        items.append({
+            "name": "两融情绪",
+            "score": round(p * 100, 1) if p is not None else None,
+            "detail": (f"近20日融资余额 {c20:+.1f}%，10年分位 {p * 100:.0f}%"
+                       if p is not None and c20 is not None else "分位不足"),
+            "hint": "融资加仓=贪婪端；余额绝对值长期通胀，分位用20日变化",
+        })
+        margin_ok = True
+    else:
+        items.append({"name": "两融情绪", "score": None,
+                      "detail": "数据暂不可用", "hint": ""})
+        margin_ok = False
+
+    live = [it for it in items if it["score"] is not None]
+    if not live:
+        return {"ok": False, "error": "恐贪子指标全部不可用",
+                "items": items, "caveats": caveats}
+    score = round(sum(it["score"] for it in live) / len(items), 1)
+    data = {
+        "ok": True, "score": score, "band": _fg_band(score),
+        "items": items, "have": len(live), "total": len(items),
+        "missing": [it["name"] for it in items if it["score"] is None],
+        "date": time.strftime("%Y-%m-%d"),
+        "caveats": caveats + ([
+            "两融口径：近20日融资余额变化的历史分位（2010 年起，东财数据中心）——"
+            "余额绝对值长期通胀，用绝对值做分位会常年钉死在高位。"
+        ] if margin_ok else [
+            "两融余额数据暂不可用，该子指标缺席，权重已摊给其余项。"
+        ]) + [
+            "市场宽度与涨跌停比无本地历史，用绝对阈值映射而非分位——"
+            "与波动率/换手的 10 年滚动分位不是同一口径，明细里已分别标注。",
+            "恐贪是逆向情绪量表：分越高越贪婪。与上方 13 维温度（越高越热=该减仓）"
+            "语义相反，并排看可以，混算不行。",
+        ],
+    }
+    try:
+        _st.meta_set(FG_CACHE, _json.dumps({"at": now, "data": data},
+                                           ensure_ascii=False))
+    except Exception:
+        pass
+    data["cached"] = False
+    return data
+
+
+# ===========================================================================
 # 日序列落盘（趋势回看）——历史只能从今天往后攒，见 start_daily 说明
 # ===========================================================================
 K_LAST_DAY = "bullbear_last_date"   # 已落库的「上游画像日期」
@@ -284,3 +523,49 @@ def start_daily() -> bool:
     print(f"[bullbear] 每日落库调度已启动：每天 {_run_at()} 后检查一次"
           f"（环境变量 TICK_BULLBEAR_AT 可改）")
     return True
+
+
+def selfcheck() -> int:
+    """恐贪子模块纯逻辑自检，不联网。"""
+    bad = 0
+
+    def ck(ok: bool, msg: str) -> None:
+        nonlocal bad
+        if not ok:
+            bad += 1
+            print(f"  ❌ {msg}")
+
+    # 分位：样本不足拒绝；严格小于口径
+    ck(_fg_pct(1.0, [0.5] * 10) is None, "样本不足 30 应拒绝给分位")
+    ck(_fg_pct(1.0, [0.5] * 30) == 1.0, "全小于时分位应为 1.0")
+    ck(_fg_pct(None, [0.5] * 30) is None, "当前值缺失应返回 None")
+
+    # RSI：单调上涨 → 接近 100；全平盘 → None（不能冒充 50）
+    up = [100 + i for i in range(30)]
+    ck(_fg_rsi(up) is not None and _fg_rsi(up) > 99, "单边上涨 RSI 应≈100")
+    ck(_fg_rsi([50.0] * 30) is None, "全平盘 RSI 应为 None")
+    ck(_fg_rsi([float(i) for i in range(10)]) is None, "样本不足 RSI 应为 None")
+
+    # 涨跌停比映射：r<0.2→截 0，r=5→100，越界截断，除零安全
+    ck(_fg_limit_score(0, 9) == 0.0, "涨停0/跌停9（r=0.1）应截到 0")
+    ck(abs(_fg_limit_score(4, 0) - 100.0) < 1e-9, "涨停4/跌停0（r=5）应为 100")
+    ck(_fg_limit_score(100, 0) == 100.0, "极端比值应截断在 100")
+    ck(_fg_limit_score(0, 100) == 0.0, "极端比值应截断在 0")
+    ck(_fg_limit_score(None, 10) is None, "涨停数缺失应返回 None")
+
+    # 波动率序列：常数价格波动率为 0
+    flat = _fg_vol_series([100.0] * 40)
+    ck(all(v == 0.0 for v in flat[19:]), "常数价格滚动波动率应为 0")
+
+    # 五档：0/24/50/74/100 落对档
+    ck(_fg_band(0)["name"] == "极度恐慌" and _fg_band(24.9)["name"] == "极度恐慌",
+       "0~25 应为极度恐慌")
+    ck(_fg_band(50)["name"] == "中性" and _fg_band(99)["name"] == "极度贪婪",
+       "五档边界应正确")
+
+    print(f"bullbear.selfcheck: {'OK' if bad == 0 else str(bad) + ' 项失败'}")
+    return bad
+
+
+if __name__ == "__main__":
+    raise SystemExit(1 if selfcheck() else 0)
