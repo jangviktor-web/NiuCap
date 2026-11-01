@@ -9,6 +9,13 @@
 
 ### ✨ 新增
 
+#### 🔧 QuanTAlib 接入个股页信号体系（2026-11-01）
+
+- `all_indicators` 新增「QuanTAlib」组：明细表给 TSI(25,13)/Schaff STC/Vortex VI± 四个值；个股页指标表（通用 groups 渲染）与 AI 深度分析上下文自动包含
+- 信号只加两个不与现有票重复的：**Vortex VI+>VI−（趋势票，进裁决）**、**Schaff STC >75/<25（超买/超卖反转票，自动归反转计数不进裁决）**；TSI 故意不出信号——零轴上下与 MACD 多空同源，加票只会稀释裁决
+- quantalib 未安装时整组静默跳过（`except ImportError`），页面/AI 照常用自有指标；已补装系统 python（0.8.12）
+- 实测茅台：TSI=24.9、STC=100（超买）、Vortex VI+ 1.24>VI− 0.72 → 裁决「技术面偏多，但已显著超买」；回归 check_gucc 24/24、check_stock_valcalc 12/12
+
 #### 🤖 AI 深度分析补「关键价位」维度（2026-10-31）
 
 - 个股页 K 线图一直画着 9 类支撑/压力线，AI 上下文里却看不见——`build_context` 新增第 6 维：复用现有 `keylevels.key_levels`，只给模型离现价最近的支撑×2 + 压力×2（附距现价 %，同价去重），9 根全给只会被摘要成废话

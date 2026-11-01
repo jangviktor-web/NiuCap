@@ -816,6 +816,45 @@ def all_indicators(klines):
             signals.append({"name": "跌破吊灯止损", "dir": "bear",
                             "desc": f"现价 {cur:.2f} < 吊灯止损 {stop_now:.2f}"})
 
+    # ---------- QuanTAlib 拓展组（qtl 未装则整组跳过，不炸） ----------
+    # 页面明细给 TSI/STC/Vortex 三个值；信号只挑两个不与现有票重复的：
+    #   · Vortex VI+>VI− —— 趋势方向票（进裁决，与 DMI 同族但口径独立）；
+    #   · Schaff STC 极值 —— 超买/超卖反转票（名字含「超买/超卖」自动归反转计数）。
+    # TSI 故意不出信号：零轴上下与 MACD 多空高度同源，再加一张票只会稀释裁决。
+    try:
+        import quantalib as _qtl
+        _vip, _vim = _qtl.vortex(H, L, C, 14)
+        _vip, _vim = np.asarray(_vip, float), np.asarray(_vim, float)
+        _stc = np.asarray(_qtl.stc(C), float)
+        _tsi = np.asarray(_qtl.tsi(C, 25, 13), float)
+        qt_items = [
+            {"name": "TSI(25,13)", "value": _scalar(_tsi)[0], "prev": _scalar(_tsi)[1]},
+            {"name": "Schaff STC", "value": _scalar(_stc)[0], "prev": _scalar(_stc)[1]},
+            {"name": "Vortex VI+", "value": _scalar(_vip)[0], "prev": _scalar(_vip)[1]},
+            {"name": "Vortex VI−", "value": _scalar(_vim)[0], "prev": _scalar(_vim)[1]},
+        ]
+        groups.append({"cat": "QuanTAlib", "items": qt_items})
+        v_now, v_pre = _scalar(_vip)[0], _scalar(_vim)[0]
+        if v_now is not None and v_pre is not None:
+            if v_now > v_pre:
+                signals.append({"name": "Vortex上行趋势", "dir": "bull",
+                                "desc": f"VI+({v_now:.2f})>VI−({v_pre:.2f})，上行趋势占优"})
+            else:
+                signals.append({"name": "Vortex下行趋势", "dir": "bear",
+                                "desc": f"VI−({v_pre:.2f})≥VI+({v_now:.2f})，下行趋势占优"})
+        stc_now = _scalar(_stc)[0]
+        if stc_now is not None:
+            if stc_now > 75:
+                signals.append({"name": "STC超买", "dir": "bear",
+                                "desc": f"Schaff={stc_now:.1f}>75，双重随机化后仍过热"})
+            elif stc_now < 25:
+                signals.append({"name": "STC超卖", "dir": "bull",
+                                "desc": f"Schaff={stc_now:.1f}<25，双重随机化后仍超跌"})
+    except ImportError:
+        pass      # quantalib 未安装：整组跳过，页面/AI 照常用自有指标
+    except Exception:
+        pass      # 单股数据异常不炸总览
+
     # ---------- 涨跌统计 ----------
     chg_pct = None
     if len(C) >= 2:
